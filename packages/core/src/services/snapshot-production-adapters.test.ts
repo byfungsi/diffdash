@@ -370,6 +370,8 @@ const makeLayer = (directory: string) => {
     upsertRepository: unusedRepositoryOperation,
     setFavorite: unusedRepositoryOperation,
     touch: unusedRepositoryOperation,
+    listCheckouts: unusedRepositoryOperation,
+    reconcileCheckouts: unusedRepositoryOperation,
     forget: unusedRepositoryOperation,
   })
   return Layer.merge(snapshotProjectAuthorityLayer, snapshotGitRangeSourceLayer).pipe(

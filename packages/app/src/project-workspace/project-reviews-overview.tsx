@@ -1,5 +1,5 @@
 import { workingTreeReviewTarget } from "@diffdash/domain/local-review"
-import type { Repo } from "@diffdash/domain/repository"
+import { type Repo, RepositoryCheckout } from "@diffdash/domain/repository"
 import { Match } from "effect"
 import { GitBranch, GitPullRequest, RefreshCw } from "lucide-react"
 import type { ReactNode } from "react"
@@ -22,6 +22,7 @@ export const ProjectReviewsOverview = ({
   repo,
   onRefreshHosted,
   onRefreshLocal,
+  onLinkRepository,
   onSelect,
 }: {
   readonly hosted: HostedReviewsLifecycle
@@ -29,6 +30,7 @@ export const ProjectReviewsOverview = ({
   readonly repo: Repo
   readonly onRefreshHosted: () => void
   readonly onRefreshLocal: () => void
+  readonly onLinkRepository: () => void
   readonly onSelect: (target: SelectedReviewTarget) => void
 }) => {
   const lifecycle = projectReviewsLifecycle(local, hosted)
@@ -102,7 +104,7 @@ export const ProjectReviewsOverview = ({
       })}
       <div className="grid gap-3 sm:grid-cols-2">
         <OverviewCard icon={<GitBranch className="size-4" />} title="Working tree">
-          {renderLocalOverview(repo, local, onRefreshLocal, onSelect)}
+          {renderLocalOverview(repo, local, onRefreshLocal, onLinkRepository, onSelect)}
         </OverviewCard>
         <OverviewCard icon={<GitPullRequest className="size-4" />} title="Pull requests">
           {renderHostedOverview(hosted, onRefreshHosted)}
@@ -134,45 +136,61 @@ const renderLocalOverview = (
   repo: Repo,
   lifecycle: LocalReviewsLifecycle,
   onRefresh: () => void,
+  onLinkRepository: () => void,
   onSelect: (target: SelectedReviewTarget) => void,
 ) => {
-  const localPath = repo.localPath
-  const openAction =
-    localPath === null ? null : (
-      <Button
-        size="sm"
-        variant="outline"
-        onClick={() => onSelect({ kind: "localDiff", target: workingTreeReviewTarget(localPath) })}
-      >
-        Open working tree
-      </Button>
-    )
-  return Match.valueTags(lifecycle, {
-    loading: () => <OverviewStatus text="Checking local changes..." actions={null} />,
-    ready: ({ data }) => (
+  return RepositoryCheckout.match(repo.checkout, {
+    RemoteOnly: () => (
       <OverviewStatus
-        actions={openAction}
-        text={`${data.fileCount} changed file${data.fileCount === 1 ? "" : "s"}.`}
+        actions={
+          <Button size="sm" variant="outline" onClick={onLinkRepository}>
+            Link folder
+          </Button>
+        }
+        text="No local checkout linked."
       />
     ),
-    empty: () => <OverviewStatus actions={openAction} text="Working tree clean." />,
-    unavailable: ({ reason }) => <OverviewStatus actions={null} text={reason} />,
-    failure: ({ error }) => (
-      <OverviewStatus
-        actions={<RetryButton onClick={onRefresh} />}
-        text={formatError(error, "Could not inspect the working tree")}
-      />
-    ),
-    stale: ({ data, reason }) => (
-      <OverviewStatus actions={openAction} text={`${data.fileCount} changed files. ${reason}`} />
-    ),
-    invalid: ({ reason }) => <OverviewStatus actions={null} text={reason} />,
-    degraded: ({ data, issues }) => (
-      <OverviewStatus
-        actions={openAction}
-        text={`${data.fileCount} changed files. ${issues.join(" ")}`}
-      />
-    ),
+    LinkedCheckout: ({ path }) => {
+      const openAction = (
+        <Button
+          size="sm"
+          variant="outline"
+          onClick={() => onSelect({ kind: "localDiff", target: workingTreeReviewTarget(path) })}
+        >
+          Open working tree
+        </Button>
+      )
+      return Match.valueTags(lifecycle, {
+        loading: () => <OverviewStatus text="Checking local changes..." actions={null} />,
+        ready: ({ data }) => (
+          <OverviewStatus
+            actions={openAction}
+            text={`${data.fileCount} changed file${data.fileCount === 1 ? "" : "s"}.`}
+          />
+        ),
+        empty: () => <OverviewStatus actions={openAction} text="Working tree clean." />,
+        unavailable: ({ reason }) => <OverviewStatus actions={null} text={reason} />,
+        failure: ({ error }) => (
+          <OverviewStatus
+            actions={<RetryButton onClick={onRefresh} />}
+            text={formatError(error, "Could not inspect the working tree")}
+          />
+        ),
+        stale: ({ data, reason }) => (
+          <OverviewStatus
+            actions={openAction}
+            text={`${data.fileCount} changed files. ${reason}`}
+          />
+        ),
+        invalid: ({ reason }) => <OverviewStatus actions={null} text={reason} />,
+        degraded: ({ data, issues }) => (
+          <OverviewStatus
+            actions={openAction}
+            text={`${data.fileCount} changed files. ${issues.join(" ")}`}
+          />
+        ),
+      })
+    },
   })
 }
 

@@ -40,10 +40,33 @@ describe("buildReviewFileTreeInput", () => {
 
     expect(input.paths).toEqual(["src/b.ts", "src/a.ts", "src/old.ts"])
     expect(input.gitStatus).toEqual([
+      { path: "src/", status: "modified" },
       { path: "src/b.ts", status: "modified" },
       { path: "src/a.ts", status: "added" },
       { path: "src/old.ts", status: "deleted" },
     ])
+  })
+
+  it("aggregates descendant statuses onto folders", () => {
+    const input = buildReviewFileTreeInput(
+      [
+        file("src/added.ts", "added"),
+        file("src/nested/also-added.ts", "added"),
+        file("src/old.ts", "deleted"),
+        file("docs/old.md", "deleted"),
+        file("renamed/next.ts", "renamed"),
+      ],
+      false,
+    )
+
+    expect(input.gitStatus).toEqual(
+      expect.arrayContaining([
+        { path: "docs/", status: "deleted" },
+        { path: "renamed/", status: "modified" },
+        { path: "src/", status: "modified" },
+        { path: "src/nested/", status: "added" },
+      ]),
+    )
   })
 
   it("excludes hidden files unless requested", () => {
@@ -81,7 +104,7 @@ describe("buildReviewFileTreeInput", () => {
     const input = buildReviewFileTreeInput(files, false)
 
     expect(input.paths).toHaveLength(10_000)
-    expect(input.gitStatus).toHaveLength(10_000)
+    expect(input.gitStatus).toHaveLength(30_001)
     expect(input.hiddenCount).toBe(0)
     expect(input.paths[0]).toBe("packages/feature-00000/src/index.ts")
     expect(input.paths.at(-1)).toBe("packages/feature-09999/src/index.ts")

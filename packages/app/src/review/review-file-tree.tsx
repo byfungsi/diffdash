@@ -55,10 +55,8 @@ const REVIEW_FILE_TREE_CSS = `
   [data-item-git-status="deleted"] { --diffdash-tree-status-text: var(--review-danger-text); }
   [data-item-git-status="modified"] { --diffdash-tree-status-text: var(--review-modified-text); }
   [data-item-git-status="renamed"] { --diffdash-tree-status-text: var(--review-renamed-text); }
-  [data-item-git-status][data-item-type="file"]
-    > [data-item-section="content"]:not(:has([data-item-flattened-subitems])),
-  [data-item-git-status][data-item-type="file"]
-    > [data-item-section="content"]
+  [data-item-git-status] > [data-item-section="content"]:not(:has([data-item-flattened-subitems])),
+  [data-item-git-status] > [data-item-section="content"]
     > [data-item-flattened-subitems]
     > [data-item-flattened-subitem]:last-child {
     color: var(--diffdash-tree-status-text) !important;

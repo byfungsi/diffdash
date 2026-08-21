@@ -4,6 +4,7 @@ import { Effect, Result, Layer, Option } from "effect"
 import type { HostedRepositoryLocator as HostedRepositoryLocatorType } from "@diffdash/domain/git-provider"
 import {
   LinkedCheckout,
+  RemoteOnly,
   Repo,
   RepositoryCheckoutPath,
   type UpsertRepositoryInput,
@@ -18,9 +19,19 @@ import {
   LocalRepositorySource,
 } from "@diffdash/domain/git-provider"
 import { ReviewProjectId } from "@diffdash/domain/review-identity"
-import { RepositoryStore, RepositoryStoreError } from "@diffdash/persistence/repository-store"
+import {
+  RepositoryCheckoutRecord,
+  RepositoryStore,
+  RepositoryStoreError,
+} from "@diffdash/persistence/repository-store"
 import { LinkRepositoryCheckoutRequest } from "@diffdash/protocol/repository-link"
-import { GitService } from "@diffdash/local-git/local-git"
+import { ProcessOutputError, type ProcessExecutionError } from "@diffdash/process"
+import {
+  ProcessFileSystem,
+  type ProcessFileEntry,
+  ProcessFileSystemError,
+} from "@diffdash/process/file-system"
+import { GitService, type LocalGitWorktree } from "@diffdash/local-git/local-git"
 import { GitProvider, GitProviderRemoteParseError } from "./git-provider"
 import {
   RepositoryLinkError,
@@ -56,6 +67,29 @@ const makeLayer = (
   remoteUrl = linkedRepo.remoteUrl,
   remoteUrls: readonly string[] = [remoteUrl],
   existingByPath: Option.Option<Repo> = Option.none(),
+  worktrees: readonly LocalGitWorktree[] = [
+    {
+      path: linkedRepoLocalPath,
+      isMain: true,
+      isBare: false,
+      isPrunable: false,
+    },
+  ],
+  listedRepo: Repo = linkedRepo,
+  listWorktrees: (
+    path: RepositoryCheckoutPath,
+  ) => Effect.Effect<readonly LocalGitWorktree[], ProcessExecutionError> = () =>
+    Effect.succeed(worktrees),
+  checkoutRecords: readonly RepositoryCheckoutRecord[] = [
+    RepositoryCheckoutRecord.make({
+      path: linkedRepoLocalPath,
+      remoteUrl: linkedRepo.remoteUrl,
+    }),
+  ],
+  inspectCheckout: (
+    path: string,
+  ) => Effect.Effect<ProcessFileEntry | null, ProcessFileSystemError> = () =>
+    Effect.succeed<ProcessFileEntry>({ type: "other" }),
 ) => {
   const persisted: Array<{
     readonly favorite: "preserve" | "mark"
@@ -64,9 +98,13 @@ const makeLayer = (
     readonly path: string | null
     readonly remoteUrl: string
   }> = []
+  const reconciled: Array<readonly RepositoryCheckoutRecord[]> = []
   const layer = RepositoryLinker.layer.pipe(
     Layer.provide(
       Layer.mergeAll(
+        Layer.mock(ProcessFileSystem, {
+          inspect: inspectCheckout,
+        }),
         Layer.succeed(
           GitService,
           GitService.of({
@@ -74,6 +112,7 @@ const makeLayer = (
             detectRepository: () => Effect.succeed({ rootPath: linkedRepoLocalPath, remoteUrl }),
             detectRoot: () => Effect.succeed(linkedRepoLocalPath),
             currentBranch: () => unavailable(),
+            listWorktrees,
             resolveBranchComparison: () => unavailable(),
             resolveRevisionRangeComparison: () => unavailable(),
             resolveLastCommit: () => unavailable(),
@@ -124,8 +163,8 @@ const makeLayer = (
         Layer.succeed(
           RepositoryStore,
           RepositoryStore.of({
-            getById: () => Effect.succeed(linkedRepo),
-            list: () => Effect.succeed([linkedRepo]),
+            getById: () => Effect.succeed(listedRepo),
+            list: () => Effect.succeed([listedRepo]),
             findByLocalPath: () => Effect.succeed(existingByPath),
             findHosted: () => Effect.succeed(Option.none()),
             findByProviderRepositoryId: () => Effect.succeed(Option.none()),
@@ -164,16 +203,184 @@ const makeLayer = (
             setFavorite: (_id, isFavorite) =>
               Effect.succeed(Repo.make({ ...linkedRepo, isFavorite })),
             touch: () => Effect.succeed(Option.getOrElse(existingByPath, () => linkedRepo)),
+            listCheckouts: () => Effect.succeed(checkoutRecords),
+            reconcileCheckouts: (_id, surviving, preferredPath) =>
+              Effect.sync(() => {
+                reconciled.push(surviving)
+                return Repo.make({
+                  ...listedRepo,
+                  checkout: Option.match(preferredPath, {
+                    onNone: () => RemoteOnly.make({ remoteUrl: listedRepo.remoteUrl }),
+                    onSome: (path) =>
+                      LinkedCheckout.make({
+                        path,
+                        remoteUrl:
+                          surviving.find((checkout) => checkout.path === path)?.remoteUrl ??
+                          listedRepo.remoteUrl,
+                      }),
+                  }),
+                })
+              }),
             forget: () => unavailable(),
           }),
         ),
       ),
     ),
   )
-  return { layer, persisted }
+  return { layer, persisted, reconciled }
 }
 
 describe("RepositoryLinker", () => {
+  it.effect("falls back from a deleted linked worktree to the surviving main worktree", () => {
+    const mainPath = RepositoryCheckoutPath.make("/workspace/main")
+    const worktrees = [
+      {
+        path: mainPath,
+        isMain: true,
+        isBare: false,
+        isPrunable: false,
+      },
+      {
+        path: linkedRepoLocalPath,
+        isMain: false,
+        isBare: false,
+        isPrunable: false,
+      },
+    ]
+    const inspectedPaths: string[] = []
+    const { layer } = makeLayer(
+      linkedRepo.remoteUrl,
+      [linkedRepo.remoteUrl],
+      Option.none(),
+      worktrees,
+      linkedRepo,
+      () => Effect.succeed(worktrees),
+      [
+        RepositoryCheckoutRecord.make({
+          path: linkedRepoLocalPath,
+          remoteUrl: linkedRepo.remoteUrl,
+        }),
+        RepositoryCheckoutRecord.make({ path: mainPath, remoteUrl: linkedRepo.remoteUrl }),
+      ],
+      (path) => {
+        inspectedPaths.push(path)
+        return Effect.succeed(
+          Option.match(
+            Option.liftPredicate(path, (candidate) => candidate === mainPath),
+            {
+              onNone: () => null,
+              onSome: (): ProcessFileEntry => ({ type: "other" }),
+            },
+          ),
+        )
+      },
+    )
+    return Effect.gen(function* () {
+      const repos = yield* (yield* RepositoryLinker).list()
+      expect(repos).toHaveLength(1)
+      expect(repos[0]?.localPath).toBe(mainPath)
+      expect(inspectedPaths).toEqual([linkedRepoLocalPath, mainPath, mainPath, linkedRepoLocalPath])
+    }).pipe(Effect.provide(layer))
+  })
+
+  it.effect("returns a hosted repository as remote-only when no worktree survives", () => {
+    const { layer } = makeLayer(linkedRepo.remoteUrl, [linkedRepo.remoteUrl], Option.none(), [
+      {
+        path: linkedRepoLocalPath,
+        isMain: true,
+        isBare: false,
+        isPrunable: true,
+      },
+    ])
+    return Effect.gen(function* () {
+      const repos = yield* (yield* RepositoryLinker).list()
+      expect(repos).toHaveLength(1)
+      expect(repos[0]?.localPath).toBeNull()
+    }).pipe(Effect.provide(layer))
+  })
+
+  it.effect("preserves checkout records when Git inspection fails for an existing path", () => {
+    const inspectionFailure = ProcessOutputError.make({
+      command: "git",
+      args: ["worktree", "list"],
+      cwd: linkedRepoLocalPath,
+      exitCode: null,
+      signal: null,
+      stdout: "",
+      stderr: "inspection unavailable",
+      stdoutTruncated: false,
+      stderrTruncated: false,
+      outputTruncated: false,
+      message: "inspection unavailable",
+      source: "stdout",
+      limit: "io",
+      cause: null,
+    })
+    const { layer, reconciled } = makeLayer(
+      linkedRepo.remoteUrl,
+      [linkedRepo.remoteUrl],
+      Option.none(),
+      [],
+      linkedRepo,
+      () => inspectionFailure,
+    )
+    return Effect.gen(function* () {
+      const result = yield* Effect.result((yield* RepositoryLinker).list())
+      expect(Result.isFailure(result)).toBe(true)
+      expect(reconciled).toEqual([])
+    }).pipe(Effect.provide(layer))
+  })
+
+  it.effect("preserves checkout records when filesystem inspection fails", () => {
+    const inspectionFailure = ProcessFileSystemError.make({
+      operation: "inspect",
+      path: linkedRepoLocalPath,
+      cause: new Error("checkout permissions unavailable"),
+    })
+    const { layer, reconciled } = makeLayer(
+      linkedRepo.remoteUrl,
+      [linkedRepo.remoteUrl],
+      Option.none(),
+      [],
+      linkedRepo,
+      () => Effect.succeed([]),
+      [
+        RepositoryCheckoutRecord.make({
+          path: linkedRepoLocalPath,
+          remoteUrl: linkedRepo.remoteUrl,
+        }),
+      ],
+      () => inspectionFailure,
+    )
+    return Effect.gen(function* () {
+      const result = yield* Effect.result((yield* RepositoryLinker).list())
+      expect(Result.isFailure(result)).toBe(true)
+      expect(reconciled).toEqual([])
+    }).pipe(Effect.provide(layer))
+  })
+
+  it.effect("does not reconcile local-only repositories", () => {
+    const localRepo = Repo.make({ ...linkedRepo, source: LocalRepositorySource.make() })
+    let worktreeInspectionCount = 0
+    const { layer, reconciled } = makeLayer(
+      linkedRepo.remoteUrl,
+      [linkedRepo.remoteUrl],
+      Option.none(),
+      [],
+      localRepo,
+      () => {
+        worktreeInspectionCount += 1
+        return Effect.succeed([])
+      },
+    )
+    return Effect.gen(function* () {
+      const repos = yield* (yield* RepositoryLinker).list()
+      expect(repos).toEqual([localRepo])
+      expect(worktreeInspectionCount).toBe(0)
+      expect(reconciled).toEqual([])
+    }).pipe(Effect.provide(layer))
+  })
+
   it.effect("returns None when no hosted repository is linked", () => {
     const { layer } = makeLayer()
     return Effect.gen(function* () {
@@ -594,6 +801,9 @@ const makeOpenProjectLayer = (options: OpenProjectLayerOptions = {}) => {
   const layer = RepositoryLinker.layer.pipe(
     Layer.provide(
       Layer.mergeAll(
+        Layer.mock(ProcessFileSystem, {
+          inspect: () => Effect.succeed<ProcessFileEntry>({ type: "other" }),
+        }),
         Layer.succeed(
           GitService,
           GitService.of({
@@ -607,6 +817,10 @@ const makeOpenProjectLayer = (options: OpenProjectLayerOptions = {}) => {
             detectRepository: () => unavailable(),
             detectRoot: () => Effect.succeed(RepositoryCheckoutPath.make("/workspace/diffdash")),
             currentBranch: () => unavailable(),
+            listWorktrees: () =>
+              Effect.succeed([
+                { path: linkedRepoLocalPath, isMain: true, isBare: false, isPrunable: false },
+              ]),
             resolveBranchComparison: () => unavailable(),
             resolveRevisionRangeComparison: () => unavailable(),
             resolveLastCommit: () => unavailable(),
@@ -703,6 +917,14 @@ const makeOpenProjectLayer = (options: OpenProjectLayerOptions = {}) => {
                 touched.push(id)
                 return Repo.make({ ...linkedRepo, id: ReviewProjectId.make(id) })
               }),
+            listCheckouts: () =>
+              Effect.succeed([
+                RepositoryCheckoutRecord.make({
+                  path: linkedRepoLocalPath,
+                  remoteUrl: linkedRepo.remoteUrl,
+                }),
+              ]),
+            reconcileCheckouts: () => Effect.succeed(options.existing ?? linkedRepo),
             forget: (id) =>
               Effect.suspend(() => {
                 forgotten.push(id)

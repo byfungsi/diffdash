@@ -24,7 +24,7 @@ import { ReviewProjectId } from "@diffdash/domain/review-identity"
 import { WebUrl } from "@diffdash/domain/web-url"
 import { type Database, makeDatabase, type SqlParams } from "./database"
 import * as DatabaseNode from "./database-node"
-import { RepositoryStore, RepositoryStoreError } from "./repository-store"
+import { RepositoryCheckoutRecord, RepositoryStore, RepositoryStoreError } from "./repository-store"
 
 const makeTempDatabasePath = Effect.acquireRelease(
   Effect.sync(() => mkdtempSync(join(tmpdir(), "diffdash-test-"))),
@@ -96,6 +96,45 @@ describe("RepositoryStore", () => {
         expect(remote.isFavorite).toBe(true)
         expect(local.localPath).toBe("/tmp/local-repo")
         expect(repos.map((repo) => repo.id)).toEqual([remote.id, local.id])
+      }).pipe(Effect.provide(makeLayer(databasePath)))
+    }),
+  )
+
+  it.effect("reconciles surviving checkouts and clears stale compatibility paths", () =>
+    Effect.gen(function* () {
+      const databasePath = yield* makeTempDatabasePath
+
+      return yield* Effect.gen(function* () {
+        const store = yield* RepositoryStore
+        const database = makeDatabase(yield* SqlClient.SqlClient)
+        const remoteUrl = "https://github.com/fungsi/recoverable"
+        const stalePath = RepositoryCheckoutPath.make("/tmp/recoverable-deleted")
+        const mainPath = RepositoryCheckoutPath.make("/tmp/recoverable-main")
+        const siblingPath = RepositoryCheckoutPath.make("/tmp/aaa-linked-worktree")
+        const repo = yield* store.upsertRepository(
+          hostedInput("fungsi", "recoverable", remoteUrl, stalePath),
+        )
+        yield* store.upsertRepository(hostedInput("fungsi", "recoverable", remoteUrl, mainPath))
+
+        const recovered = yield* store.reconcileCheckouts(
+          repo.id,
+          [
+            RepositoryCheckoutRecord.make({ path: siblingPath, remoteUrl }),
+            RepositoryCheckoutRecord.make({ path: mainPath, remoteUrl }),
+          ],
+          Option.some(mainPath),
+        )
+        expect(recovered.localPath).toBe(mainPath)
+        expect((yield* store.getById(repo.id)).localPath).toBe(mainPath)
+        expect((yield* store.listCheckouts(repo.id)).map(({ path }) => path)).toEqual(
+          expect.arrayContaining([mainPath, siblingPath]),
+        )
+
+        const unavailable = yield* store.reconcileCheckouts(repo.id, [], Option.none())
+        const row = yield* getRow(database, "SELECT local_path FROM repos WHERE id = ?", [repo.id])
+        expect(unavailable.localPath).toBeNull()
+        expect(row).toEqual({ local_path: null })
+        expect(yield* store.listCheckouts(repo.id)).toEqual([])
       }).pipe(Effect.provide(makeLayer(databasePath)))
     }),
   )
