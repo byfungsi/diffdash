@@ -6523,8 +6523,8 @@ scenario("homeToReview", async () => {
   await vi.waitFor(() => {
     expect(document.body.textContent).toContain("with shortcut v.")
   })
-  expect(document.body.textContent).toContain("Marked src/app.tsx as viewed")
-  expect(getViewedCheckbox("src/app.tsx")?.checked).toBe(true)
+  expect(document.body.textContent).toContain("Marked docs/readme.md as viewed")
+  expect(getViewedCheckbox("docs/readme.md")?.checked).toBe(true)
 
   const reviewFilterInput = document.querySelector<HTMLInputElement>(
     'input[placeholder="Filter files"]',
@@ -6536,7 +6536,14 @@ scenario("homeToReview", async () => {
       new KeyboardEvent("keydown", { bubbles: true, cancelable: true, key: "v" }),
     )
   }
-  expect(getViewedCheckbox("src/app.tsx")?.checked).toBe(true)
+  expect(getViewedCheckbox("docs/readme.md")?.checked).toBe(true)
+
+  getViewedCheckbox("docs/readme.md")?.click()
+  getViewedCheckbox("src/app.tsx")?.click()
+  await vi.waitFor(() => {
+    expect(getViewedCheckbox("docs/readme.md")?.checked).toBe(false)
+    expect(getViewedCheckbox("src/app.tsx")?.checked).toBe(true)
+  })
 
   dispatchKeyboardShortcut("k", { metaKey: true, shiftKey: true })
   await vi.waitFor(() => {
@@ -6844,7 +6851,7 @@ scenario("homeToReview", async () => {
     expect(getChangedFilesTreeItemPaths()).toContain("src/app.tsx")
     expect(getChangedFilesTreeItemPaths()).toContain("docs/readme.md")
     expect(getChangedFilesTreeItemPaths()).toContain("pnpm-lock.yaml")
-    expect(getDiffCardPaths()).toEqual(["src/app.tsx", "docs/readme.md", "pnpm-lock.yaml"])
+    expect(getDiffCardPaths()).toEqual(["docs/readme.md", "src/app.tsx", "pnpm-lock.yaml"])
   })
 
   const firstDiffOpenButton = [
