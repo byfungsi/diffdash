@@ -1,4 +1,4 @@
-import { Context, Effect, Layer, Option, Schema } from "effect"
+import { Context, Effect, Layer, Match, Option, Schema } from "effect"
 import * as SqlClient from "effect/unstable/sql/SqlClient"
 import { createHash } from "node:crypto"
 import { basename } from "node:path"
@@ -64,6 +64,12 @@ const LocalAliasRow = Schema.Struct({ id: ReviewProjectId })
 const LocalAliasRows = Schema.Array(LocalAliasRow)
 const RepositoryIdRow = Schema.Struct({ id: ReviewProjectId })
 const RepositoryIdRows = Schema.Array(RepositoryIdRow)
+const RepositoryCheckoutRows = Schema.Array(
+  Schema.Struct({
+    path: RepositoryCheckoutPath,
+    remoteUrl: Schema.String,
+  }),
+)
 const ThreadMergeRows = Schema.Array(
   Schema.Struct({ alias_thread_id: ReviewThreadId, canonical_thread_id: ReviewThreadId }),
 )
@@ -94,6 +100,9 @@ const RepositoryStoreOperation = Schema.Literals([
   "setFavorite",
   "touch",
   "forget",
+  "listCheckouts.query",
+  "listCheckouts.decode",
+  "reconcileCheckouts",
   "reconcileLocalAliases.canonicalNotFound",
   "mergeThreadConversation.maxSequenceNotFound",
 ])
@@ -105,6 +114,14 @@ export interface ReconcileLocalAliasesResult {
   readonly removedAliasCount: number
   readonly preservedAliasCount: number
 }
+
+/** One persisted checkout candidate for repository availability recovery. */
+export class RepositoryCheckoutRecord extends Schema.Class<RepositoryCheckoutRecord>(
+  "RepositoryCheckoutRecord",
+)({
+  path: RepositoryCheckoutPath,
+  remoteUrl: Schema.String,
+}) {}
 
 /** A typed failure from repository persistence operations. */
 export class RepositoryStoreError extends Schema.TaggedError<RepositoryStoreError>()(
@@ -163,6 +180,16 @@ export class RepositoryStore extends Context.Service<
       isFavorite: boolean,
     ) => Effect.Effect<Repo, RepositoryStoreError>
     readonly touch: (id: ReviewProjectId) => Effect.Effect<Repo, RepositoryStoreError>
+    /** Lists every checkout path previously associated with a repository. */
+    readonly listCheckouts: (
+      id: ReviewProjectId,
+    ) => Effect.Effect<readonly RepositoryCheckoutRecord[], RepositoryStoreError>
+    /** Atomically replaces a hosted repository's surviving checkout catalog and preference. */
+    readonly reconcileCheckouts: (
+      id: ReviewProjectId,
+      surviving: readonly RepositoryCheckoutRecord[],
+      preferredPath: Option.Option<RepositoryCheckoutPath>,
+    ) => Effect.Effect<Repo, RepositoryStoreError>
     /** Hides a project from Home without deleting its repository or related records. */
     readonly forget: (id: ReviewProjectId) => Effect.Effect<Repo, RepositoryStoreError>
   }
@@ -652,6 +679,94 @@ export class RepositoryStore extends Context.Service<
               Effect.flatMap(() => getById(id)),
             )
         }),
+        listCheckouts: Effect.fn("RepositoryStore.listCheckouts")(function (id) {
+          return database
+            .all(
+              `SELECT local_path AS path, remote_url AS remoteUrl
+               FROM repository_checkouts
+               WHERE repo_id = ?
+               UNION
+               SELECT local_path AS path, remote_url AS remoteUrl
+               FROM repos
+               WHERE id = ? AND local_path IS NOT NULL`,
+              [id, id],
+            )
+            .pipe(
+              Effect.flatMap((rows) =>
+                Schema.decodeUnknownEffect(RepositoryCheckoutRows)(rows).pipe(
+                  Effect.mapError((cause) =>
+                    RepositoryStoreError.make({ operation: "listCheckouts.decode", cause }),
+                  ),
+                ),
+              ),
+              Effect.map((rows) => rows.map((row) => RepositoryCheckoutRecord.make(row))),
+            )
+            .pipe(
+              Effect.mapError((cause) =>
+                Match.value(cause).pipe(
+                  Match.when(Schema.is(RepositoryStoreError), (error) => error),
+                  Match.orElse((queryError) =>
+                    RepositoryStoreError.make({
+                      operation: "listCheckouts.query",
+                      cause: queryError,
+                    }),
+                  ),
+                ),
+              ),
+            )
+        }),
+        reconcileCheckouts: Effect.fn("RepositoryStore.reconcileCheckouts")(
+          function (id, surviving, preferredPath) {
+            return database
+              .transaction(
+                Effect.gen(function* () {
+                  yield* database.run("DELETE FROM repository_checkouts WHERE repo_id = ?", [id])
+                  const nowMs = Date.now()
+                  const now = new Date(nowMs).toISOString()
+                  const survivingSeenAt = new Date(nowMs - 1).toISOString()
+                  for (const checkout of surviving) {
+                    const lastSeenAt = Option.match(
+                      Option.filter(preferredPath, (path) => path === checkout.path),
+                      {
+                        onNone: () => survivingSeenAt,
+                        onSome: () => now,
+                      },
+                    )
+                    yield* database.run(
+                      `INSERT INTO repository_checkouts (
+                         local_path, repo_id, remote_url, last_seen_at
+                       ) VALUES (?, ?, ?, ?)
+                       ON CONFLICT(local_path) DO UPDATE SET
+                         repo_id = excluded.repo_id,
+                         remote_url = excluded.remote_url,
+                         last_seen_at = excluded.last_seen_at`,
+                      [checkout.path, id, checkout.remoteUrl, lastSeenAt],
+                    )
+                  }
+                  yield* database.run(
+                    `UPDATE repos
+                     SET local_path = ?, updated_at = ?
+                     WHERE id = ? AND provider <> 'local'`,
+                    [Option.getOrNull(preferredPath), now, id],
+                  )
+                }),
+              )
+              .pipe(Effect.andThen(getById(id)))
+              .pipe(
+                Effect.mapError((cause) =>
+                  Match.value(cause).pipe(
+                    Match.when(Schema.is(RepositoryStoreError), (error) => error),
+                    Match.orElse((transactionError) =>
+                      RepositoryStoreError.make({
+                        operation: "reconcileCheckouts",
+                        cause: transactionError,
+                      }),
+                    ),
+                  ),
+                ),
+              )
+          },
+        ),
         forget: Effect.fn("RepositoryStore.forget")(function (id) {
           return database
             .run(

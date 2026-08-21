@@ -1,7 +1,11 @@
 import type { HostedReviewSummary } from "@diffdash/domain/git-provider"
 import { workingTreeReviewTarget } from "@diffdash/domain/local-review"
-import type { Repo } from "@diffdash/domain/repository"
-import { Match } from "effect"
+import {
+  type Repo,
+  RepositoryCheckout,
+  type RepositoryCheckoutPath,
+} from "@diffdash/domain/repository"
+import { Match, Option } from "effect"
 import { AlertTriangle, GitBranch, GitPullRequest, Loader2, RefreshCw } from "lucide-react"
 import type { ReactNode } from "react"
 
@@ -25,6 +29,7 @@ export const ReviewsPane = ({
   repo,
   onRefreshHosted,
   onRefreshLocal,
+  onLinkRepository,
   onSelect,
 }: {
   readonly hosted: HostedReviewsLifecycle
@@ -32,6 +37,7 @@ export const ReviewsPane = ({
   readonly repo: Repo
   readonly onRefreshHosted: () => void
   readonly onRefreshLocal: () => void
+  readonly onLinkRepository: () => void
   readonly onSelect: (target: SelectedReviewTarget) => void
 }) => {
   const lifecycle = projectReviewsLifecycle(local, hosted)
@@ -40,6 +46,7 @@ export const ReviewsPane = ({
       hosted={hosted}
       local={local}
       repo={repo}
+      onLinkRepository={onLinkRepository}
       onRefreshLocal={onRefreshLocal}
       onSelect={onSelect}
     />
@@ -139,18 +146,20 @@ const ReviewsSources = ({
   hosted,
   local,
   repo,
+  onLinkRepository,
   onRefreshLocal,
   onSelect,
 }: {
   readonly hosted: HostedReviewsLifecycle
   readonly local: LocalReviewsLifecycle
   readonly repo: Repo
+  readonly onLinkRepository: () => void
   readonly onRefreshLocal: () => void
   readonly onSelect: (target: SelectedReviewTarget) => void
 }) => (
   <>
     <ReviewSourceSection title="Local changes">
-      {renderLocalLifecycle(repo, local, onRefreshLocal, onSelect)}
+      {renderLocalLifecycle(repo, local, onRefreshLocal, onLinkRepository, onSelect)}
     </ReviewSourceSection>
     <ReviewSourceSection title="Open pull requests">
       {renderHostedLifecycle(hosted, onSelect)}
@@ -177,72 +186,97 @@ const renderLocalLifecycle = (
   repo: Repo,
   lifecycle: LocalReviewsLifecycle,
   onRefresh: () => void,
-  onSelect: (target: SelectedReviewTarget) => void,
-) =>
-  Match.valueTags(lifecycle, {
-    loading: () => localReviewContent(repo, "Checking working tree...", true, null, null, onSelect),
-    ready: ({ data, refresh }) =>
-      localReviewContent(
-        repo,
-        data.fileCount === 0
-          ? "Clean working tree"
-          : `${data.fileCount} changed file${data.fileCount === 1 ? "" : "s"}`,
-        refresh === "refreshing",
-        null,
-        null,
-        onSelect,
-      ),
-    empty: ({ refresh }) =>
-      localReviewContent(
-        repo,
-        "Clean working tree",
-        refresh === "refreshing",
-        null,
-        null,
-        onSelect,
-      ),
-    unavailable: ({ reason }) => <SourceMessage>{reason}</SourceMessage>,
-    failure: ({ error }) =>
-      localReviewContent(
-        repo,
-        "Working tree status unavailable",
-        false,
-        formatError(error, "Could not load working tree"),
-        onRefresh,
-        onSelect,
-      ),
-    stale: ({ data, reason, refresh }) =>
-      localReviewContent(
-        repo,
-        `${data.fileCount} changed file${data.fileCount === 1 ? "" : "s"}`,
-        refresh === "refreshing",
-        reason,
-        onRefresh,
-        onSelect,
-      ),
-    invalid: ({ reason }) =>
-      localReviewContent(repo, "Working tree status invalid", false, reason, null, onSelect),
-    degraded: ({ data, issues, refresh }) =>
-      localReviewContent(
-        repo,
-        `${data.fileCount} changed file${data.fileCount === 1 ? "" : "s"}`,
-        refresh === "refreshing",
-        issues.join(" "),
-        onRefresh,
-        onSelect,
-      ),
-  })
-
-const localReviewContent = (
-  repo: Repo,
-  status: string,
-  loading: boolean,
-  issue: string | null,
-  onRetry: (() => void) | null,
+  onLinkRepository: () => void,
   onSelect: (target: SelectedReviewTarget) => void,
 ) => {
-  if (repo.localPath === null) return <SourceMessage>No local checkout linked.</SourceMessage>
-  const target = workingTreeReviewTarget(repo.localPath)
+  return RepositoryCheckout.match(repo.checkout, {
+    RemoteOnly: () => (
+      <div className="space-y-2">
+        <SourceMessage>No local checkout linked.</SourceMessage>
+        <Button size="xs" variant="outline" onClick={onLinkRepository}>
+          Link folder
+        </Button>
+      </div>
+    ),
+    LinkedCheckout: ({ path }) =>
+      Match.valueTags(lifecycle, {
+        loading: () =>
+          localReviewContent(
+            path,
+            "Checking working tree...",
+            true,
+            Option.none(),
+            Option.none(),
+            onSelect,
+          ),
+        ready: ({ data, refresh }) =>
+          localReviewContent(
+            path,
+            `${data.fileCount} changed file${data.fileCount === 1 ? "" : "s"}`,
+            refresh === "refreshing",
+            Option.none(),
+            Option.none(),
+            onSelect,
+          ),
+        empty: ({ refresh }) =>
+          localReviewContent(
+            path,
+            "Clean working tree",
+            refresh === "refreshing",
+            Option.none(),
+            Option.none(),
+            onSelect,
+          ),
+        unavailable: ({ reason }) => <SourceMessage>{reason}</SourceMessage>,
+        failure: ({ error }) =>
+          localReviewContent(
+            path,
+            "Working tree status unavailable",
+            false,
+            Option.some(formatError(error, "Could not load working tree")),
+            Option.some(onRefresh),
+            onSelect,
+          ),
+        stale: ({ data, reason, refresh }) =>
+          localReviewContent(
+            path,
+            `${data.fileCount} changed file${data.fileCount === 1 ? "" : "s"}`,
+            refresh === "refreshing",
+            Option.some(reason),
+            Option.some(onRefresh),
+            onSelect,
+          ),
+        invalid: ({ reason }) =>
+          localReviewContent(
+            path,
+            "Working tree status invalid",
+            false,
+            Option.some(reason),
+            Option.none(),
+            onSelect,
+          ),
+        degraded: ({ data, issues, refresh }) =>
+          localReviewContent(
+            path,
+            `${data.fileCount} changed file${data.fileCount === 1 ? "" : "s"}`,
+            refresh === "refreshing",
+            Option.some(issues.join(" ")),
+            Option.some(onRefresh),
+            onSelect,
+          ),
+      }),
+  })
+}
+
+const localReviewContent = (
+  path: RepositoryCheckoutPath,
+  status: string,
+  loading: boolean,
+  issue: Option.Option<string>,
+  onRetry: Option.Option<() => void>,
+  onSelect: (target: SelectedReviewTarget) => void,
+) => {
+  const target = workingTreeReviewTarget(path)
   return (
     <div className="space-y-2">
       <button
@@ -261,19 +295,25 @@ const localReviewContent = (
           <span className="text-review-sidebar-muted mt-0.5 block truncate text-xs">{status}</span>
         </span>
       </button>
-      {issue === null ? null : (
-        <div className="space-y-2">
-          <p role="alert" className="text-caption text-risk-review flex gap-1.5 leading-4">
-            <AlertTriangle className="mt-0.5 size-3 shrink-0" />
-            {issue}
-          </p>
-          {onRetry === null ? null : (
-            <Button size="xs" variant="outline" onClick={onRetry}>
-              Retry
-            </Button>
-          )}
-        </div>
-      )}
+      {Option.match(issue, {
+        onNone: () => null,
+        onSome: (message) => (
+          <div className="space-y-2">
+            <p role="alert" className="text-caption text-risk-review flex gap-1.5 leading-4">
+              <AlertTriangle className="mt-0.5 size-3 shrink-0" />
+              {message}
+            </p>
+            {Option.match(onRetry, {
+              onNone: () => null,
+              onSome: (retry) => (
+                <Button size="xs" variant="outline" onClick={retry}>
+                  Retry
+                </Button>
+              ),
+            })}
+          </div>
+        ),
+      })}
     </div>
   )
 }

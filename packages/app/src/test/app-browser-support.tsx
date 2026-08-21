@@ -2028,10 +2028,9 @@ scenario("codeRibbonLink", async () => {
   renderApp()
   await openDefaultProject()
 
-  document.querySelector<HTMLButtonElement>('button[aria-label="Code"]')?.click()
   const linkButton = await vi.waitFor(() => {
-    expect(document.querySelector('[aria-label="Local repository not linked"]')).not.toBeNull()
-    const button = [...document.querySelectorAll<HTMLButtonElement>("button")].find(
+    const reviewsPane = document.querySelector<HTMLElement>("[data-project-reviews-pane]")
+    const button = [...(reviewsPane?.querySelectorAll<HTMLButtonElement>("button") ?? [])].find(
       (candidate) => candidate.textContent === "Link folder",
     )
     expect(button).toBeDefined()
@@ -2045,8 +2044,9 @@ scenario("codeRibbonLink", async () => {
       repository: expect.objectContaining({ namespace: "fungsi", name: "diffdash" }),
       localPath: "/workspace/diffdash",
     })
-    expect(calls.listLocalCheckoutFiles).toHaveBeenCalledWith(repo.id)
   })
+  document.querySelector<HTMLButtonElement>('button[aria-label="Code"]')?.click()
+  await vi.waitFor(() => expect(calls.listLocalCheckoutFiles).toHaveBeenCalledWith(repo.id))
   document.querySelector<HTMLButtonElement>(`button[data-item-path="${path}"]`)?.click()
   await vi.waitFor(() => {
     expect(document.querySelector("diffs-container")?.shadowRoot?.textContent).toContain(
@@ -2221,7 +2221,7 @@ scenario("projectStateRestoration", async () => {
       document.querySelector('button[aria-label="Reviews"][aria-pressed="true"]'),
     ).not.toBeNull()
     expect(document.body.textContent).toContain("Opened PR #51")
-    expect(getDiffCardPaths()).toEqual(["src/app.tsx", "docs/readme.md"])
+    expect(getDiffCardPaths()).toEqual(["docs/readme.md", "src/app.tsx"])
   })
 })
 
@@ -3199,13 +3199,14 @@ scenario("fileTreeSelection", async () => {
   await openDefaultHostedReview()
 
   await vi.waitFor(() => {
-    expect(getDiffCardPaths()).toEqual(["src/app.tsx", "docs/readme.md"])
+    expect(getDiffCardPaths()).toEqual(["docs/readme.md", "src/app.tsx"])
     expect(getChangedFilesTreeItem("docs/readme.md")).not.toBeNull()
+    expect(getChangedFilesTreeFilePaths()).toEqual(getDiffCardPaths())
   })
 
   const diffPane = document.querySelector<HTMLElement>("[data-review-diff-scroll-container]")
-  const docsCard = document.querySelector<HTMLElement>('[data-diff-card-path="docs/readme.md"]')
-  const docsTreeItem = getChangedFilesTreeItem("docs/readme.md")
+  const docsCard = document.querySelector<HTMLElement>('[data-diff-card-path="src/app.tsx"]')
+  const docsTreeItem = getChangedFilesTreeItem("src/app.tsx")
   expect(diffPane).not.toBeNull()
   expect(docsCard).not.toBeNull()
   expect(docsTreeItem).not.toBeNull()
@@ -3221,18 +3222,14 @@ scenario("fileTreeSelection", async () => {
   )
   await vi.waitFor(() => {
     expect(getSelectedChangedFileTreeItems()).toHaveLength(1)
-    expect(getSelectedChangedFileTreeItems()[0]?.getAttribute("data-item-path")).toBe(
-      "docs/readme.md",
-    )
+    expect(getSelectedChangedFileTreeItems()[0]?.getAttribute("data-item-path")).toBe("src/app.tsx")
   })
 
   diffPane.dispatchEvent(new WheelEvent("wheel", { bubbles: true, deltaY: 120 }))
   await new Promise<void>((resolve) => window.requestAnimationFrame(() => resolve()))
 
   expect(getSelectedChangedFileTreeItems()).toHaveLength(1)
-  expect(getSelectedChangedFileTreeItems()[0]?.getAttribute("data-item-path")).toBe(
-    "docs/readme.md",
-  )
+  expect(getSelectedChangedFileTreeItems()[0]?.getAttribute("data-item-path")).toBe("src/app.tsx")
   await vi.waitFor(() => {
     expect(diffPane.dataset.reviewNavigationPhase).toBe("idle")
     expect(diffPane.dataset.reviewNavigationOutcome).toBe("completed::")
@@ -3255,7 +3252,7 @@ scenario("fileTreeSelection", async () => {
     const scrolledAwayTop = docsCard.getBoundingClientRect().top
     expect(Math.abs(scrolledAwayTop - expectedTop)).toBeGreaterThan(1)
 
-    getChangedFilesTreeItem("docs/readme.md")?.dispatchEvent(
+    getChangedFilesTreeItem("src/app.tsx")?.dispatchEvent(
       new MouseEvent("click", { bubbles: true, composed: true }),
     )
 
@@ -3267,7 +3264,7 @@ scenario("fileTreeSelection", async () => {
       expect(cardRect.bottom).toBeLessThanOrEqual(diffPane.getBoundingClientRect().bottom + 1)
     })
     expect(getSelectedChangedFileTreeItems()).toHaveLength(1)
-    expect(getSelectedChangedFileTreeItems()[0]?.dataset.itemPath).toBe("docs/readme.md")
+    expect(getSelectedChangedFileTreeItems()[0]?.dataset.itemPath).toBe("src/app.tsx")
   }
 })
 
@@ -4763,6 +4760,10 @@ scenario("wrappedFileBuffers", async () => {
         `[data-diff-card-path="${fixture.targetPath}"]`,
       )
       expect(targetCard).not.toBeNull()
+      const shadowRoot = getDiffShadowRoot(fixture.targetPath)
+      expect(shadowRoot).not.toBeNull()
+      expect(shadowRoot === null ? undefined : getDiffLine(shadowRoot, targetText)).toBeDefined()
+      expect(shadowRoot?.querySelector('[data-virtualizer-buffer="after"]')).toBeNull()
       expect(getMountedDiffLineCount()).toBeLessThan(1_500)
     },
     { timeout: 15_000 },
@@ -5431,7 +5432,7 @@ scenario("diffSearchVisibility", async () => {
   renderApp()
 
   await openDefaultHostedReview()
-  await vi.waitFor(() => expect(getDiffCardPaths()).toEqual(["src/app.tsx", "docs/readme.md"]))
+  await vi.waitFor(() => expect(getDiffCardPaths()).toEqual(["docs/readme.md", "src/app.tsx"]))
 
   dispatchKeyboardShortcut("f", { metaKey: true })
   const searchInput = await vi.waitFor(() => {
@@ -5471,7 +5472,7 @@ scenario("diffSearchVisibility", async () => {
   setInputValue(reopenedSearchInput, "docs update")
   reopenedSearchInput.dispatchEvent(new Event("input", { bubbles: true }))
   await vi.waitFor(() => {
-    expect(getDiffCardPaths()).toEqual(["src/app.tsx", "docs/readme.md"])
+    expect(getDiffCardPaths()).toEqual(["docs/readme.md", "src/app.tsx"])
     expect(getViewedCheckbox("docs/readme.md")?.checked).toBe(true)
     expect(getDiffShadowRoot("docs/readme.md")).not.toBeNull()
     expect(getHighlightTexts(REVIEW_SEARCH_ACTIVE_HIGHLIGHT)).toEqual(["docs update"])
@@ -5968,7 +5969,7 @@ scenario("viewedAcrossPushes", async () => {
     ).toBe("true"),
   )
 
-  dispatchKeyboardShortcut("v")
+  getViewedCheckbox("src/app.tsx")?.click()
   await vi.waitFor(() => expect(getViewedCheckbox("src/app.tsx")?.checked).toBe(true))
 
   const secondHead = ReviewRevision.make("cccccccccccccccccccccccccccccccccccccccc")
@@ -6431,7 +6432,7 @@ scenario("homeToReview", async () => {
     expect(document.body.textContent).not.toContain("File comment")
     expect(document.body.textContent).not.toContain("Hunk 1")
     expect(document.body.textContent).not.toContain("Select a line number to comment inline")
-    expect(getDiffCardPaths()).toEqual(["src/app.tsx", "docs/readme.md"])
+    expect(getDiffCardPaths()).toEqual(["docs/readme.md", "src/app.tsx"])
     expect(getDiffCardPaths()).not.toContain("pnpm-lock.yaml")
     expect(document.querySelector('button[aria-label="Files"][aria-pressed="true"]')).not.toBeNull()
   })
@@ -6508,7 +6509,7 @@ scenario("homeToReview", async () => {
     expect(calls.getHostedReviewSnapshot).toHaveBeenCalledWith({ review: expect.anything() })
     expect(calls.getPullRequestDetail).toHaveBeenCalledWith({ review: expect.anything() })
     expect(calls.getPullRequestDiff).toHaveBeenCalledWith({ review: expect.anything() })
-    expect(getDiffCardPaths()).toEqual(["src/app.tsx", "docs/readme.md"])
+    expect(getDiffCardPaths()).toEqual(["docs/readme.md", "src/app.tsx"])
   })
 
   const reviewPane = document.querySelector<HTMLElement>("[data-review-diff-scroll-container]")
@@ -7009,6 +7010,15 @@ const getChangedFilesTreeItemPaths = () =>
     ...(document
       .querySelector("file-tree-container")
       ?.shadowRoot?.querySelectorAll("[data-item-path]") ?? []),
+  ]
+    .map((element) => element.getAttribute("data-item-path"))
+    .filter((path) => path !== null)
+
+const getChangedFilesTreeFilePaths = () =>
+  [
+    ...(document
+      .querySelector("file-tree-container")
+      ?.shadowRoot?.querySelectorAll('[data-item-type="file"][data-item-path]') ?? []),
   ]
     .map((element) => element.getAttribute("data-item-path"))
     .filter((path) => path !== null)

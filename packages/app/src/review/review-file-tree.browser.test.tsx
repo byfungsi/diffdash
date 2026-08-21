@@ -195,6 +195,22 @@ describe("ReviewFileTree", () => {
       expect(getComputedStyle(statusLabel!).color).toBe(STATUS_COLORS[status])
     }
 
+    const sourceFolder = treeRoot.querySelector<HTMLElement>(
+      '[data-item-path="src/"][data-item-type="folder"][data-item-git-status="modified"]',
+    )
+    const sourceFolderContent = sourceFolder?.querySelector<HTMLElement>(
+      ':scope > [data-item-section="content"]',
+    )
+    const sourceFolderStatus = sourceFolder?.querySelector<HTMLElement>('[data-item-section="git"]')
+    expect(sourceFolder).not.toBeNull()
+    expect(sourceFolderContent).not.toBeNull()
+    expect(sourceFolderStatus).not.toBeNull()
+    if (sourceFolderContent === null || sourceFolderContent === undefined) return
+    if (sourceFolderStatus === null || sourceFolderStatus === undefined) return
+    expect(sourceFolderStatus?.textContent?.trim()).toBe("M")
+    expect(getComputedStyle(sourceFolderContent).color).toBe(STATUS_COLORS.modified)
+    expect(getComputedStyle(sourceFolderStatus).color).toBe(STATUS_COLORS.modified)
+
     const selected = treeRoot.querySelector<HTMLElement>(
       `[data-item-path="${STATUS_PATHS.modified}"][data-item-selected]`,
     )

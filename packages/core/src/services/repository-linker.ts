@@ -1,4 +1,4 @@
-import { Context, Data, Effect, Layer, Match, Option, Schema } from "effect"
+import { Context, Data, Effect, Layer, Match, Option, Result, Schema } from "effect"
 import { resolve } from "node:path"
 import { pathToFileURL } from "node:url"
 
@@ -6,6 +6,7 @@ import {
   HostedRepositorySource,
   type HostedRepositoryLocator,
   LocalRepositorySource,
+  RepositorySource,
   ResolvedHostedRepository,
   sameHostedRepository,
 } from "@diffdash/domain/git-provider"
@@ -19,14 +20,16 @@ import {
   LinkedCheckout,
   RemoteOnly,
   type Repo,
+  RepositoryCheckout,
   RepositoryCheckoutPath,
   type RepositoryFavoriteIntent,
   RepositoryIdentityRepairSummary,
   UpsertRepositoryInput,
 } from "@diffdash/domain/repository"
 import { ReviewProjectId } from "@diffdash/domain/review-identity"
-import { GitService } from "@diffdash/local-git/local-git"
-import { RepositoryStore } from "@diffdash/persistence/repository-store"
+import { GitService, type LocalGitWorktree } from "@diffdash/local-git/local-git"
+import { RepositoryCheckoutRecord, RepositoryStore } from "@diffdash/persistence/repository-store"
+import { ProcessFileSystem } from "@diffdash/process/file-system"
 import type { LinkRepositoryCheckoutRequest } from "@diffdash/protocol/repository-link"
 import { GitProvider } from "./git-provider"
 import { CoreExpectedCause } from "../core-error-cause"
@@ -57,6 +60,10 @@ const RepositoryLinkOperation = Schema.Literals([
   "listForIdentityRepair",
   "repairLocalIdentity",
   "completeIdentityRepair",
+  "inspectCheckout",
+  "listCheckouts",
+  "listWorktrees",
+  "reconcileCheckouts",
 ])
 
 /** A local checkout could not be safely linked to a hosted repository. */
@@ -120,6 +127,7 @@ export class RepositoryLinker extends Context.Service<
       const git = yield* GitService
       const gitProvider = yield* GitProvider
       const repositories = yield* RepositoryStore
+      const fileSystem = yield* ProcessFileSystem
 
       const listRemotes = Effect.fn("RepositoryLinker.listRemotes")(function* (
         rootPath: RepositoryCheckoutPath,
@@ -217,6 +225,166 @@ export class RepositoryLinker extends Context.Service<
         }
         return candidates
       })
+
+      const persistCheckoutReconciliation = Effect.fn(
+        "RepositoryLinker.persistCheckoutReconciliation",
+      )(function (
+        repo: Repo,
+        surviving: readonly RepositoryCheckoutRecord[],
+        preferredPath: Option.Option<RepositoryCheckoutPath>,
+      ) {
+        return repositories.reconcileCheckouts(repo.id, surviving, preferredPath).pipe(
+          Effect.mapError((cause) =>
+            RepositoryLinkError.make({
+              operation: "reconcileCheckouts",
+              reason: "DiffDash could not reconcile the repository checkout.",
+              cause,
+            }),
+          ),
+        )
+      })
+
+      const inspectCheckoutPath = Effect.fn("RepositoryLinker.inspectCheckoutPath")(
+        (path: RepositoryCheckoutPath) =>
+          fileSystem
+            .inspect(path)
+            .pipe(Effect.map(Option.fromNullishOr))
+            .pipe(
+              Effect.mapError((cause) =>
+                RepositoryLinkError.make({
+                  operation: "inspectCheckout",
+                  reason: "DiffDash could not inspect a saved repository checkout.",
+                  cause,
+                }),
+              ),
+            ),
+      )
+
+      const reconcileCheckout = Effect.fn("RepositoryLinker.reconcileCheckout")((repo: Repo) =>
+        RepositoryCheckout.match(repo.checkout, {
+          RemoteOnly: () => Effect.succeed(repo),
+          LinkedCheckout: (linkedCheckout) =>
+            RepositorySource.match(repo.source, {
+              local: () => Effect.succeed(repo),
+              hosted: ({ locator }) =>
+                Effect.gen(function* () {
+                  const candidates = yield* repositories.listCheckouts(repo.id).pipe(
+                    Effect.mapError((cause) =>
+                      RepositoryLinkError.make({
+                        operation: "listCheckouts",
+                        reason: "DiffDash could not load saved repository checkouts.",
+                        cause,
+                      }),
+                    ),
+                  )
+                  const orderedCandidates = [
+                    RepositoryCheckoutRecord.make({
+                      path: linkedCheckout.path,
+                      remoteUrl: linkedCheckout.remoteUrl,
+                    }),
+                    ...candidates.filter((candidate) => candidate.path !== linkedCheckout.path),
+                  ]
+                  let registeredWorktrees = Option.none<readonly LocalGitWorktree[]>()
+                  let firstInspectionFailure = Option.none<RepositoryLinkError>()
+                  for (const candidate of orderedCandidates) {
+                    const entry = yield* inspectCheckoutPath(candidate.path)
+                    if (Option.isNone(entry)) continue
+
+                    const remoteInspection = yield* Effect.result(inspectHosted(candidate.path))
+                    const remotes = Result.match(remoteInspection, {
+                      onFailure: (failure) => {
+                        firstInspectionFailure = Option.orElse(firstInspectionFailure, () =>
+                          Option.some(failure),
+                        )
+                        return Option.none<readonly RecognizedRemote[]>()
+                      },
+                      onSuccess: Option.some,
+                    })
+                    if (
+                      !Option.exists(remotes, (recognized) =>
+                        recognized.some((remote) =>
+                          sameHostedRepository(remote.repository, locator),
+                        ),
+                      )
+                    ) {
+                      continue
+                    }
+
+                    const worktreeInspection = yield* Effect.result(
+                      git.listWorktrees(candidate.path).pipe(
+                        Effect.mapError((cause) =>
+                          RepositoryLinkError.make({
+                            operation: "listWorktrees",
+                            reason: "DiffDash could not inspect registered Git worktrees.",
+                            cause,
+                          }),
+                        ),
+                      ),
+                    )
+                    registeredWorktrees = Result.match(worktreeInspection, {
+                      onFailure: (failure) => {
+                        firstInspectionFailure = Option.orElse(firstInspectionFailure, () =>
+                          Option.some(failure),
+                        )
+                        return Option.none<readonly LocalGitWorktree[]>()
+                      },
+                      onSuccess: Option.some,
+                    })
+                    if (Option.isSome(registeredWorktrees)) break
+                  }
+
+                  if (Option.isNone(registeredWorktrees)) {
+                    return yield* Option.match(firstInspectionFailure, {
+                      onNone: () => persistCheckoutReconciliation(repo, [], Option.none()),
+                      onSome: Effect.fail,
+                    })
+                  }
+
+                  const inspectedWorktrees = yield* Effect.forEach(
+                    registeredWorktrees.value,
+                    (worktree) =>
+                      inspectCheckoutPath(worktree.path).pipe(
+                        Effect.map(Option.map(() => worktree)),
+                      ),
+                  )
+                  const surviving = inspectedWorktrees
+                    .flatMap((worktree) => Option.toArray(worktree))
+                    .filter((worktree) => !worktree.isBare && !worktree.isPrunable)
+                  const preferred = Option.firstSomeOf([
+                    Option.fromIterable(
+                      surviving.filter((worktree) => worktree.path === linkedCheckout.path),
+                    ),
+                    Option.fromIterable(surviving.filter((worktree) => worktree.isMain)),
+                    Option.fromIterable(surviving),
+                  ])
+                  return yield* Option.match(preferred, {
+                    onNone: () => persistCheckoutReconciliation(repo, [], Option.none()),
+                    onSome: (selected) => {
+                      if (
+                        selected.path === linkedCheckout.path &&
+                        surviving.length === candidates.length &&
+                        surviving.every((worktree) =>
+                          candidates.some((candidate) => candidate.path === worktree.path),
+                        )
+                      ) {
+                        return Effect.succeed(repo)
+                      }
+                      return persistCheckoutReconciliation(
+                        repo,
+                        surviving.map((worktree) =>
+                          RepositoryCheckoutRecord.make({
+                            path: worktree.path,
+                            remoteUrl: linkedCheckout.remoteUrl,
+                          }),
+                        ),
+                        Option.some(selected.path),
+                      )
+                    },
+                  })
+                }),
+            }),
+        }),
+      )
 
       const persist = Effect.fn("RepositoryLinker.persist")(function* (
         input: UpsertRepositoryInput,
@@ -372,15 +540,27 @@ export class RepositoryLinker extends Context.Service<
 
       return RepositoryLinker.of({
         list: Effect.fn("RepositoryLinker.list")(function (query) {
-          return repositories.list(query).pipe(
-            Effect.mapError((cause) =>
-              RepositoryLinkError.make({
-                operation: "list",
-                reason: "DiffDash could not load saved repositories.",
-                cause,
-              }),
-            ),
-          )
+          return repositories
+            .list(query)
+            .pipe(
+              Effect.flatMap((repos) =>
+                Effect.forEach(repos, reconcileCheckout, { concurrency: 4 }),
+              ),
+            )
+            .pipe(
+              Effect.mapError((cause) =>
+                Match.value(cause).pipe(
+                  Match.when(Schema.is(RepositoryLinkError), (error) => error),
+                  Match.orElse((storeError) =>
+                    RepositoryLinkError.make({
+                      operation: "list",
+                      reason: "DiffDash could not load saved repositories.",
+                      cause: storeError,
+                    }),
+                  ),
+                ),
+              ),
+            )
         }),
         setFavorite: Effect.fn("RepositoryLinker.setFavorite")(function (id, isFavorite) {
           return repositories.setFavorite(id, isFavorite).pipe(

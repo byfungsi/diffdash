@@ -224,6 +224,7 @@ const gitLayer = Layer.succeed(GitService, {
   detectRoot: () => Effect.die("unused"),
   currentBranch: () => Effect.succeed(RepositoryComparisonRef.make("feature")),
   listRemotes: () => Effect.die("unused"),
+  listWorktrees: () => Effect.die("unused"),
   resolveBranchComparison: () => Effect.die("unused"),
   resolveRevisionRangeComparison: () => Effect.die("unused"),
   resolveLastCommit: () => Effect.die("unused"),

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "@effect/vitest"
-import { Effect, Result, Layer, Stream } from "effect"
+import { Effect, Result, Layer, Schema, Stream } from "effect"
 
 import {
   ProcessExitError,
@@ -302,6 +302,60 @@ describe("GitService", () => {
 
       expect(Result.isFailure(result)).toBe(true)
       if (Result.isFailure(result)) expect(result.failure).toBeInstanceOf(ProcessOutputError)
+    }),
+  )
+
+  it.effect("lists the main and surviving linked worktrees from porcelain output", () =>
+    Effect.gen(function* () {
+      const stdout = [
+        "worktree /workspace/repo\0HEAD aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\0branch refs/heads/main\0",
+        "worktree /workspace/repo feature\0HEAD bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\0branch refs/heads/feature\0",
+        "worktree /workspace/deleted\0HEAD cccccccccccccccccccccccccccccccccccccccc\0prunable gitdir file points to non-existent location\0",
+      ].join("\0")
+      const processesLayer = makeProcessLayer((_command, args) =>
+        Effect.succeed(makeProcessResult(`${stdout}\0`, args)),
+      )
+      const service = yield* GitService.pipe(
+        Effect.provide(GitService.layer.pipe(Layer.provide(processesLayer))),
+      )
+
+      const worktrees = yield* service.listWorktrees(
+        RepositoryCheckoutPath.make("/workspace/repo feature"),
+      )
+
+      expect(worktrees).toMatchObject([
+        { path: "/workspace/repo", isMain: true, isBare: false, isPrunable: false },
+        {
+          path: "/workspace/repo feature",
+          isMain: false,
+          isBare: false,
+          isPrunable: false,
+        },
+        { path: "/workspace/deleted", isMain: false, isBare: false, isPrunable: true },
+      ])
+    }),
+  )
+
+  it.effect("rejects worktree porcelain records without an absolute worktree path", () =>
+    Effect.gen(function* () {
+      const processesLayer = makeProcessLayer((_command, args) =>
+        Effect.succeed(
+          makeProcessResult("HEAD aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\0\0", args),
+        ),
+      )
+      const service = yield* GitService.pipe(
+        Effect.provide(GitService.layer.pipe(Layer.provide(processesLayer))),
+      )
+
+      const result = yield* Effect.result(
+        service.listWorktrees(RepositoryCheckoutPath.make("/workspace/repo")),
+      )
+
+      expect(Result.isFailure(result)).toBe(true)
+      expect(Result.isFailure(result) && Schema.is(ProcessOutputError)(result.failure)).toBe(true)
+      if (Result.isFailure(result) && Schema.is(ProcessOutputError)(result.failure)) {
+        expect(result.failure.message).toBe("Git returned invalid worktree porcelain output.")
+      }
     }),
   )
 

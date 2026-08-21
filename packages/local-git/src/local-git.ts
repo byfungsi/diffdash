@@ -47,6 +47,14 @@ export class LocalGitRemote extends Schema.Class<LocalGitRemote>("LocalGitRemote
   fetchUrls: Schema.Array(Schema.String),
 }) {}
 
+/** One worktree registered in a local Git repository. */
+export class LocalGitWorktree extends Schema.Class<LocalGitWorktree>("LocalGitWorktree")({
+  path: RepositoryCheckoutPath,
+  isMain: Schema.Boolean,
+  isBare: Schema.Boolean,
+  isPrunable: Schema.Boolean,
+}) {}
+
 /** Main-process service for local Git repository inspection. */
 export class GitService extends Context.Service<
   GitService,
@@ -63,6 +71,9 @@ export class GitService extends Context.Service<
     readonly listRemotes: (
       localPath: RepositoryCheckoutPath,
     ) => Effect.Effect<readonly LocalGitRemote[], ProcessExecutionError>
+    readonly listWorktrees: (
+      localPath: RepositoryCheckoutPath,
+    ) => Effect.Effect<readonly LocalGitWorktree[], ProcessExecutionError>
     readonly resolveBranchComparison: (
       localPath: RepositoryCheckoutPath,
       branchName: RepositoryComparisonRef | null,
@@ -129,6 +140,31 @@ export class GitService extends Context.Service<
               ),
           { concurrency: 1 },
         )
+      })
+
+      const listWorktrees = Effect.fn("GitService.listWorktrees")(function* (
+        localPath: RepositoryCheckoutPath,
+      ) {
+        const result = yield* processes.run(
+          gitProcessRequest(["-C", localPath, "worktree", "list", "--porcelain", "-z"]),
+        )
+        const records = result.stdout.split("\0\0").filter((record) => record.length > 0)
+        return yield* Effect.forEach(records, (record, index) => {
+          const fields = record.split("\0")
+          const pathField = fields.find((field) => field.startsWith("worktree "))
+          return Schema.decodeUnknownEffect(LocalGitWorktree)({
+            path: pathField?.slice("worktree ".length),
+            isMain: index === 0,
+            isBare: fields.includes("bare"),
+            isPrunable: fields.some(
+              (field) => field === "prunable" || field.startsWith("prunable "),
+            ),
+          }).pipe(
+            Effect.mapError((cause) =>
+              invalidStdout(result, "Git returned invalid worktree porcelain output.", cause),
+            ),
+          )
+        })
       })
 
       const resolveBranchComparison = Effect.fn("GitService.resolveBranchComparison")(function* (
@@ -330,6 +366,7 @@ export class GitService extends Context.Service<
         detectRoot,
         currentBranch,
         listRemotes,
+        listWorktrees,
         resolveBranchComparison,
         resolveRevisionRangeComparison,
         resolveLastCommit,

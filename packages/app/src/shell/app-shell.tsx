@@ -1208,6 +1208,7 @@ export function AppShell() {
                             repo={selectedRepo}
                             onRefreshHosted={refreshSelectedPullRequests}
                             onRefreshLocal={refreshSelectedWorkingTree}
+                            onLinkRepository={() => void linkSelectedProjectRepository()}
                             onSelect={selectProjectReview}
                           />
                         }
@@ -1218,6 +1219,7 @@ export function AppShell() {
                             repo={selectedRepo}
                             onRefreshHosted={refreshSelectedPullRequests}
                             onRefreshLocal={refreshSelectedWorkingTree}
+                            onLinkRepository={() => void linkSelectedProjectRepository()}
                             onSelect={selectProjectReview}
                           />
                         }

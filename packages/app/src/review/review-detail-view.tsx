@@ -116,6 +116,7 @@ import {
   isVirtualizedFileDiff,
   type FileDiffOptions,
   type PostRenderPhase,
+  prepareFileTreeInput,
   useStableCallback,
   useWorkerPool,
   VirtualizerContext,
@@ -429,6 +430,7 @@ export const ReviewDetailView = ({
   const reviewDiffRegistrationsByHostRef = useRef(
     new WeakMap<HTMLElement, ReviewDiffRegistration>(),
   )
+  const diffSettlementFramesRef = useRef<Map<string, number>>(new Map())
   const [diffVirtualizer] = useState(() => new DiffVirtualizer(REVIEW_DIFF_VIRTUALIZER_CONFIG))
   const [reviewNavigationAnchors] = useState(() => new ReviewNavigationAnchorRegistry())
   const [reviewNavigator] = useState(() => new ReviewNavigatorController(atomRegistry))
@@ -555,6 +557,10 @@ export const ReviewDetailView = ({
   )
   useEffect(
     () => () => {
+      for (const frame of diffSettlementFramesRef.current.values()) {
+        window.cancelAnimationFrame(frame)
+      }
+      diffSettlementFramesRef.current.clear()
       reviewDiffRegistrationsRef.current.clear()
       reviewDiffRegistrationsByHostRef.current = new WeakMap()
     },
@@ -704,13 +710,12 @@ export const ReviewDetailView = ({
           ),
     [activeWalkthroughStep, changedFiles],
   )
-  const visibleChangedFiles = useMemo(
-    () =>
-      sidebarTab === "walkthrough" && activeWalkthroughStep !== null
-        ? activeWalkthroughInventory
-        : filteredChangedFiles,
-    [activeWalkthroughInventory, activeWalkthroughStep, filteredChangedFiles, sidebarTab],
-  )
+  const visibleChangedFiles = useMemo(() => {
+    if (sidebarTab === "walkthrough" && activeWalkthroughStep !== null) {
+      return activeWalkthroughInventory
+    }
+    return orderReviewFilesAsTree(filteredChangedFiles)
+  }, [activeWalkthroughInventory, activeWalkthroughStep, filteredChangedFiles, sidebarTab])
   const activeSearchReviewKey = activeReviewSearchOccurrence?.reviewKey ?? null
   const forcedVisibleFileIds = useMemo(() => {
     const fileIds = new Set(navigationPresentation.forceVisibleFileIds)
@@ -729,13 +734,14 @@ export const ReviewDetailView = ({
       return visibleChangedFiles
     }
     const visibleReviewKeys = new Set(visibleChangedFiles.map((file) => file.reviewKey))
-    return changedFiles.filter(
+    const revealedFiles = changedFiles.filter(
       (file) =>
         file.reviewKey === activeSearchReviewKey ||
         forcedVisibleFileIds.has(file.fileId) ||
         visibleReviewKeys.has(file.reviewKey),
     )
-  }, [activeSearchReviewKey, changedFiles, forcedVisibleFileIds, visibleChangedFiles])
+    return sidebarTab === "walkthrough" ? revealedFiles : orderReviewFilesAsTree(revealedFiles)
+  }, [activeSearchReviewKey, changedFiles, forcedVisibleFileIds, sidebarTab, visibleChangedFiles])
   const forceExpandedFileKeys = useMemo(() => {
     const keys = new Set<string>()
     if (activeSearchReviewKey !== null) keys.add(activeSearchReviewKey)
@@ -883,15 +889,56 @@ export const ReviewDetailView = ({
       } satisfies ReviewDiffRegistration
       reviewDiffRegistrationsRef.current.set(reviewKey, registration)
       reviewDiffRegistrationsByHostRef.current.set(node, registration)
-      if (phase === "unmount") {
-        queueMicrotask(() => {
-          const current = reviewDiffRegistrationsRef.current.get(reviewKey)
-          if (current?.host === node && !node.isConnected) {
-            reviewDiffRegistrationsRef.current.delete(reviewKey)
-            reviewDiffRegistrationsByHostRef.current.delete(node)
+      const phaseHandlers = {
+        unmount: () => {
+          Option.match(Option.fromNullishOr(diffSettlementFramesRef.current.get(reviewKey)), {
+            onNone: () => undefined,
+            onSome: (frame) => window.cancelAnimationFrame(frame),
+          })
+          diffSettlementFramesRef.current.delete(reviewKey)
+          queueMicrotask(() => {
+            const current = reviewDiffRegistrationsRef.current.get(reviewKey)
+            if (current?.host === node && !node.isConnected) {
+              reviewDiffRegistrationsRef.current.delete(reviewKey)
+              reviewDiffRegistrationsByHostRef.current.delete(node)
+            }
+          })
+        },
+        mount: () => {
+          Option.match(Option.fromNullishOr(diffSettlementFramesRef.current.get(reviewKey)), {
+            onNone: () => undefined,
+            onSome: (frame) => window.cancelAnimationFrame(frame),
+          })
+          // Wrapped rows settle after Pierre's estimate; stop once measured height is stable.
+          const settle = (
+            previousHeight: number,
+            stablePasses: number,
+            remainingPasses: number,
+          ) => {
+            const frame = window.requestAnimationFrame(() => {
+              const current = reviewDiffRegistrationsRef.current.get(reviewKey)
+              if (current?.host !== node || current.instance !== instance || !node.isConnected) {
+                diffSettlementFramesRef.current.delete(reviewKey)
+                return
+              }
+              instance.syncVirtualizedTop()
+              diffVirtualizer.markDOMDirty()
+              diffVirtualizer.requestHeightReconcile(instance)
+              const currentHeight = instance.getVirtualizedHeight()
+              const nextStablePasses = currentHeight === previousHeight ? stablePasses + 1 : 0
+              if (nextStablePasses >= 2 || remainingPasses === 1) {
+                diffSettlementFramesRef.current.delete(reviewKey)
+                return
+              }
+              settle(currentHeight, nextStablePasses, remainingPasses - 1)
+            })
+            diffSettlementFramesRef.current.set(reviewKey, frame)
           }
-        })
-      }
+          settle(instance.getVirtualizedHeight(), 0, 8)
+        },
+        update: () => undefined,
+      } satisfies Readonly<Record<PostRenderPhase, () => void>>
+      phaseHandlers[phase]()
     }
     reviewSearchHighlights.handlePostRender(reviewKey, node, instance, phase)
     if (phase !== "unmount") reviewViewportBridge.reconcileRenderedFocus(reviewKey)
@@ -2577,6 +2624,17 @@ const WalkthroughSettingsMenuItem = ({
     </button>
   </DropdownMenu.RadioItem>
 )
+
+const orderReviewFilesAsTree = (
+  files: readonly ReviewSnapshotFileInventory[],
+): readonly ReviewSnapshotFileInventory[] => {
+  const filesByPath = new Map<string, ReviewSnapshotFileInventory>(
+    files.map((file) => [file.path, file]),
+  )
+  return prepareFileTreeInput([...filesByPath.keys()]).paths.flatMap((path) =>
+    Option.toArray(Option.fromNullishOr(filesByPath.get(path))),
+  )
+}
 
 const matchesReviewFileFilter = (
   file: Pick<ReviewSnapshotFileInventory, "path" | "oldPath">,
