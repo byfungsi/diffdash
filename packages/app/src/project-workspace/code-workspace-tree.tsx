@@ -1,9 +1,14 @@
 import type { CodeWorkspaceEntry } from "@diffdash/domain/code-workspace"
+import type { DiffFileStatus } from "@diffdash/domain/diff"
 import { RepositoryRelativePath } from "@diffdash/domain/repository-path"
+import { createFileTreeIconResolver, getBuiltInSpriteSheet } from "@pierre/trees"
 import { Match } from "effect"
-import { ChevronRight, File, Folder } from "lucide-react"
+import { ChevronRight, Folder } from "lucide-react"
 
 import { cn } from "@/shared/utils"
+
+const FILE_ICON_RESOLVER = createFileTreeIconResolver({ set: "complete", colored: true })
+const FILE_ICON_SPRITE = getBuiltInSpriteSheet("complete")
 
 type VisibleEntry = {
   readonly _tag: "entry"
@@ -21,6 +26,7 @@ type VisibleLoadMore = {
 export const CodeWorkspaceTree = ({
   entries,
   expandedPaths,
+  fileStatuses,
   loadingPaths,
   nextOffsets,
   selectedPath,
@@ -30,6 +36,7 @@ export const CodeWorkspaceTree = ({
 }: {
   readonly entries: ReadonlyMap<string, readonly CodeWorkspaceEntry[]>
   readonly expandedPaths: ReadonlySet<RepositoryRelativePath>
+  readonly fileStatuses: ReadonlyMap<RepositoryRelativePath, DiffFileStatus>
   readonly loadingPaths: ReadonlySet<string>
   readonly nextOffsets: ReadonlyMap<string, number | null>
   readonly selectedPath: RepositoryRelativePath | null
@@ -59,6 +66,7 @@ export const CodeWorkspaceTree = ({
         const expanded = entry.kind === "directory" && expandedPaths.has(entry.path)
         const loading = loadingPaths.has(entry.path)
         const label = basename(entry.path)
+        const fileStatus = entry.kind === "file" ? fileStatuses.get(entry.path) : undefined
         return (
           <button
             key={entry.path}
@@ -94,18 +102,67 @@ export const CodeWorkspaceTree = ({
             {entry.kind === "directory" ? (
               <Folder aria-hidden="true" className="text-muted-foreground size-3.5 shrink-0" />
             ) : (
-              <File aria-hidden="true" className="text-muted-foreground size-3.5 shrink-0" />
+              <FileTypeIcon path={entry.path} />
             )}
-            <span className="truncate">{label}</span>
+            <span className="min-w-0 flex-1 truncate">{label}</span>
+            {fileStatus === "added" ? (
+              <span aria-label="Added" className="text-review-success-text shrink-0 font-medium">
+                A
+              </span>
+            ) : fileStatus === undefined || fileStatus === "deleted" ? null : (
+              <span
+                aria-label="Modified"
+                className="text-review-modified-text shrink-0 font-medium"
+              >
+                M
+              </span>
+            )}
           </button>
         )
       },
     })
   return (
-    <div role="tree" aria-label="Repository files" className="h-full overflow-auto py-1">
-      {visible.map(renderVisible)}
-    </div>
+    <>
+      <div
+        aria-hidden="true"
+        className="absolute size-0 overflow-hidden"
+        dangerouslySetInnerHTML={{ __html: FILE_ICON_SPRITE }}
+      />
+      <div role="tree" aria-label="Repository files" className="h-full overflow-auto py-1">
+        {visible.map(renderVisible)}
+      </div>
+    </>
   )
+}
+
+const FileTypeIcon = ({ path }: { readonly path: RepositoryRelativePath }) => {
+  const icon = FILE_ICON_RESOLVER.resolveIcon("file-tree-icon-file", path)
+  return (
+    <svg
+      aria-hidden="true"
+      data-icon-token={icon.token}
+      className={cn("size-3.5 shrink-0", fileIconColor(icon.token))}
+      viewBox={icon.viewBox ?? `0 0 ${icon.width ?? 16} ${icon.height ?? 16}`}
+    >
+      <use href={`#${icon.name}`} />
+    </svg>
+  )
+}
+
+const fileIconColor = (token: string | undefined): string => {
+  if (token === undefined || token === "default" || token === "text") return "text-muted-foreground"
+  if (["npm", "postcss", "ruby", "svelte", "yml"].includes(token)) return "text-review-danger-text"
+  if (["bash", "markdown", "svgo", "vue"].includes(token)) return "text-review-success-text"
+  if (["babel", "browserslist", "javascript"].includes(token)) return "text-review-modified-text"
+  if (["go", "oxc", "react", "tailwind"].includes(token)) return "text-theme-sky"
+  if (["graphql", "image", "sass"].includes(token)) return "text-theme-pink"
+  if (["astro", "database", "vite"].includes(token)) return "text-theme-mauve"
+  if (["bootstrap", "css", "eslint", "terraform", "wasm"].includes(token)) return "text-theme-blue"
+  if (["claude", "html", "json", "rust", "svg", "swift", "zig", "zip"].includes(token))
+    return "text-theme-peach"
+  if (["git"].includes(token)) return "text-theme-flamingo"
+  if (["mcp", "prettier", "table"].includes(token)) return "text-review-renamed-text"
+  return "text-theme-sapphire"
 }
 
 const flattenEntries = (

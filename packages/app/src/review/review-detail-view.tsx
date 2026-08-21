@@ -170,7 +170,11 @@ export type ReviewDetailEnvironment = {
   readonly colorScheme: ColorScheme
   readonly onAISettingsChange: (settings: AISettings) => void
   readonly onLinkRepository: () => Promise<boolean>
-  readonly onOpenCodeFile: (path: RepositoryRelativePath, target: CodeWorkspaceTarget) => void
+  readonly onOpenCodeFile: (
+    path: RepositoryRelativePath,
+    target: CodeWorkspaceTarget,
+    files: readonly ReviewSnapshotFileInventory[],
+  ) => void
   readonly onSidebarExpandedChange: (expanded: boolean) => void
   readonly onSidebarWidthChange: (width: number) => void
   readonly onThreadDetailWidthChange: (width: number) => void
@@ -1647,7 +1651,7 @@ export const ReviewDetailView = ({
       }),
   })
   const openRepositoryFile = (path: RepositoryRelativePath) =>
-    onOpenCodeFile(path, codeWorkspaceTarget)
+    onOpenCodeFile(path, codeWorkspaceTarget, changedFiles)
   const approvePullRequest = async () => {
     const decisionOperations = Match.valueTags(sourceOperations.decision, {
       supported: (operations) => operations,

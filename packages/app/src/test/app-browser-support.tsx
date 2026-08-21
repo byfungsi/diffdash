@@ -1998,6 +1998,19 @@ scenario("codeRibbon", async () => {
     .querySelector<HTMLButtonElement>('button[aria-label="Refresh repository files"]')
     ?.click()
   await vi.waitFor(() => expect(calls.listLocalCheckoutFiles.mock.calls.length).toBeGreaterThan(3))
+
+  document.querySelector<HTMLButtonElement>('button[aria-label="Reviews"]')?.click()
+  await vi.waitFor(() => {
+    expect(
+      document.querySelector('button[aria-label="Reviews"][aria-pressed="true"]'),
+    ).not.toBeNull()
+  })
+  document.querySelector<HTMLButtonElement>('button[aria-label="Code"]')?.click()
+  await vi.waitFor(() => {
+    expect(document.querySelector('button[aria-label="Code"][aria-pressed="true"]')).not.toBeNull()
+    expect(calls.openCodeWorkspace).toHaveBeenCalledTimes(2)
+    expect(calls.releaseCodeWorkspace).toHaveBeenCalledTimes(1)
+  })
 })
 
 scenario("codeRibbonLink", async () => {
@@ -7988,6 +8001,15 @@ export const installDiffDashApi = (
   >()
   let codeWorkspaceProjectId: ReviewProjectId | null = null
   const codeWorkspaceLeaseId = CodeWorkspaceLeaseId.make("browser-code-workspace")
+  const openCodeWorkspace = vi.fn<DiffDashApi["codeWorkspace"]["open"]>(async ({ target }) => {
+    codeWorkspaceProjectId = target.projectId
+    return CodeWorkspaceLease.make({
+      id: codeWorkspaceLeaseId,
+      revision: GitCommitSha.make(target._tag === "projectHead" ? "0".repeat(40) : target.revision),
+      expiresAtMs: Date.now() + 60 * 60 * 1_000,
+    })
+  })
+  const releaseCodeWorkspace = vi.fn<DiffDashApi["codeWorkspace"]["release"]>(async () => undefined)
   const codeWorkspacePaths = async () => {
     if (codeWorkspaceProjectId === null) return []
     const listed = await calls.listLocalCheckoutFiles(codeWorkspaceProjectId)
@@ -8188,23 +8210,14 @@ export const installDiffDashApi = (
       setFavorite: calls.setRepositoryFavorite,
     },
     codeWorkspace: {
-      open: async ({ target }) => {
-        codeWorkspaceProjectId = target.projectId
-        return CodeWorkspaceLease.make({
-          id: codeWorkspaceLeaseId,
-          revision: GitCommitSha.make(
-            target._tag === "projectHead" ? "0".repeat(40) : target.revision,
-          ),
-          expiresAtMs: Date.now() + 60 * 60 * 1_000,
-        })
-      },
+      open: openCodeWorkspace,
       heartbeat: async () =>
         CodeWorkspaceLease.make({
           id: codeWorkspaceLeaseId,
           revision: GitCommitSha.make("0".repeat(40)),
           expiresAtMs: Date.now() + 60 * 60 * 1_000,
         }),
-      release: async () => undefined,
+      release: releaseCodeWorkspace,
       listDirectory: async ({ path, offset, limit }) => {
         const prefix = path === null ? "" : `${path}/`
         const children = new Map<string, "directory" | "file">()
@@ -8339,6 +8352,8 @@ export const installDiffDashApi = (
     progressiveInventory,
     progressiveRange,
     searchReviewSnapshot,
+    openCodeWorkspace,
+    releaseCodeWorkspace,
     emitUpdateState: (state: AppUpdateState) => updateStateListener?.(state),
     linkRepositoryFromCli: (rootPath: string) => {
       pendingCommands.push(

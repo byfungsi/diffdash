@@ -5,6 +5,7 @@ import {
   type CodeWorkspaceTarget,
   ProjectHeadCodeWorkspaceTarget,
 } from "@diffdash/domain/code-workspace"
+import type { DiffFileStatus } from "@diffdash/domain/diff"
 import {
   type GitProviderDescriptor,
   GitProviderId,
@@ -15,6 +16,7 @@ import {
 } from "@diffdash/domain/git-provider"
 import { workingTreeReviewTarget } from "@diffdash/domain/local-review"
 import { type ProjectWorkspaceRibbon } from "@diffdash/domain/project-workspace"
+import type { ReviewSnapshotFileInventory } from "@diffdash/domain/review-context"
 import { RepositoryRelativePath } from "@diffdash/domain/repository-path"
 import {
   RendererLayoutSettings,
@@ -131,6 +133,10 @@ export function AppShell() {
     Option.none,
   )
   const [selectedCodeTarget, setSelectedCodeTarget] = useState<CodeWorkspaceTarget | null>(null)
+  const [codeWorkspaceMounted, setCodeWorkspaceMounted] = useState(false)
+  const [codeFileStatuses, setCodeFileStatuses] = useState<
+    ReadonlyMap<RepositoryRelativePath, DiffFileStatus>
+  >(new Map())
   const [workspaceNotice, setWorkspaceNotice] = useState<string | null>(null)
   const [pendingRemoteSelection, setPendingRemoteSelection] =
     useState<PendingProjectRemoteSelection | null>(null)
@@ -379,6 +385,8 @@ export function AppShell() {
     setScreen("home")
     setSelectedRepo(null)
     setSelectedCodeTarget(null)
+    setCodeWorkspaceMounted(false)
+    setCodeFileStatuses(new Map())
     setSelectedReview(null)
     setSelectedCodePath(Option.none())
     setActiveRibbon("reviews")
@@ -562,6 +570,8 @@ export function AppShell() {
   const applyProjectProjection = (projection: ProjectSessionProjection) => {
     setSelectedRepo(projection.repo)
     setSelectedCodeTarget(ProjectHeadCodeWorkspaceTarget.make({ projectId: projection.repo.id }))
+    setCodeWorkspaceMounted(projection.activeRibbon === "code")
+    setCodeFileStatuses(new Map())
     setSelectedReview(projection.selectedReview)
     setSelectedCodePath(Option.none())
     setActiveRibbon(projection.activeRibbon)
@@ -615,7 +625,9 @@ export function AppShell() {
     projectSession.cancelRestore()
     setActiveRibbon(ribbon)
     if (ribbon === "code" && selectedRepo !== null) {
+      setCodeWorkspaceMounted(true)
       setSelectedCodeTarget(ProjectHeadCodeWorkspaceTarget.make({ projectId: selectedRepo.id }))
+      setCodeFileStatuses(new Map())
     }
     if (selectedRepo !== null) {
       observeWorkspacePersistence(
@@ -624,12 +636,23 @@ export function AppShell() {
     }
   }
 
-  const openCodeFile = (path: RepositoryRelativePath, target?: CodeWorkspaceTarget) => {
+  const openCodeFile = (
+    path: RepositoryRelativePath,
+    target?: CodeWorkspaceTarget,
+    files: readonly ReviewSnapshotFileInventory[] = [],
+  ) => {
     if (selectedRepo === null) return
     updateProjectRibbon("code")
     setSelectedCodePath(Option.some(path))
     setSelectedCodeTarget(
       target ?? ProjectHeadCodeWorkspaceTarget.make({ projectId: selectedRepo.id }),
+    )
+    setCodeFileStatuses(
+      new Map(
+        files
+          .filter((file) => file.status !== "deleted")
+          .map((file) => [file.path, file.status] as const),
+      ),
     )
     setReviewSidebarExpanded(true)
   }
@@ -1103,31 +1126,34 @@ export function AppShell() {
                 />
               ) : screen === "project" && selectedRepo !== null ? (
                 <>
+                  {codeWorkspaceMounted ? (
+                    <CodeScreen
+                      key={selectedRepo.id}
+                      active={activeRibbon === "code"}
+                      codeThemes={aiSettings.codeThemes}
+                      colorScheme={THEME_DEFINITIONS[resolvedTheme].colorScheme}
+                      contextWidth={aiSettings.layout.review.contextWidth}
+                      fileStatuses={codeFileStatuses}
+                      repo={selectedRepo}
+                      selectedPath={Option.getOrNull(selectedCodePath)}
+                      sidebarExpanded={reviewSidebarExpanded}
+                      target={
+                        selectedCodeTarget ??
+                        ProjectHeadCodeWorkspaceTarget.make({ projectId: selectedRepo.id })
+                      }
+                      threadDetailWidth={aiSettings.layout.review.threadDetailWidth}
+                      onActiveRibbonChange={updateProjectRibbon}
+                      onLinkRepository={linkSelectedProjectRepository}
+                      onSelectedPathChange={(path) =>
+                        setSelectedCodePath(path === null ? Option.none : Option.some(path))
+                      }
+                      onSidebarExpandedChange={setReviewSidebarExpanded}
+                      onSidebarWidthChange={updateReviewContextWidth}
+                      onThreadDetailWidthChange={updateReviewThreadDetailWidth}
+                    />
+                  ) : null}
                   {Option.match(reviewRibbon, {
-                    onNone: () => (
-                      <CodeScreen
-                        key={selectedRepo.id}
-                        codeThemes={aiSettings.codeThemes}
-                        colorScheme={THEME_DEFINITIONS[resolvedTheme].colorScheme}
-                        contextWidth={aiSettings.layout.review.contextWidth}
-                        repo={selectedRepo}
-                        selectedPath={Option.getOrNull(selectedCodePath)}
-                        sidebarExpanded={reviewSidebarExpanded}
-                        target={
-                          selectedCodeTarget ??
-                          ProjectHeadCodeWorkspaceTarget.make({ projectId: selectedRepo.id })
-                        }
-                        threadDetailWidth={aiSettings.layout.review.threadDetailWidth}
-                        onActiveRibbonChange={updateProjectRibbon}
-                        onLinkRepository={linkSelectedProjectRepository}
-                        onSelectedPathChange={(path) =>
-                          setSelectedCodePath(path === null ? Option.none : Option.some(path))
-                        }
-                        onSidebarExpandedChange={setReviewSidebarExpanded}
-                        onSidebarWidthChange={updateReviewContextWidth}
-                        onThreadDetailWidthChange={updateReviewThreadDetailWidth}
-                      />
-                    ),
+                    onNone: () => null,
                     onSome: (activeReviewRibbon) => (
                       <ReviewScreen
                         activeRibbon={activeReviewRibbon}

@@ -180,6 +180,13 @@
   --color-input: var(--input);
   --color-ring: var(--ring);
   --color-link: var(--link);
+  --color-theme-flamingo: var(--theme-flamingo);
+  --color-theme-pink: var(--theme-pink);
+  --color-theme-mauve: var(--theme-mauve);
+  --color-theme-peach: var(--theme-peach);
+  --color-theme-sky: var(--theme-sky);
+  --color-theme-sapphire: var(--theme-sapphire);
+  --color-theme-blue: var(--theme-blue);
   --color-search-surface: var(--search-surface);
   --color-search-surface-border: var(--search-surface-border);
   --color-shell-titlebar: var(--shell-titlebar);

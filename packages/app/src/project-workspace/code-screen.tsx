@@ -4,9 +4,10 @@ import {
   type CodeWorkspaceFileReadRejectionReason,
   type CodeWorkspaceLease,
   type CodeWorkspaceLeaseId,
-  type CodeWorkspaceTarget,
+  CodeWorkspaceTarget,
   ProjectHeadCodeWorkspaceTarget,
 } from "@diffdash/domain/code-workspace"
+import type { DiffFileStatus } from "@diffdash/domain/diff"
 import type { ProjectWorkspaceRibbon } from "@diffdash/domain/project-workspace"
 import type { Repo } from "@diffdash/domain/repository"
 import { RepositoryRelativePath } from "@diffdash/domain/repository-path"
@@ -42,9 +43,11 @@ const HEARTBEAT_INTERVAL_MS = 20 * 60 * 1_000
 
 /** Managed exact-revision Code browser with lazy directory and filename loading. */
 export const CodeScreen = ({
+  active,
   codeThemes,
   colorScheme,
   contextWidth,
+  fileStatuses,
   repo,
   selectedPath,
   sidebarExpanded,
@@ -57,9 +60,11 @@ export const CodeScreen = ({
   onSidebarWidthChange,
   onThreadDetailWidthChange,
 }: {
+  readonly active: boolean
   readonly codeThemes: CodeThemePreferences
   readonly colorScheme: ColorScheme
   readonly contextWidth: number
+  readonly fileStatuses: ReadonlyMap<RepositoryRelativePath, DiffFileStatus>
   readonly repo: Repo
   readonly selectedPath: RepositoryRelativePath | null
   readonly sidebarExpanded: boolean
@@ -89,6 +94,8 @@ export const CodeScreen = ({
   const [reloadVersion, setReloadVersion] = useState(0)
   const activeLeaseId = useRef<CodeWorkspaceLeaseId | null>(null)
   const searchSequence = useRef(0)
+  const targetIdentity = JSON.stringify(Schema.encodeSync(CodeWorkspaceTarget)(target))
+  const requiresLocalCheckout = Schema.is(ProjectHeadCodeWorkspaceTarget)(target)
   const readyWorkspace = Match.valueTags(workspace, {
     loading: () => null,
     failure: () => null,
@@ -138,16 +145,17 @@ export const CodeScreen = ({
       }
     })
   const loadDirectoryFromEffect = useEffectEvent(loadDirectory)
+  const openWorkspace = useEffectEvent(() => runRendererPromise(workspaces.open(target)))
 
   useEffect(() => {
-    let active = true
+    let requestActive = true
     let lease: CodeWorkspaceLease | null = null
     setWorkspace({ _tag: "loading" })
     setDirectories(new Map())
     setExpandedPaths(new Set())
     setDirectoryOffsets(new Map())
     setFile({ _tag: "idle" })
-    if (Schema.is(ProjectHeadCodeWorkspaceTarget)(target) && repo.localPath === null) {
+    if (requiresLocalCheckout && repo.localPath === null) {
       setWorkspace({
         _tag: "failure",
         message: "Link a checkout to browse code at the project's current HEAD.",
@@ -156,8 +164,8 @@ export const CodeScreen = ({
     }
     const open = async () => {
       try {
-        lease = await runRendererPromise(workspaces.open(target))
-        if (!active) {
+        lease = await openWorkspace()
+        if (!requestActive) {
           await runRendererPromise(workspaces.release(lease.id)).catch(() => undefined)
           return
         }
@@ -165,7 +173,7 @@ export const CodeScreen = ({
         setWorkspace({ _tag: "ready", lease })
         await loadDirectoryFromEffect(lease, null)
       } catch (error) {
-        if (active)
+        if (requestActive)
           setWorkspace({
             _tag: "failure",
             message: formatError(error, "DiffDash could not prepare the Code workspace."),
@@ -174,13 +182,13 @@ export const CodeScreen = ({
     }
     void open()
     return () => {
-      active = false
+      requestActive = false
       if (lease !== null) {
         if (activeLeaseId.current === lease.id) activeLeaseId.current = null
         void runRendererPromise(workspaces.release(lease.id)).catch(() => undefined)
       }
     }
-  }, [reloadVersion, repo.localPath, target, workspaces])
+  }, [reloadVersion, repo.localPath, requiresLocalCheckout, targetIdentity, workspaces])
 
   useEffect(() => {
     if (readyWorkspace === null) return
@@ -204,11 +212,11 @@ export const CodeScreen = ({
       if (selectedPath === null) setFile({ _tag: "idle" })
       return
     }
-    let active = true
+    let requestActive = true
     setFile({ _tag: "loading", path: selectedPath })
     void runRendererPromise(workspaces.readFile(readyWorkspace.lease.id, selectedPath))
       .then((result) => {
-        if (active) {
+        if (requestActive) {
           setFile(
             Match.valueTags(result, {
               content: (content) => ({
@@ -227,7 +235,7 @@ export const CodeScreen = ({
         return undefined
       })
       .catch((error) => {
-        if (active)
+        if (requestActive)
           setFile({
             _tag: "failure",
             path: selectedPath,
@@ -235,7 +243,7 @@ export const CodeScreen = ({
           })
       })
     return () => {
-      active = false
+      requestActive = false
     }
   }, [readyWorkspace, selectedPath, workspaces])
 
@@ -253,6 +261,10 @@ export const CodeScreen = ({
   }, [directories, readyWorkspace, selectedPath])
 
   useEffect(() => {
+    if (!active) {
+      setPaletteOpen(false)
+      return
+    }
     const onKeyDown = (event: KeyboardEvent) => {
       if (!(event.metaKey || event.ctrlKey) || event.key.toLowerCase() !== "k") return
       event.preventDefault()
@@ -260,7 +272,7 @@ export const CodeScreen = ({
     }
     window.addEventListener("keydown", onKeyDown)
     return () => window.removeEventListener("keydown", onKeyDown)
-  }, [])
+  }, [active])
 
   const searchPage = (query: string, offset: number, append: boolean) => {
     if (readyWorkspace === null) return
@@ -333,6 +345,7 @@ export const CodeScreen = ({
           <CodeWorkspaceTree
             entries={directories}
             expandedPaths={expandedPaths}
+            fileStatuses={fileStatuses}
             loadingPaths={loadingPaths}
             nextOffsets={directoryOffsets}
             selectedPath={selectedPath}
@@ -409,6 +422,8 @@ export const CodeScreen = ({
         ),
       }),
   })
+
+  if (!active) return null
 
   return (
     <>
