@@ -1,5 +1,20 @@
 # DiffDash Changelog
 
+## 0.11.0
+
+### Minor Changes
+
+- [#86](https://github.com/byfungsi/diffdash/pull/86) [`8936ef4`](https://github.com/byfungsi/diffdash/commit/8936ef4ede052e7066b6f5f2468ddb03b8023e23) Thanks [@hanipcode](https://github.com/hanipcode)! - Browse project code from isolated managed worktrees without including local uncommitted changes.
+
+  The Code ribbon lazily loads large repositories, opens review files at the review's exact revision,
+  and keeps active workspaces protected with renewable leases and automatic cleanup. The read-only
+  viewer supports repository and in-file search while safely rejecting oversized, binary, invalid,
+  non-regular, or checkout-escaping files.
+
+### Patch Changes
+
+- [#85](https://github.com/byfungsi/diffdash/pull/85) [`0d03f1c`](https://github.com/byfungsi/diffdash/commit/0d03f1c1bed0bda5e414b9dde3a2104fa5defe2e) Thanks [@hanipcode](https://github.com/hanipcode)! - Keep CLI launches alive until the DiffDash desktop window is ready.
+
 ## 0.10.0
 
 ### Minor Changes
