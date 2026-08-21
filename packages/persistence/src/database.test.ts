@@ -93,6 +93,12 @@ const CompatibilityCountsRow = Schema.Struct({
 const TableSqlRow = Schema.Struct({ sql: Schema.String })
 const UserVersionRow = Schema.Struct({ user_version: Schema.Number })
 const IntegrityCheckRow = Schema.Struct({ integrity_check: Schema.String })
+const WorkspaceStateRow = Schema.Struct({
+  repo_id: Schema.String,
+  active_ribbon: Schema.String,
+  selected_review_target_json: Schema.NullOr(Schema.String),
+  updated_at: Schema.String,
+})
 const AgentRunFixtureRow = Schema.Struct({
   id: AgentRunId,
   thread_id: ReviewThreadId,
@@ -248,7 +254,7 @@ describe("database-node", () => {
         )
         expect(workspaceTable.sql).toContain("REFERENCES repos(id) ON DELETE CASCADE")
         expect(workspaceTable.sql).toContain(
-          "active_ribbon IN ('reviews', 'files', 'walkthrough', 'threads')",
+          "active_ribbon IN ('reviews', 'files', 'code', 'walkthrough', 'threads')",
         )
         const localViewedFilesTable = decodeTableSqlRow(
           yield* database.get(
@@ -261,6 +267,84 @@ describe("database-node", () => {
         )
       }).pipe(Effect.provide(makeLayer(databasePath)))
     }),
+  )
+
+  it.effect(
+    "adds the code ribbon while preserving legacy workspace rows and cascade behavior",
+    () =>
+      Effect.gen(function* () {
+        const databasePath = yield* makeTempDatabasePath
+
+        yield* Effect.gen(function* () {
+          const database = makeDatabase(yield* SqlClient.SqlClient)
+          yield* database.run(
+            "DELETE FROM diffdash_capabilities WHERE name = 'project-workspace-code-ribbon'",
+          )
+          yield* database.run("DROP TABLE project_workspace_state")
+          yield* database.run(`CREATE TABLE project_workspace_state (
+          repo_id TEXT PRIMARY KEY REFERENCES repos(id) ON DELETE CASCADE,
+          active_ribbon TEXT NOT NULL CHECK (
+            active_ribbon IN ('reviews', 'files', 'walkthrough', 'threads')
+          ),
+          selected_review_target_json TEXT,
+          updated_at TEXT NOT NULL
+        )`)
+          yield* database.run(`INSERT INTO repos (
+          id, provider, owner, name, remote_url, local_path, is_favorite,
+          last_opened_at, last_synced_at, created_at, updated_at
+        ) VALUES (
+          'repo-workspace-migration', 'github', 'fungsi', 'workspace-migration',
+          'https://github.com/fungsi/workspace-migration', NULL, 0, NULL, NULL,
+          '2026-08-20T00:00:00.000Z', '2026-08-20T00:00:00.000Z'
+        )`)
+          yield* database.run(`INSERT INTO project_workspace_state (
+          repo_id, active_ribbon, selected_review_target_json, updated_at
+        ) VALUES (
+          'repo-workspace-migration', 'threads', NULL, '2026-08-20T00:00:00.000Z'
+        )`)
+        }).pipe(Effect.provide(makeLayer(databasePath)))
+
+        yield* Effect.gen(function* () {
+          const database = makeDatabase(yield* SqlClient.SqlClient)
+          const workspaceTable = decodeTableSqlRow(
+            yield* database.get(
+              "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'project_workspace_state'",
+            ),
+          )
+          const workspaceState = Schema.decodeUnknownSync(WorkspaceStateRow)(
+            Option.getOrThrow(
+              yield* database.get(
+                "SELECT * FROM project_workspace_state WHERE repo_id = 'repo-workspace-migration'",
+              ),
+            ),
+          )
+
+          expect(workspaceTable.sql).toContain(
+            "active_ribbon IN ('reviews', 'files', 'code', 'walkthrough', 'threads')",
+          )
+          expect(workspaceTable.sql).toContain("REFERENCES repos(id) ON DELETE CASCADE")
+          expect(workspaceState).toEqual({
+            repo_id: "repo-workspace-migration",
+            active_ribbon: "threads",
+            selected_review_target_json: null,
+            updated_at: "2026-08-20T00:00:00.000Z",
+          })
+          expect(
+            Option.getOrThrow(
+              yield* database.get(
+                "SELECT version FROM diffdash_capabilities WHERE name = 'project-workspace-code-ribbon'",
+              ),
+            ),
+          ).toEqual({ version: 1 })
+
+          yield* database.run("DELETE FROM repos WHERE id = 'repo-workspace-migration'")
+          expect(
+            decodeCountRow(
+              yield* database.get("SELECT COUNT(*) AS count FROM project_workspace_state"),
+            ).count,
+          ).toBe(0)
+        }).pipe(Effect.provide(makeLayer(databasePath)))
+      }),
   )
 
   it.effect("installs durable walkthrough acceptance evidence without bumping user_version", () =>

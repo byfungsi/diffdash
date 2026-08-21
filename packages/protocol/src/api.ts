@@ -40,6 +40,17 @@ import type { AgentProviderCatalog } from "./agent-providers"
 import type { AnalyticsEvent } from "./analytics"
 import type { AppUpdateState } from "./app-update"
 import type { CliNavigationCommand } from "./cli-navigation"
+import type {
+  CodeWorkspaceDirectoryPage,
+  CodeWorkspaceFileReadResult,
+  CodeWorkspaceLease,
+  CodeWorkspaceLeaseRequest,
+  ListCodeWorkspaceDirectoryRequest,
+  OpenCodeWorkspaceRequest,
+  ReadCodeWorkspaceFileRequest,
+  SearchCodeWorkspaceRequest,
+  CodeWorkspaceSearchResult,
+} from "./code-workspace"
 import type { OpenRepositoryComparisonCommand } from "./cli-navigation"
 import type {
   HostedProviderRequest,
@@ -134,6 +145,18 @@ export interface DiffDashApi {
     readonly repairIdentities: () => Promise<RepositoryIdentityRepairSummary>
     readonly forget: (projectId: ReviewProjectId) => Promise<Repo>
     readonly selectLocalFolder: () => Promise<RepositoryCheckoutPath | null>
+  }
+  readonly codeWorkspace: {
+    readonly open: (request: OpenCodeWorkspaceRequest) => Promise<CodeWorkspaceLease>
+    readonly heartbeat: (request: CodeWorkspaceLeaseRequest) => Promise<CodeWorkspaceLease>
+    readonly release: (request: CodeWorkspaceLeaseRequest) => Promise<void>
+    readonly listDirectory: (
+      request: ListCodeWorkspaceDirectoryRequest,
+    ) => Promise<CodeWorkspaceDirectoryPage>
+    readonly search: (request: SearchCodeWorkspaceRequest) => Promise<CodeWorkspaceSearchResult>
+    readonly readFile: (
+      request: ReadCodeWorkspaceFileRequest,
+    ) => Promise<CodeWorkspaceFileReadResult>
   }
   readonly projectWorkspace: {
     readonly get: (projectId: ReviewProjectId) => Promise<ProjectWorkspaceState | null>

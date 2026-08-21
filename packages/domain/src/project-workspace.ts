@@ -43,6 +43,7 @@ export type ProjectOpenResult = typeof ProjectOpenResult.Type
 export const ProjectWorkspaceRibbon = Schema.Literals([
   "reviews",
   "files",
+  "code",
   "walkthrough",
   "threads",
 ])

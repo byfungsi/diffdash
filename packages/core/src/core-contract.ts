@@ -9,6 +9,7 @@ import {
   UnsupportedAgentCapabilityError,
 } from "@diffdash/agent-provider"
 import { NoAgentProviderAvailableError } from "@diffdash/agent-provider/registry"
+import type { CodeWorkspaceError } from "@diffdash/domain/code-workspace"
 import type { ReviewAgentProgressStage } from "@diffdash/domain/review-agent"
 import { RepositoryRelativePath } from "@diffdash/domain/repository-path"
 import { ReviewSnapshotId, type ReviewRevision } from "@diffdash/domain/review-identity"
@@ -93,6 +94,12 @@ export const CoreMethod = {
   forgetRepository: "Repositories.forget",
   installRepository: "Repositories.install",
   linkRepository: "Repositories.link",
+  openCodeWorkspace: "CodeWorkspace.open",
+  heartbeatCodeWorkspace: "CodeWorkspace.heartbeat",
+  releaseCodeWorkspace: "CodeWorkspace.release",
+  listCodeWorkspaceDirectory: "CodeWorkspace.listDirectory",
+  searchCodeWorkspace: "CodeWorkspace.search",
+  readCodeWorkspaceFile: "CodeWorkspace.readFile",
   listRepositories: "Repositories.list",
   openProject: "Repositories.openProject",
   repairRepositoryIdentities: "Repositories.repairIdentities",
@@ -149,6 +156,12 @@ export const CoreMethodChannel = {
   [CoreMethod.forgetRepository]: InvokeChannel.forgetRepository,
   [CoreMethod.installRepository]: InvokeChannel.installRepository,
   [CoreMethod.linkRepository]: InvokeChannel.linkRepository,
+  [CoreMethod.openCodeWorkspace]: InvokeChannel.openCodeWorkspace,
+  [CoreMethod.heartbeatCodeWorkspace]: InvokeChannel.heartbeatCodeWorkspace,
+  [CoreMethod.releaseCodeWorkspace]: InvokeChannel.releaseCodeWorkspace,
+  [CoreMethod.listCodeWorkspaceDirectory]: InvokeChannel.listCodeWorkspaceDirectory,
+  [CoreMethod.searchCodeWorkspace]: InvokeChannel.searchCodeWorkspace,
+  [CoreMethod.readCodeWorkspaceFile]: InvokeChannel.readCodeWorkspaceFile,
   [CoreMethod.listRepositories]: InvokeChannel.listRepositories,
   [CoreMethod.openProject]: InvokeChannel.openProject,
   [CoreMethod.repairRepositoryIdentities]: InvokeChannel.repairRepositoryIdentities,
@@ -299,6 +312,12 @@ export interface CoreOperationFailureMap {
   readonly [CoreMethod.forgetRepository]: RepositoryLinkError
   readonly [CoreMethod.installRepository]: RepositoryLinkError
   readonly [CoreMethod.linkRepository]: RepositoryLinkError
+  readonly [CoreMethod.openCodeWorkspace]: CodeWorkspaceError
+  readonly [CoreMethod.heartbeatCodeWorkspace]: CodeWorkspaceError
+  readonly [CoreMethod.releaseCodeWorkspace]: CodeWorkspaceError
+  readonly [CoreMethod.listCodeWorkspaceDirectory]: CodeWorkspaceError
+  readonly [CoreMethod.searchCodeWorkspace]: CodeWorkspaceError
+  readonly [CoreMethod.readCodeWorkspaceFile]: CodeWorkspaceError
   readonly [CoreMethod.listRepositories]: RepositoryLinkError
   readonly [CoreMethod.openProject]: RepositoryLinkError
   readonly [CoreMethod.repairRepositoryIdentities]: RepositoryLinkError

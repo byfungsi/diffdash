@@ -85,7 +85,7 @@ const insertProject = Effect.gen(function* () {
 })
 
 const saveInput = (
-  activeRibbon: "reviews" | "files" | "walkthrough" | "threads",
+  activeRibbon: "reviews" | "files" | "code" | "walkthrough" | "threads",
   selectedReviewTarget:
     | typeof hostedTarget
     | typeof workingTreeTarget
@@ -128,6 +128,21 @@ describe("ProjectWorkspaceStore", () => {
             selectedReviewTarget: null,
           }),
         )
+        expect(yield* store.get(projectId)).toEqual(saved)
+      }).pipe(Effect.provide(makeLayer(databasePath)))
+    }),
+  )
+
+  it.effect("round trips the code ribbon without requiring a selected review", () =>
+    Effect.gen(function* () {
+      const databasePath = yield* makeTempDatabasePath
+
+      yield* Effect.gen(function* () {
+        yield* insertProject
+        const store = yield* ProjectWorkspaceStore
+        const saved = yield* store.save(saveInput("code", null))
+
+        expect(saved.activeRibbon).toBe("code")
         expect(yield* store.get(projectId)).toEqual(saved)
       }).pipe(Effect.provide(makeLayer(databasePath)))
     }),

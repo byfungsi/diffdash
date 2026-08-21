@@ -67,6 +67,20 @@ describe("project workspace state", () => {
     expect(selectedReviewTargetForPersistence({ kind: "localDiff", target: local })).toEqual(local)
   })
 
+  it("restores Code without requiring a selected review", () => {
+    expect(
+      resolveProjectWorkspaceState(
+        repo,
+        ProjectWorkspaceState.make({
+          projectId: repo.id,
+          activeRibbon: "code",
+          selectedReviewTarget: null,
+          updatedAt: "2026-08-20T00:00:00.000Z",
+        }),
+      ),
+    ).toEqual({ activeRibbon: "code", notice: null, selectedReview: null })
+  })
+
   it("rehydrates structural repository comparisons at the persistence boundary", () => {
     const target = {
       kind: "repositoryComparison" as const,

@@ -1,16 +1,20 @@
-import { createHash } from "node:crypto"
+import { createHash, randomUUID } from "node:crypto"
 import { lstat, mkdir, realpath, rename, rm } from "node:fs/promises"
 import { isAbsolute, relative, resolve, sep } from "node:path"
 import {
   type CatalogResource,
-  type CatalogResourceId,
+  CatalogResourceId,
   type CatalogResourceLocation,
   ResourceCatalog,
   ResourceCatalogError,
   ResourceRecoveryToken,
   type ResourceRootId,
 } from "@diffdash/persistence/resource-catalog"
+import { ApplicationInstanceId, CoreProcessEpoch } from "@diffdash/core-rpc"
 import { Context, Effect, Predicate, Schema } from "effect"
+import { type ManagedResource, planResourceCollection, ResourceId } from "./resource-policy"
+
+const MAX_POLICY_COLLECTIONS_PER_PASS = 50
 
 /** External mutation stage performed after durable collection intent commits. */
 export const ResourceAdapterOperation = Schema.Literals(["quarantine", "delete"])
@@ -65,47 +69,80 @@ export class ResourceCollection extends Context.Service<
       nowMs: number,
       retryAtMs: number,
     ) => Effect.Effect<void, ResourceCatalogError>
+    readonly collectPolicy: (
+      nowMs: number,
+      retryAtMs: number,
+    ) => Effect.Effect<number, ResourceCatalogError>
   }
 >()("@diffdash/core/ResourceCollection") {}
 
 /** Creates registered-root filesystem mutation with containment and symlink checks. */
 export const makeFilesystemResourceAdapter = (
   roots: ReadonlyMap<ResourceRootId, string>,
+  lock?: (
+    operation: ResourceAdapterOperation,
+    resource: CatalogResource,
+    mutation: Effect.Effect<void, ResourceAdapterError>,
+  ) => Effect.Effect<void, ResourceAdapterError>,
 ): ResourceMutationAdapter => ({
   quarantine: (resource, token) =>
-    filesystemPaths(roots, resource, token, "quarantine").pipe(
-      Effect.flatMap(({ original, quarantined, quarantineDirectory }) =>
-        Effect.tryPromise({
-          try: async () => {
-            const originalExists = await validatePath(original.root, original.path)
-            const quarantinedExists = await validatePath(original.root, quarantined)
-            if (originalExists && quarantinedExists) {
-              throw new Error("Both source and quarantine paths exist")
-            }
-            if (!originalExists || quarantinedExists) return
-            await mkdir(quarantineDirectory, { recursive: true, mode: 0o700 })
-            const quarantineStat = await lstat(quarantineDirectory)
-            if (quarantineStat.isSymbolicLink())
-              throw new Error("Quarantine directory is a symlink")
-            await rename(original.path, quarantined)
-          },
-          catch: (cause) => adapterError("quarantine", resource.id, cause),
-        }),
+    withFilesystemMutationLock(
+      lock,
+      "quarantine",
+      resource,
+      filesystemPaths(roots, resource, token, "quarantine").pipe(
+        Effect.flatMap(({ original, quarantined, quarantineDirectory }) =>
+          Effect.tryPromise({
+            try: async () => {
+              const originalExists = await validatePath(original.root, original.path)
+              const quarantinedExists = await validatePath(original.root, quarantined)
+              if (originalExists && quarantinedExists) {
+                throw new Error("Both source and quarantine paths exist")
+              }
+              if (!originalExists || quarantinedExists) return
+              await mkdir(quarantineDirectory, { recursive: true, mode: 0o700 })
+              const quarantineStat = await lstat(quarantineDirectory)
+              if (quarantineStat.isSymbolicLink())
+                throw new Error("Quarantine directory is a symlink")
+              await rename(original.path, quarantined)
+            },
+            catch: (cause) => adapterError("quarantine", resource.id, cause),
+          }),
+        ),
       ),
     ),
   delete: (resource, token) =>
-    filesystemPaths(roots, resource, token, "delete").pipe(
-      Effect.flatMap(({ original, quarantined }) =>
-        Effect.tryPromise({
-          try: async () => {
-            if (!(await validatePath(original.root, quarantined))) return
-            await rm(quarantined, { recursive: true, force: true, maxRetries: 0 })
-          },
-          catch: (cause) => adapterError("delete", resource.id, cause),
-        }),
+    withFilesystemMutationLock(
+      lock,
+      "delete",
+      resource,
+      filesystemPaths(roots, resource, token, "delete").pipe(
+        Effect.flatMap(({ original, quarantined }) =>
+          Effect.tryPromise({
+            try: async () => {
+              if (!(await validatePath(original.root, quarantined))) return
+              await rm(quarantined, { recursive: true, force: true, maxRetries: 0 })
+            },
+            catch: (cause) => adapterError("delete", resource.id, cause),
+          }),
+        ),
       ),
     ),
 })
+
+const withFilesystemMutationLock = (
+  lock:
+    | ((
+        operation: ResourceAdapterOperation,
+        resource: CatalogResource,
+        mutation: Effect.Effect<void, ResourceAdapterError>,
+      ) => Effect.Effect<void, ResourceAdapterError>)
+    | undefined,
+  operation: ResourceAdapterOperation,
+  resource: CatalogResource,
+  mutation: Effect.Effect<void, ResourceAdapterError>,
+): Effect.Effect<void, ResourceAdapterError> =>
+  lock === undefined ? mutation : lock(operation, resource, mutation)
 
 /** Wraps a logical mutation adapter with a hard operation deadline. */
 export const makeBoundedLogicalResourceAdapter = (
@@ -249,8 +286,56 @@ export const makeResourceCollection = (
         }
       }
     }),
+    collectPolicy: Effect.fn("ResourceCollection.collectPolicy")(function* (nowMs, retryAtMs) {
+      const resources = (yield* catalog.list()).flatMap((resource): ManagedResource[] => {
+        const state = resource.state
+        if (resource.policyClass === "durableUserData") {
+          if (state !== "ready") return []
+          return [{ ...policyResource(resource), policyClass: "durableUserData", state }]
+        }
+        if (state === "deleted") return []
+        return [{ ...policyResource(resource), policyClass: resource.policyClass, state }]
+      })
+      const resourceIds = planResourceCollection(resources, nowMs)
+        .slice(0, MAX_POLICY_COLLECTIONS_PER_PASS)
+        .map((id) => CatalogResourceId.make(id))
+      yield* Effect.forEach(
+        resourceIds,
+        (resourceId) =>
+          Effect.gen(function* () {
+            const recoveryToken = ResourceRecoveryToken.make(`policy:${randomUUID()}`)
+            const resource = yield* catalog.beginCollection({ resourceId, recoveryToken, nowMs })
+            yield* resume(resource, nowMs, retryAtMs)
+          }).pipe(
+            Effect.catch((cause) =>
+              Effect.logWarning("Resource collection candidate was retained").pipe(
+                Effect.annotateLogs({ resourceId, operation: cause.operation }),
+              ),
+            ),
+          ),
+        { concurrency: 2, discard: true },
+      )
+      return resourceIds.length
+    }),
   })
 }
+
+const policyResource = (resource: CatalogResource) => ({
+  id: ResourceId.make(resource.id),
+  parentId: resource.parentId === null ? null : ResourceId.make(resource.parentId),
+  location: { kind: resource.location.kind, value: JSON.stringify(resource.location) },
+  bytes: resource.bytes,
+  reservedBytes: resource.reservedBytes,
+  generation: resource.generation,
+  lastUsedAtMs: resource.lastUsedAtMs,
+  leases: resource.leases.map((lease) => ({
+    owner: lease.ownerId,
+    applicationInstanceId: ApplicationInstanceId.make(lease.applicationInstanceId),
+    processEpoch: CoreProcessEpoch.make(lease.processEpoch),
+    renewedAtMs: lease.renewedAtMs,
+    expiresAtMs: lease.expiresAtMs,
+  })),
+})
 
 const filesystemPaths = (
   roots: ReadonlyMap<ResourceRootId, string>,

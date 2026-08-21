@@ -42,6 +42,17 @@ import { EventChannel, InvokeChannel } from "./channels"
 import { E2eReviewLifecycleDiagnostics, E2eReviewLifecycleHold } from "./e2e-review-lifecycle"
 import { CliNavigationCommand, NAVIGATION_COMMAND_DRAIN_LIMIT } from "./cli-navigation"
 import {
+  CodeWorkspaceDirectoryPage,
+  CodeWorkspaceFileReadResult,
+  CodeWorkspaceLease,
+  CodeWorkspaceLeaseRequest,
+  CodeWorkspaceSearchResult,
+  ListCodeWorkspaceDirectoryRequest,
+  OpenCodeWorkspaceRequest,
+  ReadCodeWorkspaceFileRequest,
+  SearchCodeWorkspaceRequest,
+} from "./code-workspace"
+import {
   HostedProviderRequest,
   HostedRepositoryRequest,
   HostedRepositorySearchRequest,
@@ -413,6 +424,42 @@ export const InvokeContract = {
     InvokeChannel.linkRepository,
     LinkRepositoryCheckoutRequest,
     Repo,
+  ),
+  [InvokeChannel.openCodeWorkspace]: defineInvoke(
+    InvokeChannel.openCodeWorkspace,
+    OpenCodeWorkspaceRequest,
+    CodeWorkspaceLease,
+    { maxRequestBytes: 16 * KIB, maxResponseBytes: 8 * KIB },
+  ),
+  [InvokeChannel.heartbeatCodeWorkspace]: defineInvoke(
+    InvokeChannel.heartbeatCodeWorkspace,
+    CodeWorkspaceLeaseRequest,
+    CodeWorkspaceLease,
+    { maxRequestBytes: 8 * KIB, maxResponseBytes: 8 * KIB },
+  ),
+  [InvokeChannel.releaseCodeWorkspace]: defineInvoke(
+    InvokeChannel.releaseCodeWorkspace,
+    CodeWorkspaceLeaseRequest,
+    Schema.Void,
+    { maxRequestBytes: 8 * KIB, maxResponseBytes: 8 * KIB },
+  ),
+  [InvokeChannel.listCodeWorkspaceDirectory]: defineInvoke(
+    InvokeChannel.listCodeWorkspaceDirectory,
+    ListCodeWorkspaceDirectoryRequest,
+    CodeWorkspaceDirectoryPage,
+    { maxRequestBytes: 8 * KIB, maxResponseBytes: 128 * KIB },
+  ),
+  [InvokeChannel.searchCodeWorkspace]: defineInvoke(
+    InvokeChannel.searchCodeWorkspace,
+    SearchCodeWorkspaceRequest,
+    CodeWorkspaceSearchResult,
+    { maxRequestBytes: 8 * KIB, maxResponseBytes: 64 * KIB },
+  ),
+  [InvokeChannel.readCodeWorkspaceFile]: defineInvoke(
+    InvokeChannel.readCodeWorkspaceFile,
+    ReadCodeWorkspaceFileRequest,
+    CodeWorkspaceFileReadResult,
+    { maxRequestBytes: 8 * KIB, maxResponseBytes: 640 * KIB },
   ),
   [InvokeChannel.listRepositories]: defineInvoke(
     InvokeChannel.listRepositories,

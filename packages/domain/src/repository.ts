@@ -41,7 +41,9 @@ export class LinkedCheckout extends Schema.TaggedClass<LinkedCheckout>()("Linked
 }) {}
 
 /** Repository availability independent from its local or hosted source identity. */
-export const RepositoryCheckout = Schema.Union([RemoteOnly, LinkedCheckout])
+export const RepositoryCheckout = Schema.Union([RemoteOnly, LinkedCheckout]).pipe(
+  Schema.toTaggedUnion("_tag"),
+)
 
 /** Repository availability independent from its local or hosted source identity. */
 export type RepositoryCheckout = typeof RepositoryCheckout.Type
@@ -82,12 +84,18 @@ export class Repo extends Schema.Class<Repo>("Repo")(RepoFields) {
 
   /** Linked checkout path, or null when this repository is remote-only. */
   get localPath(): RepositoryCheckoutPath | null {
-    return Schema.is(LinkedCheckout)(this.checkout) ? this.checkout.path : null
+    return RepositoryCheckout.match(this.checkout, {
+      RemoteOnly: () => null,
+      LinkedCheckout: ({ path }) => path,
+    })
   }
 
   /** Hosted locator when this repository belongs to a configured provider. */
   get hostedLocator(): HostedRepositoryLocator | null {
-    return Schema.is(HostedRepositorySource)(this.source) ? this.source.locator : null
+    return RepositorySource.match(this.source, {
+      local: () => null,
+      hosted: ({ locator }) => locator,
+    })
   }
 
   /** Stable human-readable repository identity. */
@@ -103,10 +111,10 @@ export class Repo extends Schema.Class<Repo>("Repo")(RepoFields) {
 
   /** Whether this repository has the supplied hosted identity. */
   matchesHosted(repository: HostedRepositoryLocator): boolean {
-    return (
-      Schema.is(HostedRepositorySource)(this.source) &&
-      sameHostedRepository(this.source.locator, repository)
-    )
+    return RepositorySource.match(this.source, {
+      local: () => false,
+      hosted: ({ locator }) => sameHostedRepository(locator, repository),
+    })
   }
 }
 

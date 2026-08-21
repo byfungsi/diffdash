@@ -91,12 +91,9 @@ describe("project workspace", () => {
   it("accepts exactly the supported ribbon values", () => {
     const decode = Schema.decodeUnknownSync(ProjectWorkspaceRibbon)
 
-    expect(["reviews", "files", "walkthrough", "threads"].map((value) => decode(value))).toEqual([
-      "reviews",
-      "files",
-      "walkthrough",
-      "threads",
-    ])
+    expect(
+      ["reviews", "files", "code", "walkthrough", "threads"].map((value) => decode(value)),
+    ).toEqual(["reviews", "files", "code", "walkthrough", "threads"])
     expect(() => decode("settings")).toThrow(/Expected/)
   })
 

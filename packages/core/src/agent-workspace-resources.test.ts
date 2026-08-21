@@ -55,6 +55,7 @@ const makeLayer = (input: {
     ResourceCollection.of({
       collect: () => Effect.die(new Error("collection is not used by workspace registration")),
       reconcile: () => Effect.void,
+      collectPolicy: () => Effect.succeed(0),
     }),
   )
   const lifecycle = Layer.effect(
@@ -87,12 +88,25 @@ describe("AgentWorkspaceResources", () => {
         const catalog = yield* ResourceCatalog
         for (const workspacePath of [localPath, remotePath]) {
           yield* resources.protect(
-            { ...ownership, localPath: workspacePath },
+            {
+              ...ownership,
+              localPath: workspacePath,
+              leaseLifetimeMs: 60 * 60 * 1_000,
+              leaseRenewalMs: 20 * 60 * 1_000,
+            },
             Effect.gen(function* () {
               const active = (yield* catalog.list()).filter(
                 (resource) => resource.leases.length > 0,
               )
               expect(active).toHaveLength(2)
+              expect(
+                active.every(({ leases }) =>
+                  leases.every(
+                    ({ acquiredAtMs, expiresAtMs }) =>
+                      expiresAtMs - acquiredAtMs === 60 * 60 * 1_000,
+                  ),
+                ),
+              ).toBe(true)
               const repository = active.find(({ kind }) => kind === "bareRepository")
               const worktree = active.find(({ kind }) => kind !== "bareRepository")
               expect(worktree?.parentId).toBe(repository?.id)

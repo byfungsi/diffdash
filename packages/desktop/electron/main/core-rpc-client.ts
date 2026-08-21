@@ -395,6 +395,24 @@ export const coreRpcClientLayer = (options: CoreRpcClientOptions) => {
         linkRepository: Effect.fn("CoreRpcClient.linkRepository")((request) =>
           authenticated(client("Repositories.link", request)),
         ),
+        openCodeWorkspace: Effect.fn("CoreRpcClient.openCodeWorkspace")((request) =>
+          authenticated(client("CodeWorkspace.open", request)),
+        ),
+        heartbeatCodeWorkspace: Effect.fn("CoreRpcClient.heartbeatCodeWorkspace")((request) =>
+          authenticated(client("CodeWorkspace.heartbeat", request)),
+        ),
+        releaseCodeWorkspace: Effect.fn("CoreRpcClient.releaseCodeWorkspace")((request) =>
+          authenticated(client("CodeWorkspace.release", request)),
+        ),
+        listCodeWorkspaceDirectory: Effect.fn("CoreRpcClient.listCodeWorkspaceDirectory")(
+          (request) => authenticated(client("CodeWorkspace.listDirectory", request)),
+        ),
+        searchCodeWorkspace: Effect.fn("CoreRpcClient.searchCodeWorkspace")((request) =>
+          authenticated(client("CodeWorkspace.search", request)),
+        ),
+        readCodeWorkspaceFile: Effect.fn("CoreRpcClient.readCodeWorkspaceFile")((request) =>
+          authenticated(client("CodeWorkspace.readFile", request)),
+        ),
         listRepositories: Effect.fn("CoreRpcClient.listRepositories")((request) =>
           authenticated(client("Repositories.list", request)),
         ),

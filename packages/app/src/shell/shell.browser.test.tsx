@@ -17,9 +17,34 @@ describe("App shell browser interactions", () => {
     await appBrowserScenario("projectOpenChooser")()
   })
 
+  it("browses, opens, rejects, and refreshes checkout files in the Code ribbon", async () => {
+    expect.hasAssertions()
+    await appBrowserScenario("codeRibbon")()
+  })
+
+  it("links a remote-only project from the Code ribbon and loads its checkout", async () => {
+    expect.hasAssertions()
+    await appBrowserScenario("codeRibbonLink")()
+  })
+
+  it("relinks a checkout that is no longer available", async () => {
+    expect.hasAssertions()
+    await appBrowserScenario("codeRibbonRelink")()
+  })
+
+  it("opens files and searches file contents from Code shortcuts", async () => {
+    expect.hasAssertions()
+    await appBrowserScenario("codeRibbonShortcuts")()
+  })
+
   it("restores a selected review while keeping Reviews active", async () => {
     expect.hasAssertions()
     await appBrowserScenario("projectStateRestoration")()
+  })
+
+  it("recovers a failed restored review when the same review is selected again", async () => {
+    expect.hasAssertions()
+    await appBrowserScenario("projectReviewFailureRecovery")()
   })
 
   it("keeps a user review selection made while workspace restoration is loading", async () => {

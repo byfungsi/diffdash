@@ -9,6 +9,21 @@ import {
   ThemePreferences,
 } from "@diffdash/domain/ai-settings"
 import type { AppState } from "@diffdash/domain/app-state"
+import {
+  CodeWorkspaceDirectoryPage,
+  CodeWorkspaceEntry,
+  CodeWorkspaceLease,
+  CodeWorkspaceLeaseId,
+  CodeWorkspaceSearchResult,
+} from "@diffdash/domain/code-workspace"
+import {
+  LocalCheckoutFileContent,
+  LocalCheckoutFileList,
+  LocalCheckoutFileListRejected,
+  LocalCheckoutFileReadRejected,
+  type LocalCheckoutFileListResult,
+  type LocalCheckoutFileReadResult,
+} from "@diffdash/domain/local-checkout-file"
 import type { ParsedDiff, ParsedDiffFile } from "@diffdash/domain/diff"
 import { findProjectedDiffHunkLine, projectDiffHunkLines } from "@diffdash/domain/diff-hunk-lines"
 import { parseUnifiedDiff } from "@diffdash/domain/diff-parser"
@@ -1047,6 +1062,10 @@ type AppBrowserScenarioId =
   | "cliRepositoryComparison"
   | "cliRepairRepositories"
   | "cliRepositoryPullRequests"
+  | "codeRibbon"
+  | "codeRibbonLink"
+  | "codeRibbonRelink"
+  | "codeRibbonShortcuts"
   | "diffLineContextMenu"
   | "diffSearchSubstrings"
   | "diffSearchLatestWork"
@@ -1072,6 +1091,7 @@ type AppBrowserScenarioId =
   | "onboardingTelemetryOptOut"
   | "providerTerminology"
   | "projectOpenChooser"
+  | "projectReviewFailureRecovery"
   | "projectRestoreRace"
   | "projectStateRestoration"
   | "cleanProjectReviews"
@@ -1920,6 +1940,267 @@ scenario("projectOpenChooser", async () => {
   })
 })
 
+scenario("codeRibbon", async () => {
+  const linked = linkedRepo(repo, "/workspace/diffdash")
+  const appPath = RepositoryRelativePath.make("src/app.tsx")
+  const binaryPath = RepositoryRelativePath.make("assets/logo.png")
+  const calls = installDiffDashApi({
+    repositories: [linked],
+    listLocalCheckoutFiles: async () =>
+      LocalCheckoutFileList.make({ paths: [binaryPath, appPath] }),
+    readLocalCheckoutFile: async (_projectId, path) =>
+      path === binaryPath
+        ? LocalCheckoutFileReadRejected.make({ path, reason: "binary" })
+        : LocalCheckoutFileContent.make({
+            path,
+            content: 'export const app = "DiffDash"\n',
+          }),
+  })
+  renderApp()
+  await openDefaultProject()
+
+  document.querySelector<HTMLButtonElement>('button[aria-label="Code"]')?.click()
+  const assetsDirectory = await vi.waitFor(() => {
+    const button = document.querySelector<HTMLButtonElement>(`button[data-item-path="assets"]`)
+    expect(button).not.toBeNull()
+    return button
+  })
+  assetsDirectory?.click()
+  const binaryButton = await vi.waitFor(() => {
+    const button = document.querySelector<HTMLButtonElement>(
+      `button[data-item-path="${binaryPath}"]`,
+    )
+    expect(button).not.toBeNull()
+    return button
+  })
+  binaryButton?.click()
+  await vi.waitFor(() => {
+    expect(document.querySelector('button[aria-label="Code"][aria-pressed="true"]')).not.toBeNull()
+    expect(calls.listLocalCheckoutFiles).toHaveBeenCalledWith(linked.id)
+    expect(calls.readLocalCheckoutFile).toHaveBeenCalledWith(linked.id, binaryPath)
+    expect(document.body.textContent).toContain("Binary files cannot be displayed")
+  })
+
+  document.querySelector<HTMLButtonElement>(`button[data-item-path="src"]`)?.click()
+  const appButton = await vi.waitFor(() => {
+    const button = document.querySelector<HTMLButtonElement>(`button[data-item-path="${appPath}"]`)
+    expect(button).not.toBeNull()
+    return button
+  })
+  appButton?.click()
+  await vi.waitFor(() => {
+    expect(calls.readLocalCheckoutFile).toHaveBeenLastCalledWith(linked.id, appPath)
+    expect(document.querySelector("diffs-container")?.shadowRoot?.textContent).toContain(
+      'export const app = "DiffDash"',
+    )
+  })
+
+  document
+    .querySelector<HTMLButtonElement>('button[aria-label="Refresh repository files"]')
+    ?.click()
+  await vi.waitFor(() => expect(calls.listLocalCheckoutFiles.mock.calls.length).toBeGreaterThan(3))
+
+  document.querySelector<HTMLButtonElement>('button[aria-label="Reviews"]')?.click()
+  await vi.waitFor(() => {
+    expect(
+      document.querySelector('button[aria-label="Reviews"][aria-pressed="true"]'),
+    ).not.toBeNull()
+  })
+  document.querySelector<HTMLButtonElement>('button[aria-label="Code"]')?.click()
+  await vi.waitFor(() => {
+    expect(document.querySelector('button[aria-label="Code"][aria-pressed="true"]')).not.toBeNull()
+    expect(calls.openCodeWorkspace).toHaveBeenCalledTimes(2)
+    expect(calls.releaseCodeWorkspace).toHaveBeenCalledTimes(1)
+  })
+})
+
+scenario("codeRibbonLink", async () => {
+  const path = RepositoryRelativePath.make("README.md")
+  const calls = installDiffDashApi({
+    selectLocalFolder: "/workspace/diffdash",
+    listLocalCheckoutFiles: async () => LocalCheckoutFileList.make({ paths: [path] }),
+    readLocalCheckoutFile: async (_projectId, selectedPath) =>
+      LocalCheckoutFileContent.make({
+        path: selectedPath,
+        content: "# DiffDash\n",
+      }),
+  })
+  renderApp()
+  await openDefaultProject()
+
+  document.querySelector<HTMLButtonElement>('button[aria-label="Code"]')?.click()
+  const linkButton = await vi.waitFor(() => {
+    expect(document.querySelector('[aria-label="Local repository not linked"]')).not.toBeNull()
+    const button = [...document.querySelectorAll<HTMLButtonElement>("button")].find(
+      (candidate) => candidate.textContent === "Link folder",
+    )
+    expect(button).toBeDefined()
+    return button
+  })
+  linkButton?.click()
+
+  await vi.waitFor(() => {
+    expect(calls.selectLocalFolder).toHaveBeenCalledOnce()
+    expect(calls.linkRepository).toHaveBeenCalledWith({
+      repository: expect.objectContaining({ namespace: "fungsi", name: "diffdash" }),
+      localPath: "/workspace/diffdash",
+    })
+    expect(calls.listLocalCheckoutFiles).toHaveBeenCalledWith(repo.id)
+  })
+  document.querySelector<HTMLButtonElement>(`button[data-item-path="${path}"]`)?.click()
+  await vi.waitFor(() => {
+    expect(document.querySelector("diffs-container")?.shadowRoot?.textContent).toContain(
+      "# DiffDash",
+    )
+  })
+})
+
+scenario("codeRibbonRelink", async () => {
+  const linked = linkedRepo(repo, "/workspace/missing-diffdash")
+  const path = RepositoryRelativePath.make("README.md")
+  let listAttempt = 0
+  const calls = installDiffDashApi({
+    repositories: [linked],
+    selectLocalFolder: "/workspace/diffdash",
+    listLocalCheckoutFiles: async () => {
+      listAttempt += 1
+      return listAttempt === 1
+        ? LocalCheckoutFileListRejected.make({ reason: "checkoutUnavailable" })
+        : LocalCheckoutFileList.make({ paths: [path] })
+    },
+    readLocalCheckoutFile: async (_projectId, selectedPath) =>
+      LocalCheckoutFileContent.make({ path: selectedPath, content: "# DiffDash\n" }),
+  })
+  renderApp()
+  await openDefaultProject()
+
+  document.querySelector<HTMLButtonElement>('button[aria-label="Code"]')?.click()
+  const linkButton = await vi.waitFor(() => {
+    expect(document.body.textContent).toContain("Code workspace unavailable")
+    const button = [...document.querySelectorAll<HTMLButtonElement>("button")].find(
+      (candidate) => candidate.textContent === "Link folder",
+    )
+    expect(button).toBeDefined()
+    return button
+  })
+  linkButton?.click()
+
+  await vi.waitFor(() => {
+    expect(calls.linkRepository).toHaveBeenCalledWith({
+      repository: expect.objectContaining({ namespace: "fungsi", name: "diffdash" }),
+      localPath: "/workspace/diffdash",
+    })
+    expect(calls.listLocalCheckoutFiles).toHaveBeenCalledTimes(2)
+  })
+  document.querySelector<HTMLButtonElement>(`button[data-item-path="${path}"]`)?.click()
+  await vi.waitFor(() => {
+    expect(document.querySelector("diffs-container")?.shadowRoot?.textContent).toContain(
+      "# DiffDash",
+    )
+  })
+})
+
+scenario("codeRibbonShortcuts", async () => {
+  const linked = linkedRepo(repo, "/workspace/diffdash")
+  const appPath = RepositoryRelativePath.make("src/app.tsx")
+  const readmePath = RepositoryRelativePath.make("README.md")
+  const generatedPaths = Array.from({ length: 101 }, (_, index) =>
+    RepositoryRelativePath.make(`generated/file-${String(index).padStart(3, "0")}.ts`),
+  )
+  const readmeContents = Array.from({ length: 60 }, (_, index) =>
+    index === 1 || index === 54 ? `needle match ${index + 1}` : `line ${index + 1}`,
+  ).join("\n")
+  const calls = installDiffDashApi({
+    repositories: [linked],
+    listLocalCheckoutFiles: async () =>
+      LocalCheckoutFileList.make({ paths: [appPath, readmePath, ...generatedPaths] }),
+    readLocalCheckoutFile: async (_projectId, path) =>
+      LocalCheckoutFileContent.make({
+        path,
+        content: path === readmePath ? readmeContents : 'export const app = "DiffDash"\n',
+      }),
+  })
+  renderApp()
+  await openDefaultProject()
+  document.querySelector<HTMLButtonElement>('button[aria-label="Code"]')?.click()
+  const sourceDirectory = await vi.waitFor(() => {
+    const button = document.querySelector<HTMLButtonElement>(`button[data-item-path="src"]`)
+    expect(button).not.toBeNull()
+    return button
+  })
+  sourceDirectory?.click()
+  const appButton = await vi.waitFor(() => {
+    const button = document.querySelector<HTMLButtonElement>(`button[data-item-path="${appPath}"]`)
+    expect(button).not.toBeNull()
+    return button
+  })
+  appButton?.click()
+  await vi.waitFor(() =>
+    expect(calls.readLocalCheckoutFile).toHaveBeenCalledWith(linked.id, appPath),
+  )
+
+  dispatchKeyboardShortcut("k", { metaKey: true })
+  const fileInput = await vi.waitFor(() => {
+    const input = document.querySelector<HTMLInputElement>(
+      'dialog input[placeholder="Search repository files"]',
+    )
+    expect(input).not.toBeNull()
+    return input
+  })
+  if (fileInput !== null) {
+    setInputValue(fileInput, "generated")
+    fileInput.dispatchEvent(new Event("input", { bubbles: true }))
+  }
+  const loadMore = await vi.waitFor(() => {
+    const button = [...document.querySelectorAll<HTMLButtonElement>("dialog button")].find(
+      (candidate) => candidate.textContent?.includes("Load more results") ?? false,
+    )
+    expect(button).toBeDefined()
+    return button
+  })
+  loadMore?.click()
+  await vi.waitFor(() =>
+    expect(document.querySelector("dialog")?.textContent).toContain("file-100.ts"),
+  )
+  if (fileInput !== null) {
+    setInputValue(fileInput, "README")
+    fileInput.dispatchEvent(new Event("input", { bubbles: true }))
+  }
+  await vi.waitFor(() =>
+    expect(document.querySelector("dialog")?.textContent).toContain("README.md"),
+  )
+  fileInput?.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, key: "Enter" }))
+  await vi.waitFor(() => {
+    expect(calls.readLocalCheckoutFile).toHaveBeenLastCalledWith(linked.id, readmePath)
+    expect(document.querySelector("diffs-container")?.shadowRoot?.textContent).toContain(
+      "README.md",
+    )
+  })
+
+  dispatchKeyboardShortcut("b", { metaKey: true })
+  dispatchKeyboardShortcut("f", { metaKey: true })
+  const searchInput = await vi.waitFor(() => {
+    const input = document.querySelector<HTMLInputElement>(
+      'input[aria-label="Search current file"]',
+    )
+    expect(input).not.toBeNull()
+    return input
+  })
+  if (searchInput !== null) {
+    setInputValue(searchInput, "needle")
+    searchInput.dispatchEvent(new Event("input", { bubbles: true }))
+  }
+  await vi.waitFor(() => expect(document.body.textContent).toContain("1 / 2"))
+  searchInput?.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, key: "Enter" }))
+  await vi.waitFor(
+    () => {
+      expect(document.body.textContent).toContain("2 / 2")
+      expect(CSS.highlights.get("diffdash-code-search-active")?.size).toBe(1)
+    },
+    { timeout: 5_000 },
+  )
+})
+
 scenario("projectStateRestoration", async () => {
   const persisted = ProjectWorkspaceState.make({
     projectId: ReviewProjectId.make(repo.id),
@@ -1941,6 +2222,63 @@ scenario("projectStateRestoration", async () => {
     ).not.toBeNull()
     expect(document.body.textContent).toContain("Opened PR #51")
     expect(getDiffCardPaths()).toEqual(["src/app.tsx", "docs/readme.md"])
+  })
+})
+
+scenario("projectReviewFailureRecovery", async () => {
+  const persisted = ProjectWorkspaceState.make({
+    projectId: ReviewProjectId.make(repo.id),
+    activeRibbon: "files",
+    selectedReviewTarget: HostedReviewTarget.make({
+      kind: "hosted",
+      review: pullRequest.locator,
+    }),
+    updatedAt: "2026-08-02T00:00:00.000Z",
+  })
+  const calls = installDiffDashApi({ projectWorkspaceState: persisted })
+  calls.getHostedReviewSnapshot
+    .mockRejectedValueOnce(new Error("Interrupted review acquisition"))
+    .mockRejectedValueOnce(new Error("Interrupted review acquisition"))
+  renderApp()
+
+  const projectButton = await vi.waitFor(() => {
+    const button = document.querySelector<HTMLButtonElement>(
+      'button[aria-label="Open project fungsi/diffdash"]',
+    )
+    expect(button).not.toBeNull()
+    return button
+  })
+  projectButton?.click()
+  await vi.waitFor(() => {
+    expect(document.body.textContent).toContain("Review could not be opened")
+    expect(document.body.textContent).toContain("Selected review unavailable")
+    expect(document.body.textContent).not.toContain("No review selected")
+  })
+
+  const retry = [...document.querySelectorAll<HTMLButtonElement>("button")].find(
+    (button) => button.textContent === "Retry",
+  )
+  retry?.click()
+  await vi.waitFor(() => {
+    expect(calls.getHostedReviewSnapshot).toHaveBeenCalledTimes(2)
+    expect(document.body.textContent).toContain("Review could not be opened")
+  })
+
+  const chooseAnotherReview = [...document.querySelectorAll<HTMLButtonElement>("button")].find(
+    (button) => button.textContent === "Choose another review",
+  )
+  chooseAnotherReview?.click()
+  const reviewButton = await vi.waitFor(() => {
+    const button = document.querySelector<HTMLButtonElement>(
+      'button[aria-label^="Open review #51:"]',
+    )
+    expect(button).not.toBeNull()
+    return button
+  })
+  reviewButton?.click()
+  await vi.waitFor(() => {
+    expect(calls.getHostedReviewSnapshot).toHaveBeenCalledTimes(3)
+    expect(document.body.textContent).toContain("Opened PR #51")
   })
 })
 
@@ -2745,7 +3083,11 @@ scenario("cliRepositoryPullRequests", async () => {
 })
 
 scenario("cliNumberedPullRequest", async () => {
-  const calls = installDiffDashApi()
+  const openedRepo = linkedRepo(repo, "/workspace/diffdash")
+  const calls = installDiffDashApi({
+    repositories: [repo],
+    openProject: async () => ProjectOpened.make({ repo: openedRepo }),
+  })
   renderApp()
 
   await vi.waitFor(() => expect(document.body.textContent).toContain("Pinned projects"))
@@ -2755,6 +3097,7 @@ scenario("cliNumberedPullRequest", async () => {
     expect(calls.openProject).toHaveBeenCalledWith("/workspace/diffdash", undefined)
     expect(document.body.textContent).toContain("Opened PR #51")
     expect(document.querySelector('button[aria-label="Files"][aria-pressed="true"]')).not.toBeNull()
+    expect(document.querySelector('[aria-label="Local repository not linked"]')).toBeNull()
   })
 })
 
@@ -5992,7 +6335,13 @@ scenario("shortcutReferenceTitlebarReview", async () => {
 })
 
 scenario("homeToReview", async () => {
-  const calls = installDiffDashApi()
+  const appPath = RepositoryRelativePath.make("src/app.tsx")
+  const calls = installDiffDashApi({
+    selectLocalFolder: "/workspace/diffdash",
+    listLocalCheckoutFiles: async () => LocalCheckoutFileList.make({ paths: [appPath] }),
+    readLocalCheckoutFile: async (_projectId, path) =>
+      LocalCheckoutFileContent.make({ path, content: 'export const app = "DiffDash"\n' }),
+  })
   renderApp()
 
   await vi.waitFor(() => {
@@ -6513,17 +6862,6 @@ scenario("homeToReview", async () => {
     expect(openStyle.paddingRight).toBe(viewedStyle.paddingRight)
     expect(openStyle.borderRadius).toBe(viewedStyle.borderRadius)
   }
-  firstDiffOpenButton?.click()
-
-  await vi.waitFor(() => {
-    expect(calls.openRepositoryFile).toHaveBeenCalledWith({
-      review: expect.anything(),
-      filePath: "src/app.tsx",
-      headRefName: "feature/requested-review",
-      headRevision: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-    })
-  })
-
   const treeFileFilterInput = document.querySelector<HTMLInputElement>(
     'input[placeholder="Filter files"]',
   )
@@ -6537,6 +6875,27 @@ scenario("homeToReview", async () => {
     expect(getChangedFilesTreeItemPaths()).toContain("docs/readme.md")
     expect(getChangedFilesTreeItemPaths()).not.toContain("src/app.tsx")
     expect(getDiffCardPaths()).toEqual(["docs/readme.md"])
+  })
+
+  if (treeFileFilterInput !== null) {
+    setInputValue(treeFileFilterInput, "")
+    treeFileFilterInput.dispatchEvent(new Event("input", { bubbles: true }))
+  }
+  const openCodeButton = await vi.waitFor(() => {
+    const button = [
+      ...document.querySelectorAll<HTMLButtonElement>('[data-diff-card-path="src/app.tsx"] button'),
+    ].find((candidate) => candidate.textContent === "Open")
+    expect(button).toBeDefined()
+    return button
+  })
+  openCodeButton?.click()
+  await vi.waitFor(() => {
+    expect(calls.openRepositoryFile).not.toHaveBeenCalled()
+    expect(document.querySelector('button[aria-label="Code"][aria-pressed="true"]')).not.toBeNull()
+    expect(calls.readLocalCheckoutFile).toHaveBeenCalledWith(repo.id, appPath)
+    expect(document.querySelector("diffs-container")?.shadowRoot?.textContent).toContain(
+      'export const app = "DiffDash"',
+    )
   })
 
   dispatchSideMouseButton(3)
@@ -6609,11 +6968,8 @@ scenario("localReview", async () => {
   localOpenButton?.click()
 
   await vi.waitFor(() => {
-    expect(calls.openLocalRepositoryFile).toHaveBeenCalledWith(
-      localReview.rootPath,
-      "src/local.ts",
-      expect.objectContaining({ rootPath: localReview.rootPath }),
-    )
+    expect(document.querySelector('button[aria-label="Code"][aria-pressed="true"]')).not.toBeNull()
+    expect(calls.readLocalCheckoutFile).toHaveBeenCalledWith("local-repo-1", "src/local.ts")
   })
 })
 
@@ -7074,6 +7430,9 @@ export const installDiffDashApi = (
     readonly getAppState?: DiffDashApi["appState"]["get"]
     readonly getDiagnostics?: DiffDashApi["diagnostics"]
     readonly localReviewDiff?: LocalReviewDiff
+    readonly listLocalCheckoutFiles?: (
+      projectId: ReviewProjectId,
+    ) => Promise<LocalCheckoutFileListResult>
     readonly openProject?: DiffDashApi["repositories"]["openProject"]
     readonly projectWorkspaceState?: ProjectWorkspaceState | null
     readonly pullRequestDetail?: HostedReviewDetail
@@ -7083,6 +7442,10 @@ export const installDiffDashApi = (
     readonly repositories?: readonly Repo[]
     readonly reviewThreadDetails?: readonly ReviewThreadDetails[]
     readonly reviewRequests?: readonly HostedReviewSummary[]
+    readonly readLocalCheckoutFile?: (
+      projectId: ReviewProjectId,
+      path: RepositoryRelativePath,
+    ) => Promise<LocalCheckoutFileReadResult>
     readonly searchReviewSnapshot?: ReviewSearchFixture
     readonly setViewedFile?: DiffDashApi["viewedFiles"]["set"]
     readonly setLocalViewedFile?: DiffDashApi["viewedFiles"]["setLocal"]
@@ -7284,6 +7647,19 @@ export const installDiffDashApi = (
     ),
     linkRepository: vi.fn<DiffDashApi["repositories"]["link"]>(async (input) =>
       linkedRepo(repo, input.localPath),
+    ),
+    listLocalCheckoutFiles: vi.fn<
+      (projectId: ReviewProjectId) => Promise<LocalCheckoutFileListResult>
+    >(options.listLocalCheckoutFiles ?? (async () => LocalCheckoutFileList.make({ paths: [] }))),
+    readLocalCheckoutFile: vi.fn<
+      (
+        projectId: ReviewProjectId,
+        path: RepositoryRelativePath,
+      ) => Promise<LocalCheckoutFileReadResult>
+    >(
+      options.readLocalCheckoutFile ??
+        (async (_projectId, path) =>
+          LocalCheckoutFileReadRejected.make({ path, reason: "missing" })),
     ),
     selectLocalFolder: vi.fn<DiffDashApi["repositories"]["selectLocalFolder"]>(async () =>
       options.selectLocalFolder === undefined || options.selectLocalFolder === null
@@ -7681,6 +8057,26 @@ export const installDiffDashApi = (
     string,
     Parameters<typeof searchReviewSnapshot>[0]["cursor"]
   >()
+  let codeWorkspaceProjectId: ReviewProjectId | null = null
+  const codeWorkspaceLeaseId = CodeWorkspaceLeaseId.make("browser-code-workspace")
+  const openCodeWorkspace = vi.fn<DiffDashApi["codeWorkspace"]["open"]>(async ({ target }) => {
+    codeWorkspaceProjectId = target.projectId
+    return CodeWorkspaceLease.make({
+      id: codeWorkspaceLeaseId,
+      revision: GitCommitSha.make(target._tag === "projectHead" ? "0".repeat(40) : target.revision),
+      expiresAtMs: Date.now() + 60 * 60 * 1_000,
+    })
+  })
+  const releaseCodeWorkspace = vi.fn<DiffDashApi["codeWorkspace"]["release"]>(async () => undefined)
+  const codeWorkspacePaths = async () => {
+    if (codeWorkspaceProjectId === null) return []
+    const listed = await calls.listLocalCheckoutFiles(codeWorkspaceProjectId)
+    if (listed._tag === "files") return listed.paths
+    if (listed.reason === "checkoutUnavailable") {
+      throw new Error("The linked checkout is no longer available on this machine.")
+    }
+    throw new Error("Repository files are unavailable.")
+  }
   const api: DiffDashApi = {
     analytics: {
       capture: calls.captureAnalytics,
@@ -7871,6 +8267,65 @@ export const installDiffDashApi = (
       selectLocalFolder: calls.selectLocalFolder,
       setFavorite: calls.setRepositoryFavorite,
     },
+    codeWorkspace: {
+      open: openCodeWorkspace,
+      heartbeat: async () =>
+        CodeWorkspaceLease.make({
+          id: codeWorkspaceLeaseId,
+          revision: GitCommitSha.make("0".repeat(40)),
+          expiresAtMs: Date.now() + 60 * 60 * 1_000,
+        }),
+      release: releaseCodeWorkspace,
+      listDirectory: async ({ path, offset, limit }) => {
+        const prefix = path === null ? "" : `${path}/`
+        const children = new Map<string, "directory" | "file">()
+        for (const filePath of await codeWorkspacePaths()) {
+          if (!filePath.startsWith(prefix)) continue
+          const remainder = filePath.slice(prefix.length)
+          const [name, ...rest] = remainder.split("/")
+          if (name === undefined || name.length === 0) continue
+          children.set(`${prefix}${name}`, rest.length === 0 ? "file" : "directory")
+        }
+        const entries = [...children.entries()]
+          .sort(([left], [right]) => left.localeCompare(right))
+          .map(([entryPath, kind]) =>
+            CodeWorkspaceEntry.make({ path: RepositoryRelativePath.make(entryPath), kind }),
+          )
+        const end = Math.min(offset + limit, entries.length)
+        return CodeWorkspaceDirectoryPage.make({
+          entries: entries.slice(offset, end),
+          nextOffset: end < entries.length ? end : null,
+        })
+      },
+      search: async ({ query, offset, limit }) => {
+        const normalized = query.trim().toLowerCase()
+        const matches = (await codeWorkspacePaths()).filter(
+          (path) => normalized.length === 0 || path.toLowerCase().includes(normalized),
+        )
+        const end = Math.min(offset + limit, matches.length)
+        return CodeWorkspaceSearchResult.make({
+          paths: matches.slice(offset, end),
+          nextOffset: end < matches.length ? end : null,
+        })
+      },
+      readFile: async ({ path }) => {
+        if (codeWorkspaceProjectId === null) {
+          return { _tag: "rejected" as const, path, reason: "ioFailure" as const }
+        }
+        const result = await calls.readLocalCheckoutFile(codeWorkspaceProjectId, path)
+        if (result._tag === "content") return result
+        return {
+          _tag: "rejected" as const,
+          path,
+          reason:
+            result.reason === "checkoutUnavailable" ||
+            result.reason === "repositoryNotFound" ||
+            result.reason === "repositoryUnavailable"
+              ? ("ioFailure" as const)
+              : result.reason,
+        }
+      },
+    },
     projectWorkspace: {
       get: calls.getProjectWorkspace,
       save: calls.saveProjectWorkspace,
@@ -7955,6 +8410,8 @@ export const installDiffDashApi = (
     progressiveInventory,
     progressiveRange,
     searchReviewSnapshot,
+    openCodeWorkspace,
+    releaseCodeWorkspace,
     emitUpdateState: (state: AppUpdateState) => updateStateListener?.(state),
     linkRepositoryFromCli: (rootPath: string) => {
       pendingCommands.push(

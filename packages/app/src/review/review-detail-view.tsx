@@ -7,10 +7,16 @@ import {
   DEFAULT_CODE_THEME_PREFERENCES,
   DiffViewMode,
 } from "@diffdash/domain/ai-settings"
+import {
+  type CodeWorkspaceTarget,
+  HostedReviewCodeWorkspaceTarget,
+  ProjectRevisionCodeWorkspaceTarget,
+} from "@diffdash/domain/code-workspace"
 import { DiffFileVisibility, type ParsedDiffFile } from "@diffdash/domain/diff"
 import type { ReviewSnapshotFileInventory } from "@diffdash/domain/review-context"
 import type { ReviewFileId } from "@diffdash/domain/review-identity"
 import type { ProjectWorkspaceRibbon } from "@diffdash/domain/project-workspace"
+import type { RepositoryRelativePath } from "@diffdash/domain/repository-path"
 import {
   ReviewLocationV1,
   ReviewNavigationBehavior,
@@ -35,7 +41,7 @@ import {
 import { ReviewSnapshotSearchFileAnchor } from "@diffdash/protocol/review-snapshot"
 import { RegistryContext, useAtomValue } from "@effect/atom-react"
 import { AsyncResult } from "effect/unstable/reactivity"
-import { Match } from "effect"
+import { Match, Option } from "effect"
 import {
   Check,
   Ellipsis,
@@ -143,6 +149,7 @@ import type { ProgressiveReviewContent } from "./use-progressive-review-content"
 import { diffCardDomId, useViewedFileViewport, type ViewedFileUpdate } from "./viewed-file-viewport"
 
 type ReviewSidebarTab = "reviews" | "tree" | "walkthrough" | "threads"
+type ReviewWorkspaceRibbon = Exclude<ProjectWorkspaceRibbon, "code">
 
 type PullRequestApprovalState = "checking" | "unapproved" | "approving" | "approved"
 
@@ -163,6 +170,11 @@ export type ReviewDetailEnvironment = {
   readonly colorScheme: ColorScheme
   readonly onAISettingsChange: (settings: AISettings) => void
   readonly onLinkRepository: () => Promise<boolean>
+  readonly onOpenCodeFile: (
+    path: RepositoryRelativePath,
+    target: CodeWorkspaceTarget,
+    files: readonly ReviewSnapshotFileInventory[],
+  ) => void
   readonly onSidebarExpandedChange: (expanded: boolean) => void
   readonly onSidebarWidthChange: (width: number) => void
   readonly onThreadDetailWidthChange: (width: number) => void
@@ -327,7 +339,7 @@ export const ReviewDetailView = ({
   reviewsContext,
   onActiveRibbonChange,
 }: {
-  readonly activeRibbon: ProjectWorkspaceRibbon
+  readonly activeRibbon: ReviewWorkspaceRibbon
   readonly environment: ReviewDetailEnvironment
   readonly ready: ReadyReviewDetailState
   readonly reviewsContext: ReactNode
@@ -347,6 +359,7 @@ export const ReviewDetailView = ({
     colorScheme,
     onAISettingsChange,
     onLinkRepository,
+    onOpenCodeFile,
     onSidebarExpandedChange,
     onSidebarWidthChange,
     onThreadDetailWidthChange,
@@ -1619,15 +1632,26 @@ export const ReviewDetailView = ({
     const file = changedFiles.find((changedFile) => changedFile.path === path)
     if (file !== undefined) submitFileNavigation(file, "file-tree")
   }
-  const openRepositoryFile = async (path: string) => {
-    setFileOpenStatus(`Opening ${path}...`)
-    try {
-      await sourceOperations.openFile(path)
-      setFileOpenStatus(null)
-    } catch (error) {
-      setFileOpenStatus(formatError(error, "Could not open file"))
-    }
-  }
+  const codeWorkspaceTarget = Match.valueTags(review, {
+    hosted: (hostedReview) =>
+      HostedReviewCodeWorkspaceTarget.make({
+        projectId: manifest.projectId,
+        review: hostedReview.target,
+        revision: manifest.headRevision,
+      }),
+    local: () =>
+      ProjectRevisionCodeWorkspaceTarget.make({
+        projectId: manifest.projectId,
+        revision: manifest.headRevision,
+      }),
+    repositoryComparison: () =>
+      ProjectRevisionCodeWorkspaceTarget.make({
+        projectId: manifest.projectId,
+        revision: manifest.headRevision,
+      }),
+  })
+  const openRepositoryFile = (path: RepositoryRelativePath) =>
+    onOpenCodeFile(path, codeWorkspaceTarget, changedFiles)
   const approvePullRequest = async () => {
     const decisionOperations = Match.valueTags(sourceOperations.decision, {
       supported: (operations) => operations,
@@ -1701,7 +1725,27 @@ export const ReviewDetailView = ({
             }}
             placement={placement}
             sidebarExpanded={sidebarExpanded && (placement === "rail" || activePane === "context")}
-            onSelect={(ribbon) => toggleSidebarTab(projectRibbonToSidebarTab(ribbon), placement)}
+            onSelect={(ribbon) => {
+              const reviewRibbon = Option.liftPredicate(
+                ribbon,
+                (candidate): candidate is ReviewWorkspaceRibbon => candidate !== "code",
+              )
+              Option.match(reviewRibbon, {
+                onSome: (candidate) =>
+                  toggleSidebarTab(projectRibbonToSidebarTab(candidate), placement),
+                onNone: () => {
+                  onSidebarExpandedChange(true)
+                  onActiveRibbonChange(ribbon)
+                  window.requestAnimationFrame(() => {
+                    document
+                      .querySelector<HTMLButtonElement>(
+                        'button[aria-label="Code"][aria-pressed="true"]',
+                      )
+                      ?.focus()
+                  })
+                },
+              })
+            }}
           />
         )}
         context={
@@ -2102,7 +2146,7 @@ export const ReviewDetailView = ({
                           onFileAnchorChange={(element, focusElement) =>
                             registerFileNavigationAnchor(file.fileId, element, focusElement)
                           }
-                          onOpenFile={() => void openRepositoryFile(file.path)}
+                          onOpenFile={() => openRepositoryFile(file.path)}
                           onOpenThread={openReviewThreadDetail}
                           onSelect={() => selectPathAndScroll(file.path)}
                           onSetViewed={(viewed) =>
@@ -2739,8 +2783,8 @@ const captureReviewSearchAnchor = (
   return ReviewSnapshotSearchFileAnchor.make({ fileId: inventoryFile.fileId })
 }
 
-const projectRibbonToSidebarTab = (ribbon: ProjectWorkspaceRibbon): ReviewSidebarTab =>
+const projectRibbonToSidebarTab = (ribbon: ReviewWorkspaceRibbon): ReviewSidebarTab =>
   ribbon === "files" ? "tree" : ribbon
 
-const sidebarTabToProjectRibbon = (tab: ReviewSidebarTab): ProjectWorkspaceRibbon =>
+const sidebarTabToProjectRibbon = (tab: ReviewSidebarTab): ReviewWorkspaceRibbon =>
   tab === "tree" ? "files" : tab

@@ -2,14 +2,22 @@
 import { AISettings } from "@diffdash/domain/ai-settings"
 import type { AppState } from "@diffdash/domain/app-state"
 import {
+  type CodeWorkspaceTarget,
+  ProjectHeadCodeWorkspaceTarget,
+} from "@diffdash/domain/code-workspace"
+import type { DiffFileStatus } from "@diffdash/domain/diff"
+import {
   type GitProviderDescriptor,
   GitProviderId,
   type HostedRepository,
   type HostedReviewSummary,
   type HostedRepositoryLocator,
+  RepositorySource,
 } from "@diffdash/domain/git-provider"
 import { workingTreeReviewTarget } from "@diffdash/domain/local-review"
 import { type ProjectWorkspaceRibbon } from "@diffdash/domain/project-workspace"
+import type { ReviewSnapshotFileInventory } from "@diffdash/domain/review-context"
+import { RepositoryRelativePath } from "@diffdash/domain/repository-path"
 import {
   RendererLayoutSettings,
   ReviewContextPaneWidth,
@@ -18,6 +26,7 @@ import {
 } from "@diffdash/domain/renderer-layout-settings"
 import {
   RepositoryCheckoutPath,
+  RepositoryCheckout,
   type Repo,
   type RepositorySearchScope,
 } from "@diffdash/domain/repository"
@@ -50,6 +59,7 @@ import {
   searchScopesAtom,
 } from "@/repositories/atoms"
 import { useRepositoryMutations } from "@/repositories/use-repository-mutations"
+import { CodeScreen } from "@/project-workspace/code-screen"
 import { ProjectRemoteChooser } from "@/project-workspace/project-remote-chooser"
 import { ReviewsPane } from "@/project-workspace/reviews-pane"
 import { ProjectReviewsOverview } from "@/project-workspace/project-reviews-overview"
@@ -99,6 +109,7 @@ import {
 } from "./project-session"
 
 type Screen = "home" | "project"
+type ReviewWorkspaceRibbon = Exclude<ProjectWorkspaceRibbon, "code">
 
 const MOUSE_BUTTON_BACK = 3
 const EMPTY_PROVIDER_DESCRIPTORS: readonly GitProviderDescriptor[] = []
@@ -118,6 +129,14 @@ export function AppShell() {
   const [selectedRepo, setSelectedRepo] = useState<Repo | null>(null)
   const [selectedReview, setSelectedReview] = useState<SelectedReviewTarget | null>(null)
   const [activeRibbon, setActiveRibbon] = useState<ProjectWorkspaceRibbon>("reviews")
+  const [selectedCodePath, setSelectedCodePath] = useState<Option.Option<RepositoryRelativePath>>(
+    Option.none,
+  )
+  const [selectedCodeTarget, setSelectedCodeTarget] = useState<CodeWorkspaceTarget | null>(null)
+  const [codeWorkspaceMounted, setCodeWorkspaceMounted] = useState(false)
+  const [codeFileStatuses, setCodeFileStatuses] = useState<
+    ReadonlyMap<RepositoryRelativePath, DiffFileStatus>
+  >(new Map())
   const [workspaceNotice, setWorkspaceNotice] = useState<string | null>(null)
   const [pendingRemoteSelection, setPendingRemoteSelection] =
     useState<PendingProjectRemoteSelection | null>(null)
@@ -284,18 +303,48 @@ export function AppShell() {
   )
   const isLoadingDiagnostics = AsyncResult.isWaiting(diagnosticsResult)
   const pullRequests = AsyncResult.getOrElse(pullRequestsResult, () => EMPTY_HOSTED_REVIEWS)
-  const reviewRepositoryLinkState: RepositoryLinkState =
-    selectedReview?.kind !== "hosted"
-      ? "not-applicable"
-      : AsyncResult.isWaiting(repositoriesResult) || AsyncResult.isFailure(repositoriesResult)
-        ? "checking"
-        : repos.some(
-              (candidate) =>
-                candidate.localPath !== null &&
-                candidate.matchesHosted(selectedReview.review.repository),
-            )
-          ? "linked"
-          : "unlinked"
+  const reviewRepositoryLinkState: RepositoryLinkState = Option.match(
+    Option.fromNullishOr(selectedReview),
+    {
+      onNone: (): RepositoryLinkState => "not-applicable",
+      onSome: (review) =>
+        Match.value(review).pipe(
+          Match.discriminatorsExhaustive("kind")({
+            localDiff: (): RepositoryLinkState => "not-applicable",
+            repositoryComparison: (): RepositoryLinkState => "not-applicable",
+            hosted: ({ review: hostedReview }): RepositoryLinkState => {
+              const linkedSelectedRepo = Option.fromNullishOr(selectedRepo).pipe(
+                Option.filter((repo) =>
+                  RepositoryCheckout.match(repo.checkout, {
+                    RemoteOnly: () => false,
+                    LinkedCheckout: () => repo.matchesHosted(hostedReview.repository),
+                  }),
+                ),
+              )
+              return Option.match(linkedSelectedRepo, {
+                onSome: () => "linked",
+                onNone: () => {
+                  if (
+                    AsyncResult.isWaiting(repositoriesResult) ||
+                    AsyncResult.isFailure(repositoriesResult)
+                  ) {
+                    return "checking"
+                  }
+                  return repos.some((candidate) =>
+                    RepositoryCheckout.match(candidate.checkout, {
+                      RemoteOnly: () => false,
+                      LinkedCheckout: () => candidate.matchesHosted(hostedReview.repository),
+                    }),
+                  )
+                    ? "linked"
+                    : "unlinked"
+                },
+              })
+            },
+          }),
+        ),
+    },
+  )
   const knownHostedRepoKeys = new Set(
     repos.flatMap((repo) =>
       repo.hostedLocator === null
@@ -335,7 +384,11 @@ export function AppShell() {
     projectSession.cancelRestore()
     setScreen("home")
     setSelectedRepo(null)
+    setSelectedCodeTarget(null)
+    setCodeWorkspaceMounted(false)
+    setCodeFileStatuses(new Map())
     setSelectedReview(null)
+    setSelectedCodePath(Option.none())
     setActiveRibbon("reviews")
     setWorkspaceNotice(null)
   }
@@ -516,7 +569,11 @@ export function AppShell() {
 
   const applyProjectProjection = (projection: ProjectSessionProjection) => {
     setSelectedRepo(projection.repo)
+    setSelectedCodeTarget(ProjectHeadCodeWorkspaceTarget.make({ projectId: projection.repo.id }))
+    setCodeWorkspaceMounted(projection.activeRibbon === "code")
+    setCodeFileStatuses(new Map())
     setSelectedReview(projection.selectedReview)
+    setSelectedCodePath(Option.none())
     setActiveRibbon(projection.activeRibbon)
     setWorkspaceNotice(projection.notice)
     setReviewSidebarExpanded(true)
@@ -567,6 +624,11 @@ export function AppShell() {
   const updateProjectRibbon = (ribbon: ProjectWorkspaceRibbon) => {
     projectSession.cancelRestore()
     setActiveRibbon(ribbon)
+    if (ribbon === "code" && selectedRepo !== null) {
+      setCodeWorkspaceMounted(true)
+      setSelectedCodeTarget(ProjectHeadCodeWorkspaceTarget.make({ projectId: selectedRepo.id }))
+      setCodeFileStatuses(new Map())
+    }
     if (selectedRepo !== null) {
       observeWorkspacePersistence(
         projectSession.persist(projectSession.project(selectedRepo, ribbon, selectedReview)),
@@ -574,8 +636,52 @@ export function AppShell() {
     }
   }
 
+  const openCodeFile = (
+    path: RepositoryRelativePath,
+    target?: CodeWorkspaceTarget,
+    files: readonly ReviewSnapshotFileInventory[] = [],
+  ) => {
+    if (selectedRepo === null) return
+    updateProjectRibbon("code")
+    setSelectedCodePath(Option.some(path))
+    setSelectedCodeTarget(
+      target ?? ProjectHeadCodeWorkspaceTarget.make({ projectId: selectedRepo.id }),
+    )
+    setCodeFileStatuses(
+      new Map(
+        files
+          .filter((file) => file.status !== "deleted")
+          .map((file) => [file.path, file.status] as const),
+      ),
+    )
+    setReviewSidebarExpanded(true)
+  }
+
   const selectProjectReview = (selection: SelectedReviewTarget) => {
     projectSession.cancelRestore()
+    Match.valueTags(reviewSelection, {
+      none: () => undefined,
+      loading: () => undefined,
+      ready: () => undefined,
+      failure: (failure) => {
+        const selectedSourceKeys = reviewSelectionSourceKeys(selection)
+        Match.value(selection).pipe(
+          Match.discriminatorsExhaustive("kind")({
+            hosted: () => {
+              if (selectedSourceKeys.hosted === failure.sourceKey) refreshSelectedHostedReview()
+            },
+            localDiff: () => {
+              if (selectedSourceKeys.local === failure.sourceKey) refreshSelectedLocalReview()
+            },
+            repositoryComparison: () => {
+              if (selectedSourceKeys.comparison === failure.sourceKey) {
+                refreshSelectedRepositoryComparison()
+              }
+            },
+          }),
+        )
+      },
+    })
     setSelectedReview(selection)
     setActiveRibbon("files")
     setReviewSidebarExpanded(true)
@@ -778,27 +884,57 @@ export function AppShell() {
       },
     })
   }
-  const linkSelectedReviewRepository = async () => {
-    if (selectedReview?.kind !== "hosted") return false
+  const linkHostedRepository = async (repository: HostedRepositoryLocator) => {
+    const linkingProjectId = Option.map(Option.fromNullishOr(selectedRepo), ({ id }) => id)
     const localPathOption = await runRendererPromise(repositories.selectLocalFolder())
     if (Option.isNone(localPathOption)) return false
     const localPath = localPathOption.value
 
     const linked = await repositoryMutations.link({
-      repository: selectedReview.review.repository,
+      repository,
       localPath: RepositoryCheckoutPath.make(localPath),
     })
-    if (
-      selectedRepo !== null &&
-      linked.hostedLocator !== null &&
-      selectedRepo.matchesHosted(linked.hostedLocator)
-    ) {
-      setSelectedRepo(linked)
-    }
+    setSelectedRepo((currentRepo) =>
+      Option.match(Option.fromNullishOr(currentRepo), {
+        onNone: () => null,
+        onSome: (current) =>
+          Option.match(linkingProjectId, {
+            onNone: () => current,
+            onSome: (projectId) =>
+              RepositorySource.match(linked.source, {
+                local: () => current,
+                hosted: ({ locator }) =>
+                  current.id === projectId && current.matchesHosted(locator) ? linked : current,
+              }),
+          }),
+      }),
+    )
     setActionStatus(`Linked ${linked.displayIdentity} to ${linked.localPath ?? localPath}.`)
     captureAnalytics({ event: "repository_linked" })
     return true
   }
+  const linkSelectedReviewRepository = () => {
+    return Option.match(Option.fromNullishOr(selectedReview), {
+      onNone: () => Promise.resolve(false),
+      onSome: (review) =>
+        Match.value(review).pipe(
+          Match.discriminatorsExhaustive("kind")({
+            hosted: ({ review: hostedReview }) => linkHostedRepository(hostedReview.repository),
+            localDiff: () => Promise.resolve(false),
+            repositoryComparison: () => Promise.resolve(false),
+          }),
+        ),
+    })
+  }
+  const linkSelectedProjectRepository = () =>
+    Option.match(Option.fromNullishOr(selectedRepo), {
+      onNone: () => Promise.resolve(false),
+      onSome: (repo) =>
+        RepositorySource.match(repo.source, {
+          local: () => Promise.resolve(false),
+          hosted: ({ locator }) => linkHostedRepository(locator),
+        }),
+    })
 
   useRendererStream(desktop.navigation.commands, handleCliNavigationCommand, (error) =>
     setCliNavigationError(formatError(error, "Could not receive CLI navigation commands")),
@@ -896,6 +1032,10 @@ export function AppShell() {
     })
   const commandLabel = workbenchCommandLabel(selectedRepo, selectedReview, reviewSelection)
   const canNavigateBack = appState?.onboardingCompleted === true && screen !== "home"
+  const reviewRibbon = Option.liftPredicate(
+    activeRibbon,
+    (ribbon): ribbon is ReviewWorkspaceRibbon => ribbon !== "code",
+  )
   const openQuickNavigation = () => {
     if (reviewWorkbenchReady) {
       setReviewQuickNavigationRequest((request) => request + 1)
@@ -1008,58 +1148,92 @@ export function AppShell() {
                   onRecheck={recheckPrerequisites}
                 />
               ) : screen === "project" && selectedRepo !== null ? (
-                <ReviewScreen
-                  activeRibbon={activeRibbon}
-                  detailEnvironment={{
-                    aiAgentAvailable:
-                      agentRouteAvailable(
-                        agentProviderCatalog,
-                        aiSettings.selections.walkthrough,
-                        "walkthrough",
-                      ) || AsyncResult.isWaiting(agentProviderCatalogResult),
-                    aiSettings,
-                    quickNavigationRequest: reviewQuickNavigationRequest,
-                    repositoryLinkState: reviewRepositoryLinkState,
-                    sidebarExpanded: reviewSidebarExpanded,
-                    sidebarWidth: aiSettings.layout.review.contextWidth,
-                    threadDetailWidth: aiSettings.layout.review.threadDetailWidth,
-                    colorScheme: THEME_DEFINITIONS[resolvedTheme].colorScheme,
-                    onAISettingsChange: updateAISettings,
-                    onLinkRepository: linkSelectedReviewRepository,
-                    onSidebarExpandedChange: setReviewSidebarExpanded,
-                    onSidebarWidthChange: updateReviewContextWidth,
-                    onThreadDetailWidthChange: updateReviewThreadDetailWidth,
-                  }}
-                  reviewsContext={
-                    <ReviewsPane
-                      hosted={projectHostedReviewsLifecycle(selectedRepo, pullRequestsResult)}
-                      local={projectLocalReviewsLifecycle(selectedRepo, workingTreeResult)}
+                <>
+                  {codeWorkspaceMounted ? (
+                    <CodeScreen
+                      key={selectedRepo.id}
+                      active={activeRibbon === "code"}
+                      codeThemes={aiSettings.codeThemes}
+                      colorScheme={THEME_DEFINITIONS[resolvedTheme].colorScheme}
+                      contextWidth={aiSettings.layout.review.contextWidth}
+                      fileStatuses={codeFileStatuses}
                       repo={selectedRepo}
-                      onRefreshHosted={refreshSelectedPullRequests}
-                      onRefreshLocal={refreshSelectedWorkingTree}
-                      onSelect={selectProjectReview}
+                      selectedPath={Option.getOrNull(selectedCodePath)}
+                      sidebarExpanded={reviewSidebarExpanded}
+                      target={
+                        selectedCodeTarget ??
+                        ProjectHeadCodeWorkspaceTarget.make({ projectId: selectedRepo.id })
+                      }
+                      threadDetailWidth={aiSettings.layout.review.threadDetailWidth}
+                      onActiveRibbonChange={updateProjectRibbon}
+                      onLinkRepository={linkSelectedProjectRepository}
+                      onSelectedPathChange={(path) =>
+                        setSelectedCodePath(path === null ? Option.none : Option.some(path))
+                      }
+                      onSidebarExpandedChange={setReviewSidebarExpanded}
+                      onSidebarWidthChange={updateReviewContextWidth}
+                      onThreadDetailWidthChange={updateReviewThreadDetailWidth}
                     />
-                  }
-                  reviewsMain={
-                    <ProjectReviewsOverview
-                      hosted={projectHostedReviewsLifecycle(selectedRepo, pullRequestsResult)}
-                      local={projectLocalReviewsLifecycle(selectedRepo, workingTreeResult)}
-                      repo={selectedRepo}
-                      onRefreshHosted={refreshSelectedPullRequests}
-                      onRefreshLocal={refreshSelectedWorkingTree}
-                      onSelect={selectProjectReview}
-                    />
-                  }
-                  selection={reviewSelection}
-                  sourceOperations={reviewSourceOperations}
-                  workspaceNotice={workspaceNotice}
-                  onActiveRibbonChange={updateProjectRibbon}
-                  onRetrySelection={() => {
-                    refreshSelectedHostedReview()
-                    refreshSelectedLocalReview()
-                    refreshSelectedRepositoryComparison()
-                  }}
-                />
+                  ) : null}
+                  {Option.match(reviewRibbon, {
+                    onNone: () => null,
+                    onSome: (activeReviewRibbon) => (
+                      <ReviewScreen
+                        activeRibbon={activeReviewRibbon}
+                        detailEnvironment={{
+                          aiAgentAvailable:
+                            agentRouteAvailable(
+                              agentProviderCatalog,
+                              aiSettings.selections.walkthrough,
+                              "walkthrough",
+                            ) || AsyncResult.isWaiting(agentProviderCatalogResult),
+                          aiSettings,
+                          quickNavigationRequest: reviewQuickNavigationRequest,
+                          repositoryLinkState: reviewRepositoryLinkState,
+                          sidebarExpanded: reviewSidebarExpanded,
+                          sidebarWidth: aiSettings.layout.review.contextWidth,
+                          threadDetailWidth: aiSettings.layout.review.threadDetailWidth,
+                          colorScheme: THEME_DEFINITIONS[resolvedTheme].colorScheme,
+                          onAISettingsChange: updateAISettings,
+                          onLinkRepository: linkSelectedReviewRepository,
+                          onOpenCodeFile: openCodeFile,
+                          onSidebarExpandedChange: setReviewSidebarExpanded,
+                          onSidebarWidthChange: updateReviewContextWidth,
+                          onThreadDetailWidthChange: updateReviewThreadDetailWidth,
+                        }}
+                        reviewsContext={
+                          <ReviewsPane
+                            hosted={projectHostedReviewsLifecycle(selectedRepo, pullRequestsResult)}
+                            local={projectLocalReviewsLifecycle(selectedRepo, workingTreeResult)}
+                            repo={selectedRepo}
+                            onRefreshHosted={refreshSelectedPullRequests}
+                            onRefreshLocal={refreshSelectedWorkingTree}
+                            onSelect={selectProjectReview}
+                          />
+                        }
+                        reviewsMain={
+                          <ProjectReviewsOverview
+                            hosted={projectHostedReviewsLifecycle(selectedRepo, pullRequestsResult)}
+                            local={projectLocalReviewsLifecycle(selectedRepo, workingTreeResult)}
+                            repo={selectedRepo}
+                            onRefreshHosted={refreshSelectedPullRequests}
+                            onRefreshLocal={refreshSelectedWorkingTree}
+                            onSelect={selectProjectReview}
+                          />
+                        }
+                        selection={reviewSelection}
+                        sourceOperations={reviewSourceOperations}
+                        workspaceNotice={workspaceNotice}
+                        onActiveRibbonChange={updateProjectRibbon}
+                        onRetrySelection={() => {
+                          refreshSelectedHostedReview()
+                          refreshSelectedLocalReview()
+                          refreshSelectedRepositoryComparison()
+                        }}
+                      />
+                    ),
+                  })}
+                </>
               ) : (
                 <HomeScreen
                   activeProviderId={activeProviderId}

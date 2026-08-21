@@ -170,6 +170,7 @@ export const startDesktopApplication = (composition: DesktopApplicationCompositi
   }
   activeHostConfiguration = configuration
   const acquired = installSingleInstanceHandling({
+    allowDevRestart: !configuration.application.packaged,
     allowMultipleInstances: configuration.policies.allowMultipleInstances,
     enqueue: navigation.enqueue,
     registerReadiness: cliReadiness.register,

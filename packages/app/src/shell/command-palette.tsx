@@ -11,6 +11,7 @@ export type CommandPaletteItem = {
   readonly subtitle: string
   readonly keywords: string
   readonly disabled?: boolean
+  readonly keepOpen?: boolean
   readonly onSelect: () => void
 }
 
@@ -20,12 +21,18 @@ export const CommandPaletteDialog = ({
   open,
   placeholder,
   title,
+  filterItems = true,
+  loading = false,
+  onQueryChange,
   onOpenChange,
 }: {
   readonly items: readonly CommandPaletteItem[]
   readonly open: boolean
   readonly placeholder: string
   readonly title: string
+  readonly filterItems?: boolean
+  readonly loading?: boolean
+  readonly onQueryChange?: (query: string) => void
   readonly onOpenChange: (open: boolean) => void
 }) => {
   const inputRef = useRef<HTMLInputElement>(null)
@@ -35,7 +42,7 @@ export const CommandPaletteDialog = ({
   const closeFromEffect = useEffectEvent(() => onOpenChange(false))
   const normalizedQuery = query.trim().toLowerCase()
   const filteredItems =
-    normalizedQuery.length === 0
+    !filterItems || normalizedQuery.length === 0
       ? items
       : items.filter((item) =>
           `${item.title} ${item.subtitle} ${item.keywords}`.toLowerCase().includes(normalizedQuery),
@@ -75,7 +82,7 @@ export const CommandPaletteDialog = ({
   const runItem = (item: CommandPaletteItem) => {
     if (item.disabled) return
     item.onSelect()
-    onOpenChange(false)
+    if (item.keepOpen !== true) onOpenChange(false)
   }
 
   return (
@@ -117,6 +124,7 @@ export const CommandPaletteDialog = ({
             placeholder={placeholder}
             onChange={(event) => {
               setQuery(event.currentTarget.value)
+              onQueryChange?.(event.currentTarget.value)
               setActiveIndex(0)
             }}
           />
@@ -131,7 +139,9 @@ export const CommandPaletteDialog = ({
         </div>
         <div className="max-h-[min(28rem,60vh)] overflow-y-auto p-2">
           {filteredItems.length === 0 ? (
-            <EmptyState className="m-2 p-5 text-xs">No matching commands found.</EmptyState>
+            <EmptyState className="m-2 p-5 text-xs">
+              {loading ? "Searching repository files..." : "No matching commands found."}
+            </EmptyState>
           ) : null}
           {filteredItems.map((item, index) => (
             <button

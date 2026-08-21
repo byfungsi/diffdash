@@ -168,6 +168,32 @@ export const coreApplicationRpcHandlersLayer = CoreApplicationRpcs.toLayer(
         handle("Repositories.link", request, (methods) =>
           methods["Repositories.link"](request, {}),
         ),
+      "CodeWorkspace.open": (request: ApplicationRpcRequest<"CodeWorkspace.open">) =>
+        handle("CodeWorkspace.open", request, (methods) =>
+          methods["CodeWorkspace.open"](request, request),
+        ),
+      "CodeWorkspace.heartbeat": (request: ApplicationRpcRequest<"CodeWorkspace.heartbeat">) =>
+        handle("CodeWorkspace.heartbeat", request, (methods) =>
+          methods["CodeWorkspace.heartbeat"](request, request),
+        ),
+      "CodeWorkspace.release": (request: ApplicationRpcRequest<"CodeWorkspace.release">) =>
+        handle("CodeWorkspace.release", request, (methods) =>
+          methods["CodeWorkspace.release"](request, request),
+        ),
+      "CodeWorkspace.listDirectory": (
+        request: ApplicationRpcRequest<"CodeWorkspace.listDirectory">,
+      ) =>
+        handle("CodeWorkspace.listDirectory", request, (methods) =>
+          methods["CodeWorkspace.listDirectory"](request, request),
+        ),
+      "CodeWorkspace.search": (request: ApplicationRpcRequest<"CodeWorkspace.search">) =>
+        handle("CodeWorkspace.search", request, (methods) =>
+          methods["CodeWorkspace.search"](request, request),
+        ),
+      "CodeWorkspace.readFile": (request: ApplicationRpcRequest<"CodeWorkspace.readFile">) =>
+        handle("CodeWorkspace.readFile", request, (methods) =>
+          methods["CodeWorkspace.readFile"](request, request),
+        ),
       "Repositories.list": (request: ApplicationRpcRequest<"Repositories.list">) =>
         handle("Repositories.list", request, (methods) =>
           methods["Repositories.list"](request, {}),
