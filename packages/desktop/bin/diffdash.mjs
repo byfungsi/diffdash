@@ -6,11 +6,13 @@ import {
   constants,
   existsSync,
   lstatSync,
+  mkdtempSync,
   mkdirSync,
   readlinkSync,
+  rmSync,
   symlinkSync,
 } from "node:fs"
-import { homedir } from "node:os"
+import { homedir, tmpdir } from "node:os"
 import { delimiter, dirname, join, resolve } from "node:path"
 import { fileURLToPath } from "node:url"
 
@@ -21,6 +23,8 @@ const mainEntry = resolve(packageRoot, "out/main/index.js")
 const usage =
   "Usage: diffdash [path]\n       diffdash install [path]\n       diffdash pr [pr-number]\n       diffdash diff [branch-name]\n       diffdash last-commit | lc\n       diffdash compare <base> <head> [--repository=<repository>]\n       diffdash repair\n       diffdash --install-cli [directory]\n"
 const CLI_ARGUMENT = "--diffdash-cli-v1"
+const CLI_READY_ARGUMENT = "--diffdash-cli-ready-v1"
+const CLI_READY_TIMEOUT_MS = 30_000
 if (args.includes("--help") || args.includes("-h")) {
   process.stdout.write(usage)
   process.exit(0)
@@ -33,37 +37,60 @@ if (installCliRequested) {
   process.exit(0)
 }
 
-const launchArguments = [`${CLI_ARGUMENT}=${process.cwd()}`, "--", ...args]
+const readyDirectory = mkdtempSync(join(tmpdir(), "diffdash-cli."))
+const readyPath = join(readyDirectory, "ready")
+const launchArguments = [
+  `${CLI_ARGUMENT}=${process.cwd()}`,
+  `${CLI_READY_ARGUMENT}=${readyPath}`,
+  "--",
+  ...args,
+]
 
-if (existsSync(mainEntry)) {
-  const electronPath = await resolveElectronPath()
-  if (electronPath === null) {
+try {
+  if (existsSync(mainEntry)) {
+    const electronPath = await resolveElectronPath()
+    if (electronPath === null) {
+      process.stderr.write(
+        "Could not find Electron. Run `pnpm install` before using the source CLI.\n",
+      )
+      process.exitCode = 1
+    } else {
+      const child = spawn(electronPath, [packageRoot, ...launchArguments], {
+        detached: true,
+        stdio: "ignore",
+      })
+
+      child.unref()
+      if (!(await waitForDesktopReady(readyPath))) process.exitCode = 1
+    }
+  } else if (process.platform === "darwin") {
+    const child = spawn("open", ["-a", "DiffDash", "--args", ...launchArguments], {
+      stdio: "inherit",
+    })
+
+    const code = await new Promise((resolveExit) => child.on("exit", resolveExit))
+    if (code !== 0) process.exitCode = code ?? 1
+    else if (!(await waitForDesktopReady(readyPath))) process.exitCode = 1
+  } else {
     process.stderr.write(
-      "Could not find Electron. Run `pnpm install` before using the source CLI.\n",
+      "DiffDash is not built yet. Run `pnpm build` before using the CLI from source.\n",
     )
-    process.exit(1)
+    process.exitCode = 1
   }
-
-  const child = spawn(electronPath, [packageRoot, ...launchArguments], {
-    detached: true,
-    stdio: "ignore",
-  })
-
-  child.unref()
-  process.exit(0)
+} finally {
+  rmSync(readyDirectory, { force: true, recursive: true })
 }
 
-if (process.platform === "darwin") {
-  const child = spawn("open", ["-a", "DiffDash", "--args", ...launchArguments], {
-    stdio: "inherit",
-  })
-
-  child.on("exit", (code) => process.exit(code ?? 0))
-} else {
-  process.stderr.write(
-    "DiffDash is not built yet. Run `pnpm build` before using the CLI from source.\n",
-  )
-  process.exit(1)
+async function waitForDesktopReady(path) {
+  const deadline = Date.now() + CLI_READY_TIMEOUT_MS
+  while (!existsSync(path)) {
+    if (Date.now() >= deadline) {
+      process.stderr.write("Timed out waiting for DiffDash to finish opening.\n")
+      return false
+    }
+    await new Promise((resolveWait) => setTimeout(resolveWait, 50))
+  }
+  return true
 }
 
 async function resolveElectronPath() {
