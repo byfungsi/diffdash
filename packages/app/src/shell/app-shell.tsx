@@ -1228,11 +1228,11 @@ export function AppShell() {
                                 pullRequestsResult,
                               )}
                               local={projectLocalReviewsLifecycle(selectedRepo, workingTreeResult)}
-                               repo={selectedRepo}
-                               onRefreshHosted={refreshSelectedPullRequests}
-                               onRefreshLocal={refreshSelectedWorkingTree}
-                               onLinkRepository={() => void linkSelectedProjectRepository()}
-                               onSelect={selectProjectReview}
+                              repo={selectedRepo}
+                              onRefreshHosted={refreshSelectedPullRequests}
+                              onRefreshLocal={refreshSelectedWorkingTree}
+                              onLinkRepository={() => void linkSelectedProjectRepository()}
+                              onSelect={selectProjectReview}
                             />
                           }
                           reviewsMain={
@@ -1242,11 +1242,11 @@ export function AppShell() {
                                 pullRequestsResult,
                               )}
                               local={projectLocalReviewsLifecycle(selectedRepo, workingTreeResult)}
-                               repo={selectedRepo}
-                               onRefreshHosted={refreshSelectedPullRequests}
-                               onRefreshLocal={refreshSelectedWorkingTree}
-                               onLinkRepository={() => void linkSelectedProjectRepository()}
-                               onSelect={selectProjectReview}
+                              repo={selectedRepo}
+                              onRefreshHosted={refreshSelectedPullRequests}
+                              onRefreshLocal={refreshSelectedWorkingTree}
+                              onLinkRepository={() => void linkSelectedProjectRepository()}
+                              onSelect={selectProjectReview}
                             />
                           }
                           selection={reviewSelection}
