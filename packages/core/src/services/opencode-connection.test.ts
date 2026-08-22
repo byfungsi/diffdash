@@ -16,7 +16,7 @@ import {
   ConnectOpenCodeSessionRequest,
   ListOpenCodeSessionsRequest,
 } from "@diffdash/protocol/ai-connection"
-import { Effect, Option, Schema } from "effect"
+import { Effect, Schema } from "effect"
 import { describe, expect, it, vi } from "vitest"
 
 import {
@@ -70,9 +70,7 @@ describe("OpenCodeConnectionService", () => {
     const service = makeOpenCodeConnectionService({ run }, repositories)
 
     const sessions = await Effect.runPromise(
-      service.listSessions(
-        ListOpenCodeSessionsRequest.make({ projectId, search: Option.some("review") }),
-      ),
+      service.listSessions(ListOpenCodeSessionsRequest.make({ projectId, search: "review" })),
     )
 
     expect(sessions).toHaveLength(5)

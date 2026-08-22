@@ -10,6 +10,7 @@ import { ReviewProjectId } from "@diffdash/domain/review-identity"
 import { ReviewKey, ReviewSnapshotId } from "@diffdash/domain/review-identity"
 import { ApplicationInstanceId, CoreProcessEpoch, HostRequestId } from "@diffdash/core-rpc/identity"
 import { CoreReviewSessionFailure } from "@diffdash/core-rpc/review-session"
+import { ListOpenCodeSessionsRequest } from "@diffdash/protocol/ai-connection"
 import type { AppUpdateState } from "@diffdash/protocol/app-update"
 import { AppUpdateFailed, AppUpdateIdle } from "@diffdash/protocol/app-update"
 import { EventChannel, InvokeChannel } from "@diffdash/protocol/channels"
@@ -324,6 +325,26 @@ describe("IPC contract", () => {
     expect(result._tag).toBe("Success")
     expect(ipc.invoke).toHaveBeenCalledWith(InvokeChannel.settingsUpdate, {
       settings: encodedSettings,
+    })
+  })
+
+  it("normalizes a cloned OpenCode session request with an optional search", async () => {
+    const ipc = rendererIpc({ _tag: "Success", value: [] })
+    const transport = createRendererTransport(ipc.api)
+    const request = ListOpenCodeSessionsRequest.make({
+      projectId: ReviewProjectId.make("project"),
+      search: null,
+    })
+
+    const result = await transport.invoke(
+      InvokeChannel.aiListOpenCodeSessions,
+      structuredClone(request),
+    )
+
+    expect(result).toMatchObject({ _tag: "Success" })
+    expect(ipc.invoke).toHaveBeenCalledWith(InvokeChannel.aiListOpenCodeSessions, {
+      projectId: "project",
+      search: null,
     })
   })
 

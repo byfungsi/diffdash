@@ -58,7 +58,7 @@ export const AIConnectionMenu = ({
         desktop.ai.listOpenCodeSessions(
           ListOpenCodeSessionsRequest.make({
             projectId: activeProjectId.value,
-            search: Option.liftPredicate(trimmed, (value) => value.length > 0),
+            search: trimmed.length > 0 ? trimmed : null,
           }),
         ),
       )

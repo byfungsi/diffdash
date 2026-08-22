@@ -277,10 +277,7 @@ export const makeOpenCodeConnectionService = (
         order: "desc",
         parentID: "null",
       })
-      Option.match(request.search, {
-        onNone: () => undefined,
-        onSome: (search) => query.set("search", search),
-      })
+      if (request.search !== null) query.set("search", request.search)
       const output = yield* command.run(
         OpenCodeApiRequest.cases.Get.make({
           operation: "listSessions",

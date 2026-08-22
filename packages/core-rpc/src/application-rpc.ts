@@ -679,7 +679,7 @@ export const OpenCodeListSessionsRpc = applicationRpc(
   "OpenCode.listSessions",
   withContext({
     projectId: ReviewProjectId,
-    search: Schema.Option(
+    search: Schema.NullOr(
       Schema.String.pipe(
         Schema.check(Schema.isMinLength(1)),
         Schema.check(Schema.isMaxLength(500)),

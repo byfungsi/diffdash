@@ -18,7 +18,7 @@ export class ListOpenCodeSessionsRequest extends Schema.Class<ListOpenCodeSessio
   "ListOpenCodeSessionsRequest",
 )({
   projectId: ReviewProjectId,
-  search: Schema.OptionFromNullOr(
+  search: Schema.NullOr(
     Schema.String.pipe(Schema.check(Schema.isMinLength(1)), Schema.check(Schema.isMaxLength(500))),
   ),
 }) {}
