@@ -313,7 +313,7 @@ export const startCoreBunProcess = Effect.fn("startCoreBunProcess")(function* (
       )
       return {
         awaitExit: Effect.promise(() => exited),
-        kill: () => child.kill(),
+        kill: () => child.kill("SIGKILL"),
       } satisfies CoreProcessHandle
     },
   }

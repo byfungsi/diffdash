@@ -3,7 +3,6 @@ import {
   type CodeWorkspaceEntry,
   type CodeWorkspaceFileReadRejectionReason,
   type CodeWorkspaceLease,
-  type CodeWorkspaceLeaseId,
   CodeWorkspaceTarget,
   ProjectHeadCodeWorkspaceTarget,
 } from "@diffdash/domain/code-workspace"
@@ -92,7 +91,8 @@ export const CodeScreen = ({
   const [paletteItems, setPaletteItems] = useState<readonly CommandPaletteItem[]>([])
   const [paletteLoading, setPaletteLoading] = useState(false)
   const [reloadVersion, setReloadVersion] = useState(0)
-  const activeLeaseId = useRef<CodeWorkspaceLeaseId | null>(null)
+  const activeLease = useRef<CodeWorkspaceLease | null>(null)
+  const directoryRequests = useRef(new WeakMap<CodeWorkspaceLease, Set<string>>())
   const searchSequence = useRef(0)
   const targetIdentity = JSON.stringify(Schema.encodeSync(CodeWorkspaceTarget)(target))
   const requiresLocalCheckout = Schema.is(ProjectHeadCodeWorkspaceTarget)(target)
@@ -108,12 +108,17 @@ export const CodeScreen = ({
     offset = 0,
   ) => {
     const key = path ?? ""
+    const requestKey = `${key}\0${offset}`
+    const leaseRequests = directoryRequests.current.get(lease) ?? new Set<string>()
+    if (leaseRequests.has(requestKey)) return
+    leaseRequests.add(requestKey)
+    directoryRequests.current.set(lease, leaseRequests)
     setLoadingPaths((current) => new Set(current).add(key))
     try {
       const page = await runRendererPromise(
         workspaces.listDirectory(lease.id, path, offset, DIRECTORY_PAGE_SIZE),
       )
-      if (activeLeaseId.current !== lease.id) return
+      if (activeLease.current !== lease) return
       setDirectories((current) =>
         new Map(current).set(
           key,
@@ -122,7 +127,9 @@ export const CodeScreen = ({
       )
       setDirectoryOffsets((current) => new Map(current).set(key, page.nextOffset))
     } finally {
-      if (activeLeaseId.current === lease.id) {
+      leaseRequests.delete(requestKey)
+      if (leaseRequests.size === 0) directoryRequests.current.delete(lease)
+      if (activeLease.current === lease) {
         setLoadingPaths((current) => {
           const updated = new Set(current)
           updated.delete(key)
@@ -137,7 +144,9 @@ export const CodeScreen = ({
     offset = 0,
   ) =>
     requestDirectory(lease, path, offset).catch((error) => {
-      if (activeLeaseId.current === lease.id) {
+      if (activeLease.current === lease) {
+        activeLease.current = null
+        void runRendererPromise(workspaces.release(lease.id)).catch(() => undefined)
         setWorkspace({
           _tag: "failure",
           message: formatError(error, "DiffDash could not load repository files."),
@@ -153,6 +162,7 @@ export const CodeScreen = ({
     setWorkspace({ _tag: "loading" })
     setDirectories(new Map())
     setExpandedPaths(new Set())
+    setLoadingPaths(new Set())
     setDirectoryOffsets(new Map())
     setFile({ _tag: "idle" })
     if (requiresLocalCheckout && repo.localPath === null) {
@@ -169,7 +179,7 @@ export const CodeScreen = ({
           await runRendererPromise(workspaces.release(lease.id)).catch(() => undefined)
           return
         }
-        activeLeaseId.current = lease.id
+        activeLease.current = lease
         setWorkspace({ _tag: "ready", lease })
         await loadDirectoryFromEffect(lease, null)
       } catch (error) {
@@ -183,8 +193,8 @@ export const CodeScreen = ({
     void open()
     return () => {
       requestActive = false
-      if (lease !== null) {
-        if (activeLeaseId.current === lease.id) activeLeaseId.current = null
+      if (lease !== null && activeLease.current === lease) {
+        activeLease.current = null
         void runRendererPromise(workspaces.release(lease.id)).catch(() => undefined)
       }
     }
@@ -195,8 +205,8 @@ export const CodeScreen = ({
     const leaseId = readyWorkspace.lease.id
     const heartbeat = window.setInterval(() => {
       void runRendererPromise(workspaces.heartbeat(leaseId)).catch((error) => {
-        if (activeLeaseId.current !== leaseId) return
-        activeLeaseId.current = null
+        if (activeLease.current !== readyWorkspace.lease) return
+        activeLease.current = null
         void runRendererPromise(workspaces.release(leaseId)).catch(() => undefined)
         setWorkspace({
           _tag: "failure",
@@ -279,10 +289,11 @@ export const CodeScreen = ({
     const sequence = searchSequence.current + 1
     searchSequence.current = sequence
     const leaseId = readyWorkspace.lease.id
+    const lease = readyWorkspace.lease
     setPaletteLoading(true)
     void runRendererPromise(workspaces.search(leaseId, query, offset, SEARCH_LIMIT))
       .then(({ paths, nextOffset }) => {
-        if (searchSequence.current !== sequence || activeLeaseId.current !== leaseId) return
+        if (searchSequence.current !== sequence || activeLease.current !== lease) return
         const items: CommandPaletteItem[] = paths.map((path) => ({
           id: path,
           title: path.split("/").at(-1) ?? path,
@@ -392,14 +403,17 @@ export const CodeScreen = ({
         />
       </div>
     ),
-    ready: () =>
+    ready: (workspaceState) =>
       Match.valueTags(file, {
         ready: (ready) => (
           <CodeFileViewer
+            key={`${ready.path}:${workspaceState.lease.revision}`}
             codeThemes={codeThemes}
             colorScheme={colorScheme}
             contents={ready.content}
             path={ready.path}
+            projectId={repo.id}
+            revision={workspaceState.lease.revision}
           />
         ),
         loading: (loading) => (

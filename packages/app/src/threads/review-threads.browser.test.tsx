@@ -1,3 +1,4 @@
+import { CommentSubmissionReceipt } from "@diffdash/domain/comment"
 import {
   ReviewFileId,
   ReviewHunkFingerprint,
@@ -124,7 +125,7 @@ describe("review thread UI", () => {
       .getByLabelText("Agent message")
       .getByRole("button", { name: "Retry", exact: true })
       .click()
-    await vi.waitFor(() => expect(retryAgentMessage).toHaveBeenCalledOnce())
+    await vi.waitFor(() => expect(retryAgentMessage).toHaveBeenCalledWith(details.thread.id))
     await vi.waitFor(() => expect(onRefresh).toHaveBeenCalledWith(details.thread.id))
     expect(document.querySelector("button")?.textContent).not.toContain("Close")
   })
@@ -244,12 +245,7 @@ describe("review thread UI", () => {
 
     expect(document.body.textContent).toContain("No review agent provider is available")
     await page.getByRole("button", { name: "Retry", exact: true }).last().click()
-    await vi.waitFor(() =>
-      expect(retryAgentMessage).toHaveBeenCalledWith(
-        details.thread.id,
-        details.messages.at(-1)?.id,
-      ),
-    )
+    await vi.waitFor(() => expect(retryAgentMessage).toHaveBeenCalledWith(details.thread.id))
   })
 
   it("recovers a persisted user-only turn instead of offering another follow-up", async () => {
@@ -270,9 +266,7 @@ describe("review thread UI", () => {
     expect(document.body.textContent).toContain("The agent response did not start")
     expect(document.querySelector('textarea[aria-label="Thread message"]')).toBeNull()
     await page.getByRole("button", { name: "Retry", exact: true }).click()
-    await vi.waitFor(() =>
-      expect(retryAgentMessage).toHaveBeenCalledWith(details.thread.id, details.messages[0]?.id),
-    )
+    await vi.waitFor(() => expect(retryAgentMessage).toHaveBeenCalledWith(details.thread.id))
   })
 
   it("shows a new retry error even when the previous response already failed", () => {
@@ -576,7 +570,11 @@ const threadController = (
   error: null,
   loading: false,
   available: true,
-  createThread: async () => undefined,
+  createThread: async () =>
+    CommentSubmissionReceipt.cases.StoredLocally.make({
+      threadId: ReviewThreadId.make("thread-created"),
+      agentAccepted: true,
+    }),
   addUserMessage: async () => undefined,
   runAgent: async () => undefined,
   runningThreadIds: [],

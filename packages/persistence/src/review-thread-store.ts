@@ -2,10 +2,11 @@ import { Cause, Context, Effect, Layer, Option, Schema } from "effect"
 import * as SqlClient from "effect/unstable/sql/SqlClient"
 import { randomUUID } from "node:crypto"
 
+import { CommentSubjectMismatchError } from "@diffdash/domain/comment"
 import {
   type AddReviewThreadUserMessageInput,
   type CreateReviewThreadInput,
-  type CurrentReviewAnchor,
+  CurrentReviewAnchor,
   PendingAgentReviewThreadMessage,
   ReviewThreadAnchor as ReviewThreadAnchorSchema,
   type ReviewThread,
@@ -16,7 +17,7 @@ import {
   type ReviewThreadRevisionKey,
   UserReviewThreadMessage,
 } from "@diffdash/domain/review-thread"
-import { ReviewRevision } from "@diffdash/domain/review-identity"
+import { ReviewKey, ReviewProjectId, ReviewRevision } from "@diffdash/domain/review-identity"
 import { type Database, type DatabaseRow, makeDatabase, toError } from "./database"
 import {
   decodeReviewThreadRow,
@@ -38,6 +39,15 @@ export interface ReviewThreadCurrentMapping {
   readonly currentAnchor: CurrentReviewAnchor
 }
 
+/** Exact current thread mapping that must still hold when a follow-up is appended. */
+export interface AddReviewThreadUserMessageForSubjectInput extends AddReviewThreadUserMessageInput {
+  readonly repoId: ReviewProjectId
+  readonly reviewKey: ReviewKey
+  readonly currentBaseRevision: ReviewRevision
+  readonly currentHeadRevision: ReviewRevision
+  readonly currentAnchor: ReviewThreadAnchorSchema
+}
+
 const ReviewThreadAnchorJson = Schema.fromJsonString(ReviewThreadAnchorSchema)
 const ReviewThreadRows = Schema.Array(ReviewThreadRow)
 
@@ -54,6 +64,7 @@ const ReviewThreadStoreOperation = Schema.Literals([
   "listForRevision.decode",
   "updateCurrentMappings",
   "addUserMessage",
+  "addUserMessageForSubject",
 ])
 type ReviewThreadStoreOperation = typeof ReviewThreadStoreOperation.Type
 
@@ -88,6 +99,9 @@ export class ReviewThreadStore extends Context.Service<
     readonly addUserMessage: (
       input: AddReviewThreadUserMessageInput,
     ) => Effect.Effect<ReviewThreadDetails, ReviewThreadStoreError>
+    readonly addUserMessageForSubject: (
+      input: AddReviewThreadUserMessageForSubjectInput,
+    ) => Effect.Effect<ReviewThreadDetails, CommentSubjectMismatchError | ReviewThreadStoreError>
   }
 >()("@diffdash/ReviewThreadStore") {
   static readonly layer = Layer.effect(
@@ -220,35 +234,41 @@ export class ReviewThreadStore extends Context.Service<
             .transaction(
               Effect.gen(function* () {
                 yield* getThread(database, input.threadId)
-                const latest = yield* latestMessage(database, input.threadId)
-                if (
-                  Option.isNone(latest) ||
-                  Schema.is(UserReviewThreadMessage)(latest.value) ||
-                  Schema.is(PendingAgentReviewThreadMessage)(latest.value)
-                ) {
-                  return yield* new Cause.IllegalArgumentError(
-                    "Wait for the current agent response before sending another message",
-                  )
-                }
-                const id = ReviewThreadMessageId.make(randomUUID())
-                const now = new Date().toISOString()
-                const sequence = yield* nextMessageSequence(database, input.threadId)
-                yield* database.run(
-                  `INSERT INTO review_thread_messages (
-                    id, thread_id, sequence, author, body_markdown, status,
-                    agent_run_id, created_at, updated_at
-                  ) VALUES (?, ?, ?, 'user', ?, 'complete', NULL, ?, ?)`,
-                  [id, input.threadId, sequence, input.bodyMarkdown, now, now],
-                )
-                yield* database.run("UPDATE review_threads SET updated_at = ? WHERE id = ?", [
-                  now,
-                  input.threadId,
-                ])
-                return yield* getDetails(database, input.threadId)
+                return yield* appendUserMessage(database, input)
               }),
             )
             .pipe(mapStoreError("addUserMessage"))
         }),
+        addUserMessageForSubject: Effect.fn("ReviewThreadStore.addUserMessageForSubject")(
+          function (input) {
+            return database
+              .transaction(
+                Effect.gen(function* () {
+                  const thread = yield* getThread(database, input.threadId)
+                  const activeAnchor = CurrentReviewAnchor.match(thread.currentAnchor, {
+                    Active: ({ anchor }) => anchor,
+                    Outdated: () => null,
+                    Unresolved: () => null,
+                  })
+                  if (
+                    thread.repoId !== input.repoId ||
+                    thread.reviewKey !== input.reviewKey ||
+                    thread.currentBaseRevision !== input.currentBaseRevision ||
+                    thread.currentHeadRevision !== input.currentHeadRevision ||
+                    activeAnchor === null ||
+                    !sameAnchor(activeAnchor, input.currentAnchor)
+                  ) {
+                    return yield* CommentSubjectMismatchError.make({
+                      reason:
+                        "The review thread no longer matches the submitted project, review, revisions, or line.",
+                    })
+                  }
+                  return yield* appendUserMessage(database, input)
+                }),
+              )
+              .pipe(mapSubjectCheckedStoreError("addUserMessageForSubject"))
+          },
+        ),
       })
     }),
   )
@@ -323,7 +343,59 @@ const latestMessage = Effect.fn("ReviewThreadStore.latestMessage")(function* (
   return yield* Option.map(row, decodeReviewThreadMessageRow).pipe(Effect.transposeOption)
 })
 
+const appendUserMessage = Effect.fn("ReviewThreadStore.appendUserMessage")(function* (
+  database: Database,
+  input: AddReviewThreadUserMessageInput,
+) {
+  const latest = yield* latestMessage(database, input.threadId)
+  if (
+    Option.isNone(latest) ||
+    Schema.is(UserReviewThreadMessage)(latest.value) ||
+    Schema.is(PendingAgentReviewThreadMessage)(latest.value)
+  ) {
+    return yield* new Cause.IllegalArgumentError(
+      "Wait for the current agent response before sending another message",
+    )
+  }
+  const id = ReviewThreadMessageId.make(randomUUID())
+  const now = new Date().toISOString()
+  const sequence = yield* nextMessageSequence(database, input.threadId)
+  yield* database.run(
+    `INSERT INTO review_thread_messages (
+      id, thread_id, sequence, author, body_markdown, status,
+      agent_run_id, created_at, updated_at
+    ) VALUES (?, ?, ?, 'user', ?, 'complete', NULL, ?, ?)`,
+    [id, input.threadId, sequence, input.bodyMarkdown, now, now],
+  )
+  yield* database.run("UPDATE review_threads SET updated_at = ? WHERE id = ?", [
+    now,
+    input.threadId,
+  ])
+  return yield* getDetails(database, input.threadId)
+})
+
+const sameAnchor = (
+  left: typeof ReviewThreadAnchorSchema.Type,
+  right: typeof ReviewThreadAnchorSchema.Type,
+): boolean =>
+  left.fileId === right.fileId &&
+  left.filePath === right.filePath &&
+  left.oldPath === right.oldPath &&
+  left.hunkId === right.hunkId &&
+  left.hunkFingerprint === right.hunkFingerprint &&
+  left.hunkHeader === right.hunkHeader &&
+  left.side === right.side &&
+  left.lineNumber === right.lineNumber &&
+  left.lineContent === right.lineContent
+
 const encodeAnchor = Schema.encodeEffect(ReviewThreadAnchorJson)
 
 const mapStoreError = (operation: ReviewThreadStoreOperation) =>
   Effect.mapError((cause) => ReviewThreadStoreError.make({ operation, cause: toError(cause) }))
+
+const mapSubjectCheckedStoreError = (operation: ReviewThreadStoreOperation) =>
+  Effect.mapError((cause) =>
+    Schema.is(CommentSubjectMismatchError)(cause)
+      ? cause
+      : ReviewThreadStoreError.make({ operation, cause: toError(cause) }),
+  )

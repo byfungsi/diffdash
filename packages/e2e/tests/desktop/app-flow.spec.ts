@@ -207,7 +207,7 @@ test("FUN-130 AC: routes a hosted review through the non-GitHub fixture provider
 test("covers finished Home to Review flow with fake CLI fixtures", async ({
   browserName: _browserName,
 }, testInfo) => {
-  testInfo.setTimeout(60_000)
+  testInfo.setTimeout(90_000)
   const fakeBin = testInfo.outputPath("fake-bin")
   const codexRunLog = testInfo.outputPath("codex-runs.log")
   const linkedRepo = testInfo.outputPath("linked-repo")

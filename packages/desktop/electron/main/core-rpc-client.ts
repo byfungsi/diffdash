@@ -437,6 +437,15 @@ export const coreRpcClientLayer = (options: CoreRpcClientOptions) => {
         projectWorkspaceSave: Effect.fn("CoreRpcClient.projectWorkspaceSave")((request) =>
           authenticated(client("ProjectWorkspace.save", request)),
         ),
+        listOpenCodeSessions: Effect.fn("CoreRpcClient.listOpenCodeSessions")((request) =>
+          authenticated(client("OpenCode.listSessions", request)),
+        ),
+        connectOpenCodeSession: Effect.fn("CoreRpcClient.connectOpenCodeSession")((request) =>
+          authenticated(client("OpenCode.connectSession", request)),
+        ),
+        submitComment: Effect.fn("CoreRpcClient.submitComment")((request) =>
+          authenticated(client("CommentSubmission.submit", request)),
+        ),
         addReviewThreadUserMessage: Effect.fn("CoreRpcClient.addReviewThreadUserMessage")(
           (request) => authenticated(client("ReviewThreads.addUserMessage", request)),
         ),

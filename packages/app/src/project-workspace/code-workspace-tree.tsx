@@ -49,15 +49,20 @@ export const CodeWorkspaceTree = ({
     Match.valueTags(visibleEntry, {
       loadMore: (visibleEntry: VisibleLoadMore) => {
         const key = visibleEntry.path ?? ""
+        const loading = loadingPaths.has(key)
         return (
           <button
             key={`load:${key}`}
             type="button"
+            aria-busy={loading}
             className="text-muted-foreground hover:text-foreground h-7 w-full text-left text-xs"
+            disabled={loading}
             style={{ paddingLeft: `${22 + visibleEntry.depth * 14}px` }}
-            onClick={() => onLoadMore(visibleEntry.path)}
+            onClick={() => {
+              if (!loading) onLoadMore(visibleEntry.path)
+            }}
           >
-            {loadingPaths.has(key) ? "Loading..." : "Load more..."}
+            {loading ? "Loading..." : "Load more..."}
           </button>
         )
       },

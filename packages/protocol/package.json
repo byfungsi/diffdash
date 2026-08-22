@@ -5,6 +5,7 @@
   "type": "module",
   "exports": {
     "./agent-providers": "./src/agent-providers.ts",
+    "./ai-connection": "./src/ai-connection.ts",
     "./analytics": "./src/analytics.ts",
     "./api": "./src/api.ts",
     "./app-update": "./src/app-update.ts",

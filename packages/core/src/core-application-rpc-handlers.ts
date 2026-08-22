@@ -1,5 +1,14 @@
-import { CoreApplicationFailureCode, CoreApplicationRpcs } from "@diffdash/core-rpc/application-rpc"
-import { Effect } from "effect"
+import {
+  CoreApplicationFailureCode,
+  CoreApplicationRpcs,
+  makeCoreApplicationAdmissionFailure,
+  type CoreApplicationAdmissionFailureCode,
+  type CoreApplicationFailure,
+} from "@diffdash/core-rpc/application-rpc"
+import { CORE_RPC_INCOMPLETE_BUFFER_BYTES } from "@diffdash/core-rpc/transport"
+import { getCoreRpcMethodPolicy, type CoreRpcMethodPolicy } from "@diffdash/core-rpc/method-policy"
+import { Cause, Effect, Fiber, FiberSet, Option, Predicate } from "effect"
+import * as RpcSerialization from "effect/unstable/rpc/RpcSerialization"
 
 import type { HostRequestContext } from "@diffdash/core-rpc/identity"
 import type {
@@ -8,36 +17,155 @@ import type {
   CoreOperationFailure,
   CoreOperationOutput,
 } from "./core-contract"
+import { CoreLifecycle } from "./core-lifecycle"
 import { CoreRuntimeServices } from "./core-runtime-services"
 import type { OperationHandlers } from "./operations/operation-handlers"
 
 type ApplicationRpcRequest<Method extends CoreMethodType> = HostRequestContext &
   CoreMethodInput<Method>
 
+const makeMethodPolicyParser = () =>
+  RpcSerialization.makeMsgPack({
+    useRecords: true,
+    maxBufferSize: CORE_RPC_INCOMPLETE_BUFFER_BYTES,
+  }).makeUnsafe()
+
+const encodedBytes = (value: Parameters<ReturnType<typeof makeMethodPolicyParser>["encode"]>[0]) =>
+  Effect.try(() => makeMethodPolicyParser().encode(value)).pipe(
+    Effect.filterOrFail(
+      (encoded) => encoded !== undefined,
+      () => undefined,
+    ),
+    Effect.map((encoded) =>
+      Predicate.isString(encoded) ? Buffer.byteLength(encoded) : encoded.byteLength,
+    ),
+  )
+
 /** Native per-method handlers backed by the installed Core operation authority. */
 export const coreApplicationRpcHandlersLayer = CoreApplicationRpcs.toLayer(
   Effect.gen(function* () {
     const runtime = yield* CoreRuntimeServices
+    const lifecycle = yield* CoreLifecycle
+    const detachedRequests = yield* FiberSet.make()
+
+    const admit = <Method extends string, A, E>(
+      method: Method,
+      request: HostRequestContext,
+      operation: Effect.Effect<A, E>,
+    ): Effect.Effect<A, E | CoreApplicationFailure<Method>> => {
+      const declaration = CoreApplicationRpcs.requests.get(method)
+      const policy =
+        declaration === undefined
+          ? Option.none<CoreRpcMethodPolicy>()
+          : getCoreRpcMethodPolicy(declaration)
+      const fail = (code: CoreApplicationAdmissionFailureCode) => {
+        const failure = makeCoreApplicationAdmissionFailure(method, request, code)
+        return Effect.fail(
+          code === "REQUEST_DEADLINE_EXCEEDED" &&
+            Option.isSome(policy) &&
+            policy.value.idempotency === "nonIdempotent"
+            ? { ...failure, retryClass: "notRetryable" as const }
+            : failure,
+        )
+      }
+
+      if (Option.isNone(policy)) return fail("CORE_RPC_POLICY_ERROR")
+
+      const withinBudget = (value: Parameters<typeof encodedBytes>[0], maximumBytes: number) =>
+        encodedBytes(value).pipe(
+          Effect.filterOrFail(
+            (size) => size <= maximumBytes,
+            () => undefined,
+          ),
+        )
+      const interruptOnDrain = <Value, Error>(
+        effect: Effect.Effect<Value, Error>,
+      ): Effect.Effect<Value, Error | CoreApplicationFailure<Method>> =>
+        lifecycle
+          .interruptOnDrain(effect)
+          .pipe(
+            Effect.catchCause(
+              (cause): Effect.Effect<never, Error | CoreApplicationFailure<Method>> =>
+                Cause.hasInterruptsOnly(cause) ? fail("CORE_DRAINING") : Effect.failCause(cause),
+            ),
+          )
+      const drainAware = interruptOnDrain(operation)
+      const cancellable =
+        policy.value.cancellation === "interruptible"
+          ? drainAware
+          : Effect.uninterruptibleMask((restore) =>
+              FiberSet.run(
+                detachedRequests,
+                policy.value.cancellation === "uninterruptible"
+                  ? Effect.uninterruptible(operation)
+                  : drainAware,
+              ).pipe(Effect.flatMap((fiber) => restore(Fiber.join(fiber)))),
+            )
+
+      const admitted = withinBudget(request, policy.value.maxRequestBytes).pipe(
+        Effect.catch(() => fail("REQUEST_TOO_LARGE")),
+        Effect.andThen(
+          lifecycle.admitBusinessRequest(request).pipe(
+            Effect.catchTags({
+              CoreBusinessIdentityMismatchError: () => fail("CORE_REQUEST_IDENTITY_MISMATCH"),
+              CoreBusinessLifecycleRejectedError: (error) =>
+                fail(
+                  error.lifecycle === "draining" || error.lifecycle === "stopped"
+                    ? "CORE_DRAINING"
+                    : "CORE_LIFECYCLE_REJECTED",
+                ),
+            }),
+          ),
+        ),
+        Effect.andThen(cancellable),
+        Effect.flatMap((result) =>
+          withinBudget(result, policy.value.maxResponseBytes).pipe(
+            Effect.catch(() => fail("RESPONSE_TOO_LARGE")),
+            Effect.as(result),
+          ),
+        ),
+      )
+      return policy.value.cancellation === "uninterruptible"
+        ? admitted
+        : admitted.pipe(
+            Effect.timeoutOrElse({
+              duration: policy.value.deadlineMs,
+              orElse: () => fail("REQUEST_DEADLINE_EXCEEDED"),
+            }),
+          )
+    }
+
     const handle = <Method extends CoreMethodType>(
       method: Method,
       request: ApplicationRpcRequest<Method>,
       invoke: (
         methods: OperationHandlers,
       ) => Effect.Effect<CoreOperationOutput<Method>, CoreOperationFailure<Method>>,
-    ) =>
-      runtime.operations.pipe(
-        Effect.flatMap((operations) => invoke(operations.methods)),
-        Effect.mapError(() => ({
-          _tag: "CoreApplicationFailure" as const,
-          applicationInstanceId: request.applicationInstanceId,
-          processEpoch: request.processEpoch,
-          requestId: request.requestId,
-          method,
-          code: CoreApplicationFailureCode.make("APPLICATION_OPERATION_FAILED"),
-          retryClass: "userAction" as const,
-          safeMessage: "DiffDash Core could not complete this application operation.",
-        })),
+    ) => {
+      const declaration = CoreApplicationRpcs.requests.get(method)
+      const methodPolicy =
+        declaration === undefined ? Option.none() : getCoreRpcMethodPolicy(declaration)
+      return admit(
+        method,
+        request,
+        runtime.operations.pipe(
+          Effect.flatMap((operations) => invoke(operations.methods)),
+          Effect.mapError(() => ({
+            _tag: "CoreApplicationFailure" as const,
+            applicationInstanceId: request.applicationInstanceId,
+            processEpoch: request.processEpoch,
+            requestId: request.requestId,
+            method,
+            code: CoreApplicationFailureCode.make("APPLICATION_OPERATION_FAILED"),
+            retryClass:
+              Option.isSome(methodPolicy) && methodPolicy.value.idempotency === "nonIdempotent"
+                ? ("notRetryable" as const)
+                : ("userAction" as const),
+            safeMessage: "DiffDash Core could not complete this application operation.",
+          })),
+        ),
       )
+    }
 
     const handlers = {
       "Analytics.capture": (request: ApplicationRpcRequest<"Analytics.capture">) =>
@@ -220,6 +348,22 @@ export const coreApplicationRpcHandlersLayer = CoreApplicationRpcs.toLayer(
         handle("ProjectWorkspace.save", request, (methods) =>
           methods["ProjectWorkspace.save"](request, {}),
         ),
+      "OpenCode.listSessions": (request: ApplicationRpcRequest<"OpenCode.listSessions">) =>
+        handle("OpenCode.listSessions", request, (methods) =>
+          methods["OpenCode.listSessions"](request, {}),
+        ),
+      "OpenCode.connectSession": (request: ApplicationRpcRequest<"OpenCode.connectSession">) =>
+        handle("OpenCode.connectSession", request, (methods) =>
+          methods["OpenCode.connectSession"](request, {}),
+        ),
+      "CommentSubmission.submit": (request: ApplicationRpcRequest<"CommentSubmission.submit">) =>
+        handle("CommentSubmission.submit", request, (methods) =>
+          methods["CommentSubmission.submit"](request, {
+            applicationInstanceId: request.applicationInstanceId,
+            processEpoch: request.processEpoch,
+            requestId: request.requestId,
+          }),
+        ),
       "ReviewThreads.addUserMessage": (
         request: ApplicationRpcRequest<"ReviewThreads.addUserMessage">,
       ) =>
@@ -256,14 +400,22 @@ export const coreApplicationRpcHandlersLayer = CoreApplicationRpcs.toLayer(
         handle("Resources.clearDisposable", request, (methods) =>
           methods["Resources.clearDisposable"](request, {}),
         ),
-      "E2E.reviewLifecycleDiagnostics": (_request: HostRequestContext) =>
-        runtime.reviewLifecycleDiagnostics.pipe(
-          Effect.flatMap((diagnostics) => diagnostics.snapshot),
+      "E2E.reviewLifecycleDiagnostics": (request: HostRequestContext) =>
+        admit(
+          "E2E.reviewLifecycleDiagnostics",
+          request,
+          runtime.reviewLifecycleDiagnostics.pipe(
+            Effect.flatMap((diagnostics) => diagnostics.snapshot),
+          ),
         ),
-      "E2E.holdNextReviewAcquisition": (_request: HostRequestContext) =>
-        runtime.reviewLifecycleDiagnostics.pipe(
-          Effect.flatMap((diagnostics) => diagnostics.holdNextAcquisition),
-          Effect.map((armed) => ({ armed })),
+      "E2E.holdNextReviewAcquisition": (request: HostRequestContext) =>
+        admit(
+          "E2E.holdNextReviewAcquisition",
+          request,
+          runtime.reviewLifecycleDiagnostics.pipe(
+            Effect.flatMap((diagnostics) => diagnostics.holdNextAcquisition),
+            Effect.map((armed) => ({ armed })),
+          ),
         ),
       "ViewedFiles.listHosted": (request: ApplicationRpcRequest<"ViewedFiles.listHosted">) =>
         handle("ViewedFiles.listHosted", request, (methods) =>

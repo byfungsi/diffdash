@@ -10,6 +10,13 @@ import {
 } from "@diffdash/domain/ai-settings"
 import type { AppState } from "@diffdash/domain/app-state"
 import {
+  CommentDestination,
+  CommentSubmission,
+  CommentSubmissionReceipt,
+  CommentSubmissionUnsupportedError,
+  CommentSubject,
+} from "@diffdash/domain/comment"
+import {
   CodeWorkspaceDirectoryPage,
   CodeWorkspaceEntry,
   CodeWorkspaceLease,
@@ -8094,6 +8101,12 @@ export const installDiffDashApi = (
     }
     throw new Error("Repository files are unavailable.")
   }
+  const createReviewThread: DiffDashApi["reviewThreads"]["create"] = async () => {
+    return Promise.reject(Error("Review thread creation is not used by this fixture"))
+  }
+  const addReviewThreadUserMessage: DiffDashApi["reviewThreads"]["addUserMessage"] = async () => {
+    return Promise.reject(Error("Review thread messages are not used by this fixture"))
+  }
   const api: DiffDashApi = {
     analytics: {
       capture: calls.captureAnalytics,
@@ -8128,6 +8141,62 @@ export const installDiffDashApi = (
     diagnostics: calls.getDiagnostics,
     agentProviders: {
       getCatalog: async () => options.agentProviderCatalog ?? readyAgentProviderCatalog,
+    },
+    ai: {
+      listOpenCodeSessions: async () => [],
+      connectOpenCodeSession: async ({ sessionId }) => ({ sessionId, planMode: true }),
+      submitComment: async ({ destination, submission }) =>
+        CommentDestination.match(destination, {
+          OpenCode: ({ connection }) =>
+            Promise.resolve(
+              CommentSubmissionReceipt.cases.Forwarded.make({
+                sessionId: connection.session.id,
+              }),
+            ),
+          DiffDash: () =>
+            CommentSubmission.match(submission, {
+              Start: ({ subject, body }) =>
+                CommentSubject.match(subject, {
+                  CodeLine: () =>
+                    Promise.reject(
+                      CommentSubmissionUnsupportedError.make({
+                        destination: "DiffDash",
+                        subject: "CodeLine",
+                      }),
+                    ),
+                  ReviewLine: (review) =>
+                    createReviewThread({
+                      target: review.target,
+                      expectedBaseRevision: review.expectedBaseRevision,
+                      expectedHeadRevision: review.expectedHeadRevision,
+                      anchor: review.anchor,
+                      bodyMarkdown: body,
+                    }).then((details) =>
+                      CommentSubmissionReceipt.cases.StoredLocally.make({
+                        threadId: details.thread.id,
+                        agentAccepted: false,
+                      }),
+                    ),
+                }),
+              FollowUp: ({ subject, threadId, body }) =>
+                CommentSubject.match(subject, {
+                  CodeLine: () =>
+                    Promise.reject(
+                      CommentSubmissionUnsupportedError.make({
+                        destination: "DiffDash",
+                        subject: "CodeLine",
+                      }),
+                    ),
+                  ReviewLine: () =>
+                    addReviewThreadUserMessage({ threadId, bodyMarkdown: body }).then(() =>
+                      CommentSubmissionReceipt.cases.StoredLocally.make({
+                        threadId,
+                        agentAccepted: false,
+                      }),
+                    ),
+                }),
+            }),
+        }),
     },
     installDiffDashCli: calls.installDiffDashCli,
     openExternalUrl: calls.openExternalUrl,
@@ -8349,12 +8418,8 @@ export const installDiffDashApi = (
     },
     reviewThreads: {
       list: async () => reviewThreadDetails.map((item) => item.thread),
-      create: async () => {
-        throw new Error("Review thread creation is not used by this fixture")
-      },
-      addUserMessage: async () => {
-        throw new Error("Review thread messages are not used by this fixture")
-      },
+      create: createReviewThread,
+      addUserMessage: addReviewThreadUserMessage,
       get: async (threadId) => {
         const details = reviewThreadDetails.find((item) => item.thread.id === threadId)
         if (details === undefined) throw new Error(`Review thread not found: ${threadId}`)

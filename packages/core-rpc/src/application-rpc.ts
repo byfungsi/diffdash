@@ -10,6 +10,14 @@ import {
 } from "@diffdash/domain/code-workspace"
 import { ExecutablePath } from "@diffdash/domain/executable-path"
 import {
+  CommentDestination,
+  CommentSubmission,
+  CommentSubmissionReceipt,
+  OpenCodeConnection,
+  OpenCodeSessionId,
+  OpenCodeSessionSummary,
+} from "@diffdash/domain/comment"
+import {
   GitFileRevision,
   GitProviderDescriptor,
   GitProviderDiagnostic,
@@ -281,6 +289,72 @@ export const coreApplicationFailure = <Method extends string>(method: Method) =>
 export type CoreApplicationFailure<Method extends string = string> = ReturnType<
   typeof coreApplicationFailure<Method>
 >["Type"]
+
+/** Admission failures shared by the generic Core application RPC boundary. */
+export const CoreApplicationAdmissionFailureCode = Schema.Literals([
+  "CORE_REQUEST_IDENTITY_MISMATCH",
+  "CORE_LIFECYCLE_REJECTED",
+  "CORE_DRAINING",
+  "REQUEST_TOO_LARGE",
+  "RESPONSE_TOO_LARGE",
+  "REQUEST_DEADLINE_EXCEEDED",
+  "CORE_RPC_POLICY_ERROR",
+])
+
+/** Admission failures shared by the generic Core application RPC boundary. */
+export type CoreApplicationAdmissionFailureCode = typeof CoreApplicationAdmissionFailureCode.Type
+
+const applicationAdmissionFailureDetails = {
+  CORE_REQUEST_IDENTITY_MISMATCH: {
+    retryClass: "automatic",
+    safeMessage: "DiffDash Core rejected a request for a different process identity.",
+  },
+  CORE_LIFECYCLE_REJECTED: {
+    retryClass: "automatic",
+    safeMessage: "DiffDash Core is not ready to serve application requests.",
+  },
+  CORE_DRAINING: {
+    retryClass: "automatic",
+    safeMessage: "DiffDash Core is draining and cannot complete this application request.",
+  },
+  REQUEST_TOO_LARGE: {
+    retryClass: "notRetryable",
+    safeMessage: "The Core application request exceeded its size limit.",
+  },
+  RESPONSE_TOO_LARGE: {
+    retryClass: "notRetryable",
+    safeMessage: "The Core application response exceeded its size limit.",
+  },
+  REQUEST_DEADLINE_EXCEEDED: {
+    retryClass: "automatic",
+    safeMessage: "The Core application request exceeded its deadline.",
+  },
+  CORE_RPC_POLICY_ERROR: {
+    retryClass: "notRetryable",
+    safeMessage: "DiffDash Core could not apply the application request policy.",
+  },
+} as const satisfies Record<
+  CoreApplicationAdmissionFailureCode,
+  {
+    readonly retryClass: CoreApplicationFailure["retryClass"]
+    readonly safeMessage: string
+  }
+>
+
+/** Constructs a safe method-scoped failure for generic application RPC admission. */
+export const makeCoreApplicationAdmissionFailure = <Method extends string>(
+  method: Method,
+  request: HostRequestContext,
+  code: CoreApplicationAdmissionFailureCode,
+): CoreApplicationFailure<Method> => ({
+  _tag: "CoreApplicationFailure",
+  applicationInstanceId: request.applicationInstanceId,
+  processEpoch: request.processEpoch,
+  requestId: request.requestId,
+  method,
+  code,
+  ...applicationAdmissionFailureDetails[code],
+})
 
 const defectValue = Schema.NullishOr(Schema.ObjectKeyword)
 const applicationRpc = <
@@ -601,6 +675,40 @@ export const ProjectWorkspaceSaveRpc = applicationRpc(
   ProjectWorkspaceState,
   idempotentMutation(),
 )
+export const OpenCodeListSessionsRpc = applicationRpc(
+  "OpenCode.listSessions",
+  withContext({
+    projectId: ReviewProjectId,
+    search: Schema.NullOr(
+      Schema.String.pipe(
+        Schema.check(Schema.isMinLength(1)),
+        Schema.check(Schema.isMaxLength(500)),
+      ),
+    ),
+  }),
+  Schema.Array(OpenCodeSessionSummary).pipe(Schema.check(Schema.isMaxLength(5))),
+  read(15_000, 32 * KIB),
+)
+export const OpenCodeConnectSessionRpc = applicationRpc(
+  "OpenCode.connectSession",
+  withContext({ sessionId: OpenCodeSessionId, projectId: ReviewProjectId }),
+  OpenCodeConnection,
+  mutation(30_000, 4 * KIB),
+)
+export const CommentSubmissionSubmitRpc = applicationRpc(
+  "CommentSubmission.submit",
+  withContext({ destination: CommentDestination, submission: CommentSubmission }),
+  CommentSubmissionReceipt,
+  policy({
+    deadlineMs: 30_000,
+    maxRequestBytes: 64 * KIB,
+    maxResponseBytes: 4 * KIB,
+    mutation: "uncertainMutation",
+    idempotency: "nonIdempotent",
+    cancellation: "uninterruptible",
+    restart: "failOnRestart",
+  }),
+)
 export const ReviewThreadsAddUserMessageRpc = applicationRpc(
   "ReviewThreads.addUserMessage",
   withContext({ threadId: ReviewThreadId, bodyMarkdown: MarkdownBody }),
@@ -755,6 +863,9 @@ export const CoreApplicationRpcs = RpcGroup.make(
   CodeWorkspaceReadFileRpc,
   ProjectWorkspaceGetRpc,
   ProjectWorkspaceSaveRpc,
+  OpenCodeListSessionsRpc,
+  OpenCodeConnectSessionRpc,
+  CommentSubmissionSubmitRpc,
   ReviewThreadsAddUserMessageRpc,
   ReviewThreadsCreateRpc,
   ReviewThreadsGetRpc,

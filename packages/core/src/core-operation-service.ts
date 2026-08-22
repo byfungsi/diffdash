@@ -1,4 +1,5 @@
 import { ReviewTurnStore } from "@diffdash/persistence/review-turn-store"
+import { ReviewThreadStore } from "@diffdash/persistence/review-thread-store"
 import { WalkthroughOperationStore } from "@diffdash/persistence/walkthrough-operation-store"
 import {
   WalkthroughStore,
@@ -17,6 +18,7 @@ import { CoreStartupError } from "./core-startup-error"
 import { makeAnalyticsOperationHandlers } from "./operations/analytics-operation-handlers"
 import { makeApplicationOperationHandlers } from "./operations/application-operation-handlers"
 import { makeCodeWorkspaceOperationHandlers } from "./operations/code-workspace-operation-handlers"
+import { makeCommentOperationHandlers } from "./operations/comment-operation-handlers"
 import {
   assertUniqueOperationHandlers,
   type OperationHandlers,
@@ -78,6 +80,7 @@ export const coreOperationLayer = Layer.effect(
   CoreOperationService,
   Effect.gen(function* () {
     const turns = yield* ReviewTurnStore
+    const threadStore = yield* ReviewThreadStore
     const reviewAgentOperations = yield* ReviewAgentOperationsService
     const walkthroughOperationStore = yield* WalkthroughOperationStore
     const walkthroughStore = yield* WalkthroughStore
@@ -132,10 +135,25 @@ export const coreOperationLayer = Layer.effect(
         walkthrough,
       })
     })
+    const commentHandlers = yield* makeCommentOperationHandlers(
+      threadHandlers,
+      startReviewAgent,
+      (target) =>
+        reviews.resolve(target).pipe(
+          Effect.map(({ repo, snapshot }) => ({
+            projectId: repo.id,
+            reviewKey: snapshot.reviewKey,
+            baseRevision: snapshot.baseRevision,
+            headRevision: snapshot.headRevision,
+          })),
+        ),
+      threadStore.addUserMessageForSubject,
+    )
     const handlerCapabilities = [
       analyticsHandlers,
       applicationHandlers,
       codeWorkspaceHandlers,
+      commentHandlers,
       repositoryHandlers,
       resourceHandlers,
       reviewAcquisitionHandlers,
@@ -151,6 +169,7 @@ export const coreOperationLayer = Layer.effect(
       ...analyticsHandlers,
       ...applicationHandlers,
       ...codeWorkspaceHandlers,
+      ...commentHandlers,
       ...repositoryHandlers,
       ...resourceHandlers,
       ...reviewAcquisitionHandlers,

@@ -12,6 +12,7 @@ export {
   type DiffLineAnnotation,
   type FileDiffMetadata,
   type FileDiffOptions,
+  type LineAnnotation,
   getSingularPatch,
   type PostRenderPhase,
   type RenderRange,

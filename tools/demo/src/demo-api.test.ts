@@ -1,11 +1,19 @@
 import { describe, expect, it } from "@effect/vitest"
-import { Effect } from "effect"
+import { Effect, Match } from "effect"
 
+import {
+  CommentDestination,
+  CommentSubmission,
+  CommentSubmissionReceipt,
+  CommentSubject,
+} from "@diffdash/domain/comment"
 import { HostedReviewTarget, MarkdownBody } from "@diffdash/domain/review-thread"
 import { ProjectWorkspaceStateInput } from "@diffdash/domain/project-workspace"
-import { ReviewHunkId, ReviewProjectId } from "@diffdash/domain/review-identity"
+import { ReviewHunkId, ReviewProjectId, ReviewRevision } from "@diffdash/domain/review-identity"
+import { RepositoryRelativePath } from "@diffdash/domain/repository-path"
 import { RepositoryCheckoutPath } from "@diffdash/domain/repository"
-import { RepositoryComparisonRef } from "@diffdash/domain/repository-comparison"
+import { GitCommitSha, RepositoryComparisonRef } from "@diffdash/domain/repository-comparison"
+import { SubmitCommentRequest } from "@diffdash/protocol/ai-connection"
 import {
   AddReviewThreadUserMessageRequest,
   RunReviewThreadAgentRequest,
@@ -216,6 +224,148 @@ describe("scenario-backed DiffDash API", () => {
       expect(progressStages).toContain("reviewing")
       expect(progressStages.at(-1)).toBe("restoring-workspace")
       expect(timeline.getState().pendingAgentTurnIds).toEqual([])
+    }),
+  )
+
+  it.effect("routes DiffDash review comments through the demo review thread store", () =>
+    Effect.gen(function* () {
+      const scenario = yield* loadAtomicWebhookReplayScenario
+      const { api, timeline } = createDemoRuntime(scenario)
+      const source = scenario.threads[0]
+      const initialRevision = scenario.revisions[0]
+      expect(source).toBeDefined()
+      expect(initialRevision).toBeDefined()
+      if (source === undefined || initialRevision === undefined) return
+      const subject = CommentSubject.cases.ReviewLine.make({
+        target: HostedReviewTarget.make({ kind: "hosted", review }),
+        expectedBaseRevision: initialRevision.manifest.baseRevision,
+        expectedHeadRevision: initialRevision.manifest.headRevision,
+        anchor: source.thread.originalAnchor,
+      })
+
+      const started = yield* Effect.promise(() =>
+        api.ai.submitComment(
+          SubmitCommentRequest.make({
+            destination: CommentDestination.cases.DiffDash.make({}),
+            submission: CommentSubmission.cases.Start.make({
+              subject,
+              body: MarkdownBody.make("Check the transaction boundary"),
+            }),
+          }),
+        ),
+      )
+      expect(CommentSubmissionReceipt.guards.StoredLocally(started)).toBe(true)
+      if (!CommentSubmissionReceipt.guards.StoredLocally(started)) return
+      const startedDetails = yield* Effect.promise(() => api.reviewThreads.get(started.threadId))
+      const startedMessage = startedDetails.messages.at(-2)
+      expect(startedMessage).toBeDefined()
+      if (startedMessage === undefined) return
+      expect(
+        Match.valueTags(startedMessage, {
+          User: ({ bodyMarkdown }) => bodyMarkdown,
+          Pending: () => null,
+          Completed: () => null,
+          Failed: () => null,
+        }),
+      ).toBe("Check the transaction boundary")
+      expect(startedDetails.messages.at(-1)?._tag).toBe("Pending")
+
+      const initialTurnId = Object.keys(scenario.agentTurns)[0]
+      expect(initialTurnId).toBeDefined()
+      if (initialTurnId === undefined) return
+      yield* Effect.promise(() => timeline.release(initialTurnId))
+      yield* Effect.promise(() => new Promise((resolve) => setTimeout(resolve, 0)))
+
+      yield* Effect.promise(() =>
+        expect(
+          api.ai.submitComment(
+            SubmitCommentRequest.make({
+              destination: CommentDestination.cases.DiffDash.make({}),
+              submission: CommentSubmission.cases.FollowUp.make({
+                subject: CommentSubject.cases.ReviewLine.make({
+                  ...subject,
+                  expectedHeadRevision: ReviewRevision.make("stale-head"),
+                }),
+                threadId: started.threadId,
+                body: MarkdownBody.make("Stale follow-up"),
+              }),
+            }),
+          ),
+        ).rejects.toThrow("Demo comment subject does not match the current review thread"),
+      )
+
+      const followedUp = yield* Effect.promise(() =>
+        api.ai.submitComment(
+          SubmitCommentRequest.make({
+            destination: CommentDestination.cases.DiffDash.make({}),
+            submission: CommentSubmission.cases.FollowUp.make({
+              subject,
+              threadId: started.threadId,
+              body: MarkdownBody.make("What happens during a retry?"),
+            }),
+          }),
+        ),
+      )
+      expect(CommentSubmissionReceipt.guards.StoredLocally(followedUp)).toBe(true)
+      if (!CommentSubmissionReceipt.guards.StoredLocally(followedUp)) return
+      const followedUpDetails = yield* Effect.promise(() =>
+        api.reviewThreads.get(followedUp.threadId),
+      )
+      const followUpMessage = followedUpDetails.messages.at(-2)
+      expect(followUpMessage).toBeDefined()
+      if (followUpMessage === undefined) return
+      expect(
+        Match.valueTags(followUpMessage, {
+          User: ({ bodyMarkdown }) => bodyMarkdown,
+          Pending: () => null,
+          Completed: () => null,
+          Failed: () => null,
+        }),
+      ).toBe("What happens during a retry?")
+      expect(followedUpDetails.messages.at(-1)?._tag).toBe("Pending")
+      expect(timeline.getActionLog().map(({ type }) => type)).toEqual(
+        expect.arrayContaining(["reviewThreads.create", "reviewThreads.addUserMessage"]),
+      )
+
+      yield* Effect.promise(() => timeline.release("revision-updated"))
+      yield* Effect.promise(() =>
+        expect(
+          api.ai.submitComment(
+            SubmitCommentRequest.make({
+              destination: CommentDestination.cases.DiffDash.make({}),
+              submission: CommentSubmission.cases.FollowUp.make({
+                subject,
+                threadId: started.threadId,
+                body: MarkdownBody.make("Follow-up after the revision changed"),
+              }),
+            }),
+          ),
+        ).rejects.toThrow("Demo comment subject does not match the current review thread"),
+      )
+
+      yield* Effect.promise(() =>
+        expect(
+          api.ai.submitComment(
+            SubmitCommentRequest.make({
+              destination: CommentDestination.cases.DiffDash.make({}),
+              submission: CommentSubmission.cases.Start.make({
+                subject: CommentSubject.cases.CodeLine.make({
+                  projectId: ReviewProjectId.make(scenario.repository.id),
+                  revision: GitCommitSha.make(source.thread.currentHeadRevision),
+                  path: RepositoryRelativePath.make("src/example.ts"),
+                  lineNumber: 1,
+                  lineContent: "const example = true",
+                }),
+                body: MarkdownBody.make("Explain this line"),
+              }),
+            }),
+          ),
+        ).rejects.toMatchObject({
+          _tag: "CommentSubmissionUnsupportedError",
+          destination: "DiffDash",
+          subject: "CodeLine",
+        }),
+      )
     }),
   )
 

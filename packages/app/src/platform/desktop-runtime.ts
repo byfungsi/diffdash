@@ -5,6 +5,14 @@ import type { AppUpdateState } from "@diffdash/protocol/app-update"
 import type { AnalyticsEvent } from "@diffdash/protocol/analytics"
 import type { CliNavigationCommand } from "@diffdash/protocol/cli-navigation"
 import type { AppPrerequisites, DiffDashCliInstallResult } from "@diffdash/protocol/prerequisites"
+import type {
+  ConnectOpenCodeSessionRequest,
+  ListOpenCodeSessionsRequest,
+  OpenCodeConnection,
+  OpenCodeSessionSummary,
+  SubmitCommentReceipt,
+  SubmitCommentRequest,
+} from "@diffdash/protocol/ai-connection"
 import { EventChannel, InvokeChannel } from "@diffdash/protocol/channels"
 import { PreloadClient } from "./preload-client"
 import {
@@ -20,6 +28,17 @@ export class DesktopRuntime extends Context.Service<
   {
     readonly getDiagnostics: () => Effect.Effect<AppPrerequisites, RendererApiError>
     readonly installCli: () => Effect.Effect<DiffDashCliInstallResult, RendererApiError>
+    readonly ai: {
+      readonly listOpenCodeSessions: (
+        request: ListOpenCodeSessionsRequest,
+      ) => Effect.Effect<readonly OpenCodeSessionSummary[], RendererApiError>
+      readonly connectOpenCodeSession: (
+        request: ConnectOpenCodeSessionRequest,
+      ) => Effect.Effect<OpenCodeConnection, RendererApiError>
+      readonly submitComment: (
+        request: SubmitCommentRequest,
+      ) => Effect.Effect<typeof SubmitCommentReceipt.Type, RendererApiError>
+    }
     readonly openExternalUrl: (url: WebUrl) => Effect.Effect<void, RendererApiError>
     readonly analytics: {
       readonly start: () => Effect.Effect<void, RendererApiError>
@@ -75,6 +94,18 @@ export const desktopRuntimeLayer = Layer.effect(
       getDiagnostics: () => invokePreload(InvokeChannel.appDiagnostics, () => api.diagnostics()),
       installCli: () =>
         invokePreload(InvokeChannel.appInstallDiffDashCli, () => api.installDiffDashCli()),
+      ai: {
+        listOpenCodeSessions: (request) =>
+          invokePreload(InvokeChannel.aiListOpenCodeSessions, () =>
+            api.ai.listOpenCodeSessions(request),
+          ),
+        connectOpenCodeSession: (request) =>
+          invokePreload(InvokeChannel.aiConnectOpenCodeSession, () =>
+            api.ai.connectOpenCodeSession(request),
+          ),
+        submitComment: (request) =>
+          invokePreload(InvokeChannel.aiSubmitComment, () => api.ai.submitComment(request)),
+      },
       openExternalUrl: (url) =>
         invokePreload(InvokeChannel.appOpenExternalUrl, () => api.openExternalUrl(url)),
       analytics: {

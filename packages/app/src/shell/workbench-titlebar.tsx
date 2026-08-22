@@ -1,4 +1,5 @@
 import { ArrowLeft, Keyboard, PanelLeftClose, PanelLeftOpen, Search } from "lucide-react"
+import type { ReactNode } from "react"
 import { Button } from "@/shared/ui/button"
 import { cn } from "@/shared/utils"
 import { isMacPlatform, keyboardShortcutModifierLabel } from "./keyboard-shortcut-platform"
@@ -15,6 +16,7 @@ export const WorkbenchTitlebar = ({
   onOpenQuickNavigation,
   onContextActionsHostChange,
   onToggleSidebar,
+  aiConnectionControl,
 }: {
   readonly canNavigateBack: boolean
   readonly commandLabel: string
@@ -26,6 +28,7 @@ export const WorkbenchTitlebar = ({
   readonly onOpenQuickNavigation: () => void
   readonly onContextActionsHostChange: (host: HTMLDivElement | null) => void
   readonly onToggleSidebar: () => void
+  readonly aiConnectionControl?: ReactNode
 }) => {
   const isMac = isMacPlatform()
   const shortcutModifier = keyboardShortcutModifierLabel()
@@ -108,6 +111,7 @@ export const WorkbenchTitlebar = ({
       </div>
 
       <div className="workbench-titlebar-interactive ml-auto flex items-center pr-2">
+        {aiConnectionControl}
         <Button
           type="button"
           size="sm"

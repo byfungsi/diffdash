@@ -36,6 +36,14 @@ import { ReviewProjectId } from "@diffdash/domain/review-identity"
 import { WebUrl } from "@diffdash/domain/web-url"
 import { Schema, SchemaTransformation } from "effect"
 import { AgentProviderCatalog } from "./agent-providers"
+import {
+  ConnectOpenCodeSessionRequest,
+  ListOpenCodeSessionsRequest,
+  OpenCodeConnection,
+  OpenCodeSessionSummary,
+  SubmitCommentReceipt,
+  SubmitCommentRequest,
+} from "./ai-connection"
 import { AnalyticsEvent } from "./analytics"
 import { AppUpdateState } from "./app-update"
 import { EventChannel, InvokeChannel } from "./channels"
@@ -208,6 +216,24 @@ export const InvokeContract = {
     InvokeChannel.agentProvidersGetCatalog,
     EmptyRequest,
     AgentProviderCatalog,
+  ),
+  [InvokeChannel.aiListOpenCodeSessions]: defineInvoke(
+    InvokeChannel.aiListOpenCodeSessions,
+    ListOpenCodeSessionsRequest,
+    Schema.Array(OpenCodeSessionSummary).pipe(Schema.check(Schema.isMaxLength(5))),
+    { maxRequestBytes: 4 * KIB, maxResponseBytes: 32 * KIB },
+  ),
+  [InvokeChannel.aiConnectOpenCodeSession]: defineInvoke(
+    InvokeChannel.aiConnectOpenCodeSession,
+    ConnectOpenCodeSessionRequest,
+    OpenCodeConnection,
+    { maxRequestBytes: 4 * KIB, maxResponseBytes: 4 * KIB },
+  ),
+  [InvokeChannel.aiSubmitComment]: defineInvoke(
+    InvokeChannel.aiSubmitComment,
+    SubmitCommentRequest,
+    SubmitCommentReceipt,
+    { maxRequestBytes: 64 * KIB, maxResponseBytes: 4 * KIB },
   ),
   [InvokeChannel.appDiagnostics]: defineInvoke(
     InvokeChannel.appDiagnostics,

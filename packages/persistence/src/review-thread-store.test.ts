@@ -6,6 +6,7 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 
 import { AgentPromptVersion } from "@diffdash/domain/agent-run"
+import { CommentSubjectMismatchError } from "@diffdash/domain/comment"
 import { makeHostedReviewLocator } from "@diffdash/domain/git-provider"
 import { ReviewAgentProviderId } from "@diffdash/domain/review-agent"
 import { RepositoryRelativePath } from "@diffdash/domain/repository-path"
@@ -281,8 +282,25 @@ index 1111111..2222222 100644
           usage: null,
           memoryUpdate: null,
         })
-        const updated = yield* store.addUserMessage({
+        const mismatched = yield* Effect.result(
+          store.addUserMessageForSubject({
+            threadId: created.thread.id,
+            repoId: repo.id,
+            reviewKey,
+            currentBaseRevision: baseRevision,
+            currentHeadRevision: headRevision,
+            currentAnchor: LineReviewAnchor.make({ ...lineAnchor, lineNumber: 2 }),
+            bodyMarkdown: MarkdownBody.make("Wrong-line follow-up"),
+          }),
+        )
+        const afterMismatch = yield* store.get(created.thread.id)
+        const updated = yield* store.addUserMessageForSubject({
           threadId: created.thread.id,
+          repoId: repo.id,
+          reviewKey,
+          currentBaseRevision: baseRevision,
+          currentHeadRevision: headRevision,
+          currentAnchor: lineAnchor,
           bodyMarkdown: MarkdownBody.make("Follow-up question"),
         })
 
@@ -292,6 +310,11 @@ index 1111111..2222222 100644
           { _tag: "User", sequence: 3 },
         ])
         expect(Result.isFailure(blocked)).toBe(true)
+        expect(Result.isFailure(mismatched)).toBe(true)
+        if (Result.isFailure(mismatched)) {
+          expect(mismatched.failure).toBeInstanceOf(CommentSubjectMismatchError)
+        }
+        expect(afterMismatch.messages).toHaveLength(2)
       }).pipe(Effect.provide(makeLayer(databasePath)))
     }),
   )

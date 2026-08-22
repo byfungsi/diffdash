@@ -12,7 +12,14 @@ import {
 } from "@diffdash/domain/review-agent"
 import { makeReviewKey, ReviewProjectId, ReviewRevision } from "@diffdash/domain/review-identity"
 import { WebUrl } from "@diffdash/domain/web-url"
-import { Array as EffectArray, Match, Order } from "effect"
+import {
+  CommentDestination,
+  CommentSubmission,
+  CommentSubmissionReceipt,
+  CommentSubject,
+  CommentSubjectUnavailableError,
+} from "@diffdash/domain/comment"
+import { Array as EffectArray, Effect, Match, Option, Order } from "effect"
 import {
   HostedReviewTarget,
   MarkdownBody,
@@ -24,11 +31,7 @@ import {
   type ReviewThreadMessageId,
   type ReviewThreadTarget,
 } from "@diffdash/domain/review-thread"
-import {
-  AddReviewThreadUserMessageRequest,
-  CreateReviewThreadRequest,
-  RunReviewThreadAgentRequest,
-} from "@diffdash/protocol/review-threads"
+import { RunReviewThreadAgentRequest } from "@diffdash/protocol/review-threads"
 import { AlertCircle, Bot, Loader2, MessageSquare, UserRound } from "lucide-react"
 import {
   Fragment,
@@ -37,6 +40,7 @@ import {
   useEffect,
   useEffectEvent,
   useId,
+  useLayoutEffect,
   useRef,
   useState,
 } from "react"
@@ -55,6 +59,7 @@ import { Button } from "@/shared/ui/button"
 import { Textarea } from "@/shared/ui/textarea"
 import { UnicodeLoadingText } from "@/shared/ui/unicode-loading-text"
 import { cn } from "@/shared/utils"
+import { useCommentSubmission } from "@/comments/comment-submission"
 
 /* oxlint-disable jsx-a11y/no-noninteractive-tabindex -- Scrollable conversation logs need keyboard focus. */
 
@@ -88,10 +93,7 @@ export type ReviewThreadScope =
 
 /** Optional orchestration seam for an agent API that is not currently exposed through preload. */
 export type ReviewThreadOrchestration = {
-  readonly retryAgentMessage: (
-    threadId: ReviewThreadId,
-    messageId: ReviewThreadMessageId,
-  ) => Promise<void>
+  readonly retryAgentMessage: (threadId: ReviewThreadId) => Promise<void>
 }
 
 /** State and mutations shared by the review thread surfaces. */
@@ -100,7 +102,10 @@ export type ReviewThreadsController = {
   readonly error: string | null
   readonly loading: boolean
   readonly available: boolean
-  readonly createThread: (anchor: ReviewThreadAnchor, bodyMarkdown: string) => Promise<void>
+  readonly createThread: (
+    anchor: ReviewThreadAnchor,
+    bodyMarkdown: string,
+  ) => Promise<CommentSubmissionReceipt>
   readonly addUserMessage: (threadId: ReviewThreadId, bodyMarkdown: string) => Promise<void>
   readonly runAgent: (threadId: ReviewThreadId) => Promise<void>
   readonly runningThreadIds: readonly ReviewThreadId[]
@@ -114,6 +119,7 @@ export type ReviewThreadsController = {
 export function useReviewThreads(scope: ReviewThreadScope): ReviewThreadsController {
   const captureAnalytics = useCaptureAnalytics()
   const automation = useReviewAutomation()
+  const commentSubmission = useCommentSubmission()
   const [details, setDetails] = useState<readonly ReviewThreadDetails[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
@@ -129,16 +135,35 @@ export function useReviewThreads(scope: ReviewThreadScope): ReviewThreadsControl
   const localTargetKey = localTarget === null ? null : localReviewTargetKey(localTarget)
   const comparisonTargetKey =
     comparisonTarget === null ? null : makeRepositoryComparisonReviewKey(comparisonTarget)
+  const scopeKey = JSON.stringify([
+    scope.kind,
+    hostedReviewKey,
+    localTargetKey,
+    comparisonTargetKey,
+    baseRevision,
+    headRevision,
+  ])
+  const activeScopeKeyRef = useRef<string | null>(scopeKey)
   const available = baseRevision !== null && headRevision !== null
   const listThreadDetails = useEffectEvent(() =>
     automation.threads.listDetails(reviewThreadTarget(hostedReview, localTarget, comparisonTarget)),
   )
 
+  useLayoutEffect(() => {
+    activeScopeKeyRef.current = scopeKey
+    return () => {
+      if (activeScopeKeyRef.current === scopeKey) activeScopeKeyRef.current = null
+    }
+  }, [scopeKey])
+
   const load = async () => {
+    const requestedScopeKey = scopeKey
     if (!available) {
-      setDetails([])
-      setLoading(false)
-      setError("Threads are unavailable until the review revisions are known.")
+      if (activeScopeKeyRef.current === requestedScopeKey) {
+        setDetails([])
+        setLoading(false)
+        setError("Threads are unavailable until the review revisions are known.")
+      }
       return
     }
 
@@ -150,11 +175,15 @@ export function useReviewThreads(scope: ReviewThreadScope): ReviewThreadsControl
           reviewThreadTarget(hostedReview, localTarget, comparisonTarget),
         ),
       )
-      setDetails(sortThreadDetails(loaded))
+      if (activeScopeKeyRef.current === requestedScopeKey) {
+        setDetails(sortThreadDetails(loaded))
+      }
     } catch (cause) {
-      setError(formatError(cause, "Could not load review threads"))
+      if (activeScopeKeyRef.current === requestedScopeKey) {
+        setError(formatError(cause, "Could not load review threads"))
+      }
     } finally {
-      setLoading(false)
+      if (activeScopeKeyRef.current === requestedScopeKey) setLoading(false)
     }
   }
 
@@ -207,16 +236,20 @@ export function useReviewThreads(scope: ReviewThreadScope): ReviewThreadsControl
     hostedReviewKey,
     localTargetKey,
     automation,
+    scopeKey,
   ])
 
   const refreshThreadDetails = async (threadId: ReviewThreadId) => {
+    if (activeScopeKeyRef.current !== scopeKey) return null
     try {
       const refreshed = await runRendererPromise(automation.threads.get(threadId))
+      if (activeScopeKeyRef.current !== scopeKey) return null
       setDetails((current) =>
         sortThreadDetails([...current.filter((item) => item.thread.id !== threadId), refreshed]),
       )
       return refreshed
     } catch (cause) {
+      if (activeScopeKeyRef.current !== scopeKey) return null
       setError(formatError(cause, "Could not refresh thread"))
       throw cause
     }
@@ -225,9 +258,57 @@ export function useReviewThreads(scope: ReviewThreadScope): ReviewThreadsControl
     await refreshThreadDetails(threadId)
   }
 
-  const runAgent = async (threadId: ReviewThreadId, resolvedDetails?: ReviewThreadDetails) => {
-    const currentDetails = resolvedDetails ?? details.find((item) => item.thread.id === threadId)
-    if (currentDetails === undefined || baseRevision === null || headRevision === null) {
+  const reconcileAcceptedAgent = async (
+    threadId: ReviewThreadId,
+    initial: ReviewThreadDetails,
+    requestedScopeKey: string,
+    previousLatestMessageId?: ReviewThreadMessageId,
+  ) => {
+    setAgentErrors((current) => {
+      const { [threadId]: _removed, ...remaining } = current
+      return remaining
+    })
+    setRunningThreadIds((current) =>
+      current.includes(threadId) ? current : [...current, threadId],
+    )
+    setAgentProgress((current) => [
+      ...current.filter((item) => item.threadId !== threadId),
+      ReviewAgentProgress.make({ threadId, stage: "preparing-context" }),
+    ])
+    let current = initial
+    try {
+      while (
+        activeScopeKeyRef.current === requestedScopeKey &&
+        !hasNewTerminalAgentResponse(current, previousLatestMessageId)
+      ) {
+        await new Promise<void>((resolve) => window.setTimeout(resolve, 100))
+        const refreshed = await refreshThreadDetails(threadId)
+        if (refreshed === null) return
+        current = refreshed
+      }
+    } catch (cause) {
+      if (activeScopeKeyRef.current === requestedScopeKey) {
+        setAgentErrors((errors) => ({
+          ...errors,
+          [threadId]: formatError(cause, "Could not refresh the accepted agent response"),
+        }))
+      }
+    } finally {
+      if (activeScopeKeyRef.current === requestedScopeKey) {
+        setRunningThreadIds((threadIds) => threadIds.filter((id) => id !== threadId))
+        setAgentProgress((progress) => progress.filter((item) => item.threadId !== threadId))
+      }
+    }
+  }
+
+  const runAgent = async (threadId: ReviewThreadId) => {
+    const currentDetails = details.find((item) => item.thread.id === threadId)
+    if (
+      activeScopeKeyRef.current !== scopeKey ||
+      currentDetails === undefined ||
+      baseRevision === null ||
+      headRevision === null
+    ) {
       throw new Error("Review thread target is unavailable")
     }
     const previousLatestMessageId = currentDetails.messages.at(-1)?.id
@@ -257,6 +338,7 @@ export function useReviewThreads(scope: ReviewThreadScope): ReviewThreadsControl
       )
       window.setTimeout(() => void refreshThread(threadId).catch(() => undefined), 100)
       const result = await pending
+      if (activeScopeKeyRef.current !== scopeKey) return
       setDetails((current) =>
         sortThreadDetails([...current.filter((item) => item.thread.id !== threadId), result]),
       )
@@ -272,6 +354,7 @@ export function useReviewThreads(scope: ReviewThreadScope): ReviewThreadsControl
       setError(null)
     } catch (cause) {
       const refreshed = await refreshThreadDetails(threadId).catch(() => null)
+      if (activeScopeKeyRef.current !== scopeKey) throw cause
       const latestMessage = refreshed?.messages.at(-1)
       const persistedNewFailure =
         latestMessage !== undefined &&
@@ -289,60 +372,124 @@ export function useReviewThreads(scope: ReviewThreadScope): ReviewThreadsControl
       }
       throw cause
     } finally {
-      setRunningThreadIds((current) => current.filter((id) => id !== threadId))
-      setAgentProgress((current) => current.filter((item) => item.threadId !== threadId))
+      if (activeScopeKeyRef.current === scopeKey) {
+        setRunningThreadIds((current) => current.filter((id) => id !== threadId))
+        setAgentProgress((current) => current.filter((item) => item.threadId !== threadId))
+      }
     }
   }
 
   const createThread = async (anchor: ReviewThreadAnchor, bodyMarkdown: string) => {
+    const requestedScopeKey = scopeKey
     if (baseRevision === null || headRevision === null) {
       throw new Error("Review revisions are unavailable")
     }
+    const body = MarkdownBody.make(bodyMarkdown)
+    const subject = CommentSubject.cases.ReviewLine.make({
+      target: reviewThreadTarget(hostedReview, localTarget, comparisonTarget),
+      expectedBaseRevision: ReviewRevision.make(baseRevision),
+      expectedHeadRevision: ReviewRevision.make(headRevision),
+      anchor,
+    })
     try {
-      const created = await runRendererPromise(
-        automation.threads.create(
-          CreateReviewThreadRequest.make({
-            target: reviewThreadTarget(hostedReview, localTarget, comparisonTarget),
-            expectedBaseRevision: ReviewRevision.make(baseRevision),
-            expectedHeadRevision: ReviewRevision.make(headRevision),
-            anchor,
-            bodyMarkdown: MarkdownBody.make(bodyMarkdown),
-          }),
-        ),
+      const receipt = await commentSubmission.submit(
+        CommentSubmission.cases.Start.make({ subject, body }),
       )
-      setDetails((current) => sortThreadDetails([...current, created]))
-      captureAnalytics({
-        event: "review_thread_created",
-        reviewType:
-          comparisonTarget !== null
-            ? "repository_comparison"
-            : localTarget === null
-              ? "pull_request"
-              : "local_diff",
+      if (activeScopeKeyRef.current !== requestedScopeKey) return receipt
+      const reflected = await CommentSubmissionReceipt.match(receipt, {
+        StoredLocally: async ({ threadId, agentAccepted }) => {
+          const created = await refreshThreadDetails(threadId).catch(() => null)
+          if (created === null) return false
+          captureAnalytics({
+            event: "review_thread_created",
+            reviewType:
+              comparisonTarget !== null
+                ? "repository_comparison"
+                : localTarget === null
+                  ? "pull_request"
+                  : "local_diff",
+          })
+          if (agentAccepted) {
+            void reconcileAcceptedAgent(threadId, created, requestedScopeKey)
+          }
+          return true
+        },
+        Forwarded: async () => true,
       })
-      setError(null)
-      void runAgent(created.thread.id, created).catch(() => undefined)
+      if (reflected) setError(null)
+      return receipt
     } catch (cause) {
-      setError(formatError(cause, "Could not create thread"))
+      if (activeScopeKeyRef.current === requestedScopeKey) {
+        setError(formatError(cause, "Could not submit comment"))
+      }
       throw cause
     }
   }
 
   const addUserMessage = async (threadId: ReviewThreadId, bodyMarkdown: string) => {
+    const requestedScopeKey = scopeKey
+    const body = MarkdownBody.make(bodyMarkdown)
+    const currentDetails = details.find((item) => item.thread.id === threadId)
+    const previousLatestMessageId = currentDetails?.messages.at(-1)?.id
     try {
-      const updatedDetails = await runRendererPromise(
-        automation.threads.addUserMessage(
-          AddReviewThreadUserMessageRequest.make({
-            threadId,
-            bodyMarkdown: MarkdownBody.make(bodyMarkdown),
+      const receipt = await runRendererPromise(
+        Effect.fromOption(
+          Option.all({
+            details: Option.fromNullishOr(currentDetails),
+            baseRevision: Option.fromNullishOr(baseRevision),
+            headRevision: Option.fromNullishOr(headRevision),
           }),
+          () => CommentSubjectUnavailableError.make({ threadId }),
+        ).pipe(
+          Effect.flatMap(({ details: current, baseRevision: base, headRevision: head }) => {
+            const currentAnchor = current.thread.activeAnchor
+            if (currentAnchor === null) {
+              return Effect.fail(CommentSubjectUnavailableError.make({ threadId }))
+            }
+            return Effect.succeed(
+              CommentSubject.cases.ReviewLine.make({
+                target: reviewThreadTarget(hostedReview, localTarget, comparisonTarget),
+                expectedBaseRevision: ReviewRevision.make(base),
+                expectedHeadRevision: ReviewRevision.make(head),
+                anchor: currentAnchor,
+              }),
+            )
+          }),
+          Effect.flatMap((reviewSubject) =>
+            Effect.tryPromise(() =>
+              commentSubmission.submit(
+                CommentSubmission.cases.FollowUp.make({
+                  subject: reviewSubject,
+                  threadId,
+                  body,
+                }),
+              ),
+            ),
+          ),
         ),
       )
-      setDetails((current) => replaceThreadDetails(current, updatedDetails))
-      setError(null)
-      void runAgent(threadId, updatedDetails).catch(() => undefined)
+      if (activeScopeKeyRef.current !== requestedScopeKey) return
+      const reflected = await CommentSubmissionReceipt.match(receipt, {
+        StoredLocally: async ({ threadId: updatedThreadId, agentAccepted }) => {
+          const updated = await refreshThreadDetails(updatedThreadId).catch(() => null)
+          if (updated === null) return false
+          if (agentAccepted) {
+            void reconcileAcceptedAgent(
+              updatedThreadId,
+              updated,
+              requestedScopeKey,
+              previousLatestMessageId,
+            )
+          }
+          return true
+        },
+        Forwarded: async () => true,
+      })
+      if (reflected) setError(null)
     } catch (cause) {
-      setError(formatError(cause, "Could not send follow-up message"))
+      if (activeScopeKeyRef.current === requestedScopeKey) {
+        setError(formatError(cause, "Could not send follow-up message"))
+      }
       throw cause
     }
   }
@@ -367,16 +514,17 @@ export function useReviewThreads(scope: ReviewThreadScope): ReviewThreadsControl
 export function ReviewThreadComposer({
   label = "Line comment",
   placeholder = "Write a Markdown comment",
-  submitLabel = "Comment",
+  diffDashSubmitLabel = "Comment",
   onCancel,
   onSubmit,
 }: {
   readonly label?: string
   readonly placeholder?: string
-  readonly submitLabel?: string
+  readonly diffDashSubmitLabel?: string
   readonly onCancel?: () => void
   readonly onSubmit: (bodyMarkdown: string) => Promise<void>
 }) {
+  const { destination } = useCommentSubmission()
   const labelId = useId()
   const formRef = useRef<HTMLFormElement>(null)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
@@ -483,7 +631,10 @@ export function ReviewThreadComposer({
         )}
         <Button type="submit" size="xs" disabled={body.trim().length === 0 || submitting}>
           {submitting ? <Loader2 className="animate-spin" /> : null}
-          {submitLabel}
+          {CommentDestination.match(destination, {
+            DiffDash: () => diffDashSubmitLabel,
+            OpenCode: () => "Send to OpenCode",
+          })}
         </Button>
       </div>
     </form>
@@ -689,7 +840,7 @@ export function ReviewThreadPanel({
             onRetry={() => {
               if (orchestration === undefined) return
               void run(async () => {
-                await orchestration.retryAgentMessage(thread.id, message.id)
+                await orchestration.retryAgentMessage(thread.id)
                 await onRefresh(thread.id)
               }, "Could not retry agent response")
             }}
@@ -710,7 +861,7 @@ export function ReviewThreadPanel({
                 onClick={() => {
                   if (latestMessage === undefined) return
                   void run(
-                    () => orchestration.retryAgentMessage(thread.id, latestMessage.id),
+                    () => orchestration.retryAgentMessage(thread.id),
                     "Could not retry agent response",
                   )
                 }}
@@ -726,7 +877,7 @@ export function ReviewThreadPanel({
           <ReviewThreadComposer
             label="Continue conversation"
             placeholder="Ask a follow-up question"
-            submitLabel="Send"
+            diffDashSubmitLabel="Send"
             onSubmit={(bodyMarkdown) => onAddUserMessage(thread.id, bodyMarkdown)}
           />
         </div>
@@ -1070,16 +1221,27 @@ const inlineMarkdown = (
     })
 }
 
-const replaceThreadDetails = (
-  details: readonly ReviewThreadDetails[],
-  replacement: ReviewThreadDetails,
-) => details.map((item) => (item.thread.id === replacement.thread.id ? replacement : item))
-
 const sortThreadDetails = (details: readonly ReviewThreadDetails[]) =>
   EffectArray.sort(
     details,
     Order.mapInput(Order.String, (detail: ReviewThreadDetails) => detail.thread.createdAt),
   )
+
+const hasNewTerminalAgentResponse = (
+  { messages }: ReviewThreadDetails,
+  previousLatestMessageId?: ReviewThreadMessageId,
+): boolean => {
+  const latest = messages.at(-1)
+  return (
+    latest !== undefined &&
+    Match.valueTags(latest, {
+      Pending: () => false,
+      User: () => false,
+      Completed: (message) => message.id !== previousLatestMessageId,
+      Failed: (message) => message.id !== previousLatestMessageId,
+    })
+  )
+}
 
 const reviewThreadTarget = (
   hostedReview: HostedReviewLocator | null,
