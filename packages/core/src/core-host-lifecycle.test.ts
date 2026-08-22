@@ -99,6 +99,41 @@ describe("Core authenticated host lifecycle", () => {
     }),
   )
 
+  it.effect("releases acquired ownership resources after authenticated shutdown", () =>
+    Effect.gen(function* () {
+      const lifecycle = yield* makeCoreLifecycle(identity)
+      const death = yield* Deferred.make<void>()
+      const acquired = yield* Deferred.make<void>()
+      const released = yield* Deferred.make<void>()
+      const runner = yield* runCoreHostLifecycle(identity).pipe(
+        Effect.provideService(CoreAuthenticatedHostSession, makeHostSession(death)),
+        Effect.provideService(
+          CoreOwnershipRecovery,
+          CoreOwnershipRecovery.of({
+            acquireAndRecover: () =>
+              Deferred.succeed(acquired, undefined).pipe(
+                Effect.as({ release: Deferred.succeed(released, undefined) }),
+              ),
+          }),
+        ),
+        Effect.provideService(CoreLifecycle, lifecycle),
+        Effect.forkScoped,
+      )
+
+      yield* lifecycle.awaitOwnershipAuthorization
+      yield* lifecycle.authorizeDatabaseOwnership(authorization)
+      yield* Deferred.await(acquired)
+      while ((yield* lifecycle.health(authorization)).lifecycle !== "ready") {
+        yield* Effect.yieldNow
+      }
+      yield* lifecycle.shutdown(authorization)
+      yield* Fiber.join(runner)
+
+      expect(yield* Deferred.isDone(released)).toBe(true)
+      expect(yield* lifecycle.health(authorization)).toMatchObject({ lifecycle: "stopped" })
+    }),
+  )
+
   it.effect("fails closed after ownership authorization when recovery cannot start", () =>
     Effect.gen(function* () {
       const lifecycle = yield* makeCoreLifecycle(identity)

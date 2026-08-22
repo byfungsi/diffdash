@@ -9,7 +9,7 @@ import {
 import type { CoreEventHint } from "@diffdash/core-rpc/event"
 import { CoreCommandStore } from "@diffdash/persistence/core-command-store"
 import type { DatabaseError } from "@diffdash/persistence/database"
-import { Clock, Context, Effect, Exit, Layer, Option, Schema } from "effect"
+import { Cause, Clock, Context, Effect, Exit, Layer, Option, Schema } from "effect"
 import type * as SqlClient from "effect/unstable/sql/SqlClient"
 import { isAbsolute } from "node:path"
 
@@ -116,73 +116,70 @@ const launchStandaloneCoreProcess = Effect.fn("launchStandaloneCoreProcess")(fun
       const runtimeServices = Context.get(context, CoreRuntimeServices)
       const ownership = Context.get(context, CoreOwnershipRecovery)
 
-      const ownAndRun = Effect.scoped(
-        lifecycle.ownershipAuthorization.pipe(
-          Effect.flatMap((authorizationId) =>
-            lifecycle.interruptOnDrain(
-              Effect.acquireRelease(
-                ownership.acquireAndRecover({ ...identity, authorizationId }),
-                (lease) => lease.release,
-              ),
-            ),
-          ),
-          Effect.andThen(
-            Effect.gen(function* () {
-              const databaseLayer = databaseLayerForPath(coreConfiguration.paths.database)
-              const eventLayer = makeCoreEventHubLayer(
-                eventDeliveryTransform === undefined
-                  ? identity
-                  : { ...identity, deliveryTransform: eventDeliveryTransform },
-              )
-              const commandLayer = coreDurableCommandLayer.pipe(
-                Layer.provide(CoreCommandStore.layer),
-                Layer.provide(eventLayer),
-                Layer.provide(databaseLayer),
-              )
-              const operationLayer = createStandaloneCoreLayer(
-                coreConfiguration,
-                databaseLayer,
-                providerComposition,
-              ).pipe(Layer.provideMerge(eventLayer))
-              const runtimeContext = yield* Layer.build(
-                Layer.mergeAll(operationLayer, commandLayer, eventLayer),
-              )
-              const operations = Context.get(runtimeContext, CoreOperationService)
-              yield* operations.start
-              const nowMs = yield* Clock.currentTimeMillis
-              yield* Context.get(runtimeContext, ResourceCollection).reconcile(
-                nowMs,
-                nowMs + 60_000,
-              )
-              yield* Context.get(runtimeContext, ResourceCollection).collectPolicy(
-                nowMs,
-                nowMs + 60_000,
-              )
-              yield* runtimeServices.install({
-                operations,
-                commands: Context.get(runtimeContext, CoreDurableCommandService),
-                events: Context.get(runtimeContext, CoreEventHub),
-                reviewLifecycleDiagnostics: Context.get(runtimeContext, ReviewLifecycleDiagnostics),
-                progressiveReviews: {
-                  sessions: Context.get(runtimeContext, CoreProgressiveReviewService),
-                  repository: Context.get(runtimeContext, SnapshotRepository),
-                  search: Context.get(runtimeContext, SnapshotSearch),
-                },
-              })
-              yield* lifecycle.completeRecovery
-              return yield* Effect.never
-            }),
-          ),
-          Effect.tapError((error) =>
-            runtimeServices
-              .fail(toCoreStartupError(error))
-              .pipe(Effect.andThen(lifecycle.fail), Effect.ignore),
+      const ownedRuntime = lifecycle.ownershipAuthorization.pipe(
+        Effect.flatMap((authorizationId) =>
+          Effect.acquireRelease(
+            ownership.acquireAndRecover({ ...identity, authorizationId }),
+            (lease) => lease.release,
           ),
         ),
+        Effect.andThen(
+          Effect.gen(function* () {
+            const databaseLayer = databaseLayerForPath(coreConfiguration.paths.database)
+            const eventLayer = makeCoreEventHubLayer(
+              eventDeliveryTransform === undefined
+                ? identity
+                : { ...identity, deliveryTransform: eventDeliveryTransform },
+            )
+            const commandLayer = coreDurableCommandLayer.pipe(
+              Layer.provide(CoreCommandStore.layer),
+              Layer.provide(eventLayer),
+              Layer.provide(databaseLayer),
+            )
+            const operationLayer = createStandaloneCoreLayer(
+              coreConfiguration,
+              databaseLayer,
+              providerComposition,
+            ).pipe(Layer.provideMerge(eventLayer))
+            const runtimeContext = yield* Layer.build(
+              Layer.mergeAll(operationLayer, commandLayer, eventLayer),
+            )
+            const operations = Context.get(runtimeContext, CoreOperationService)
+            yield* operations.start
+            const nowMs = yield* Clock.currentTimeMillis
+            yield* Context.get(runtimeContext, ResourceCollection).reconcile(nowMs, nowMs + 60_000)
+            yield* Context.get(runtimeContext, ResourceCollection).collectPolicy(
+              nowMs,
+              nowMs + 60_000,
+            )
+            yield* runtimeServices.install({
+              operations,
+              commands: Context.get(runtimeContext, CoreDurableCommandService),
+              events: Context.get(runtimeContext, CoreEventHub),
+              reviewLifecycleDiagnostics: Context.get(runtimeContext, ReviewLifecycleDiagnostics),
+              progressiveReviews: {
+                sessions: Context.get(runtimeContext, CoreProgressiveReviewService),
+                repository: Context.get(runtimeContext, SnapshotRepository),
+                search: Context.get(runtimeContext, SnapshotSearch),
+              },
+            })
+            yield* lifecycle.completeRecovery
+            return yield* Effect.never
+          }),
+        ),
+        Effect.tapError((error) =>
+          runtimeServices
+            .fail(toCoreStartupError(error))
+            .pipe(Effect.andThen(lifecycle.fail), Effect.ignore),
+        ),
       )
+      const ownAndRun = Effect.scoped(lifecycle.interruptOnDrain(ownedRuntime))
       const exit = yield* Effect.exit(ownAndRun)
       yield* lifecycle.completeShutdown
-      if (Exit.isFailure(exit)) return yield* Effect.failCause(exit.cause)
+      if (Exit.isFailure(exit) && !Cause.hasInterruptsOnly(exit.cause)) {
+        return yield* Effect.failCause(exit.cause)
+      }
+      return undefined
     }),
   ).pipe(Effect.mapError(() => startupFailure("host-start-failed")))
 })

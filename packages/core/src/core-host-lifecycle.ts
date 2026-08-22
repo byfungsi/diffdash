@@ -1,4 +1,4 @@
-import { Effect } from "effect"
+import { Cause, Effect } from "effect"
 
 import { CoreAuthenticatedHostSession } from "./core-transport-authentication"
 import { CoreLifecycle, type CoreLifecycleIdentity } from "./core-lifecycle"
@@ -12,20 +12,19 @@ export const runCoreHostLifecycle = Effect.fn("CoreHostLifecycle.run")(function*
   const hostSession = yield* CoreAuthenticatedHostSession
   const ownershipRecovery = yield* CoreOwnershipRecovery
 
-  const ownAndRecover = Effect.scoped(
-    lifecycle.ownershipAuthorization.pipe(
-      Effect.flatMap((authorizationId) =>
-        lifecycle.interruptOnDrain(
-          Effect.acquireRelease(
-            ownershipRecovery.acquireAndRecover({ ...identity, authorizationId }),
-            (lease) => lease.release,
-          ),
-        ),
+  const ownedRecovery = lifecycle.ownershipAuthorization.pipe(
+    Effect.flatMap((authorizationId) =>
+      Effect.acquireRelease(
+        ownershipRecovery.acquireAndRecover({ ...identity, authorizationId }),
+        (lease) => lease.release,
       ),
-      Effect.andThen(lifecycle.completeRecovery),
-      Effect.andThen(Effect.never),
-      Effect.tapError(() => lifecycle.fail),
     ),
+    Effect.andThen(lifecycle.completeRecovery),
+    Effect.andThen(Effect.never),
+    Effect.tapError(() => lifecycle.fail),
+  )
+  const ownAndRecover = Effect.scoped(lifecycle.interruptOnDrain(ownedRecovery)).pipe(
+    Effect.catchCauseIf(Cause.hasInterruptsOnly, () => Effect.void),
   )
   const hostDied = hostSession.awaitDeath.pipe(Effect.andThen(lifecycle.authenticatedHostDied))
 

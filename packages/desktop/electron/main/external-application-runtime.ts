@@ -66,6 +66,8 @@ const platformLayer = Layer.mergeAll(
   NodePath.layer,
   TempResources.layer.pipe(Layer.provide(Layer.merge(NodeFileSystem.layer, NodePath.layer))),
 )
+const CORE_SHUTDOWN_REQUEST_TIMEOUT = "1 second"
+const CORE_GRACEFUL_EXIT_TIMEOUT = "3 seconds"
 
 /** Creates the production Electron adapter backed exclusively by standalone Core RPC. */
 export const createExternalApplicationRuntime = (
@@ -75,6 +77,7 @@ export const createExternalApplicationRuntime = (
   const runtime = { runPromise: Effect.runPromise }
   let session: CoreHostBootstrapSession | null = null
   let applicationScope: Scope.Closeable | null = null
+  let applicationProcess: CoreProcessHandle | null = null
   let startPromise: Promise<void> | null = null
   let disposing = false
   const crashCircuitPromise = runtime.runPromise(
@@ -424,6 +427,7 @@ export const createExternalApplicationRuntime = (
           if (health.lifecycle === "ready") {
             session = established
             if (processHandle === null) return yield* Effect.die("DiffDash Core handle is missing.")
+            applicationProcess = processHandle
             const crashCircuit = yield* Effect.promise(() => crashCircuitPromise)
             const supervisedProcess = processHandle
             void runtime
@@ -435,6 +439,7 @@ export const createExternalApplicationRuntime = (
                   cleanupAfterHostDeath: Effect.sync(() => {
                     if (session === established) session = null
                     if (applicationScope === scope) applicationScope = null
+                    if (applicationProcess === supervisedProcess) applicationProcess = null
                   }).pipe(Effect.andThen(Scope.close(scope, Exit.void))),
                   crashCircuit,
                 }),
@@ -465,11 +470,31 @@ export const createExternalApplicationRuntime = (
   const dispose = async (): Promise<void> => {
     disposing = true
     const current = session
+    const currentProcess = applicationProcess
     session = null
+    applicationProcess = null
     if (current !== null) {
       await runtime
-        .runPromise(current.client?.shutdown(requestContextFor(current)) ?? Effect.void)
+        .runPromise(
+          (current.client?.shutdown(requestContextFor(current)) ?? Effect.void).pipe(
+            Effect.timeoutOrElse({
+              duration: CORE_SHUTDOWN_REQUEST_TIMEOUT,
+              orElse: () => Effect.void,
+            }),
+          ),
+        )
         .catch(() => undefined)
+    }
+    if (currentProcess !== null) {
+      await runtime.runPromise(
+        currentProcess.awaitExit.pipe(
+          Effect.timeoutOrElse({
+            duration: CORE_GRACEFUL_EXIT_TIMEOUT,
+            orElse: () => Effect.void,
+          }),
+          Effect.asVoid,
+        ),
+      )
     }
     if (applicationScope !== null) {
       await runtime.runPromise(Scope.close(applicationScope, Exit.void)).catch(() => undefined)
