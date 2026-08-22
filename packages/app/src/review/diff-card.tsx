@@ -1,4 +1,5 @@
 import type { ParsedDiffFile } from "@diffdash/domain/diff"
+import { CommentSubmissionReceipt } from "@diffdash/domain/comment"
 import { isVeryLargeDiffFile } from "@diffdash/domain/large-diff-policy"
 import { makeReviewDiffIdentity } from "@diffdash/domain/review-identity"
 import type { ReviewThreadAnchor, ReviewThreadDetails } from "@diffdash/domain/review-thread"
@@ -350,8 +351,14 @@ export const OpenDiffCard = ({
                                   label="Line comment"
                                   onCancel={() => onToggleLine(draftAnchor)}
                                   onSubmit={async (bodyMarkdown) => {
-                                    await reviewThreads.createThread(draftAnchor, bodyMarkdown)
-                                    onToggleLine(draftAnchor)
+                                    const receipt = await reviewThreads.createThread(
+                                      draftAnchor,
+                                      bodyMarkdown,
+                                    )
+                                    CommentSubmissionReceipt.match(receipt, {
+                                      StoredLocally: () => undefined,
+                                      Forwarded: () => onToggleLine(draftAnchor),
+                                    })
                                   }}
                                 />
                               </div>

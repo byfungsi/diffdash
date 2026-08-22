@@ -1,3 +1,4 @@
+import { CommentSubmissionReceipt } from "@diffdash/domain/comment"
 import {
   ReviewFileId,
   ReviewHunkFingerprint,
@@ -569,7 +570,11 @@ const threadController = (
   error: null,
   loading: false,
   available: true,
-  createThread: async () => undefined,
+  createThread: async () =>
+    CommentSubmissionReceipt.cases.StoredLocally.make({
+      threadId: ReviewThreadId.make("thread-created"),
+      agentAccepted: true,
+    }),
   addUserMessage: async () => undefined,
   runAgent: async () => undefined,
   runningThreadIds: [],

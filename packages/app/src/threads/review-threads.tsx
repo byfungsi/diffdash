@@ -28,6 +28,7 @@ import {
   ReviewThreadDetails,
   type ReviewThreadId,
   type ReviewThreadMessage,
+  type ReviewThreadMessageId,
   type ReviewThreadTarget,
 } from "@diffdash/domain/review-thread"
 import { RunReviewThreadAgentRequest } from "@diffdash/protocol/review-threads"
@@ -101,7 +102,10 @@ export type ReviewThreadsController = {
   readonly error: string | null
   readonly loading: boolean
   readonly available: boolean
-  readonly createThread: (anchor: ReviewThreadAnchor, bodyMarkdown: string) => Promise<void>
+  readonly createThread: (
+    anchor: ReviewThreadAnchor,
+    bodyMarkdown: string,
+  ) => Promise<CommentSubmissionReceipt>
   readonly addUserMessage: (threadId: ReviewThreadId, bodyMarkdown: string) => Promise<void>
   readonly runAgent: (threadId: ReviewThreadId) => Promise<void>
   readonly runningThreadIds: readonly ReviewThreadId[]
@@ -250,32 +254,51 @@ export function useReviewThreads(scope: ReviewThreadScope): ReviewThreadsControl
       throw cause
     }
   }
-  const refreshPendingThreads = useEffectEvent(async () => {
-    await Promise.all(
-      details
-        .filter(hasPendingAgentResponse)
-        .map(({ thread }) => refreshThreadDetails(thread.id).catch(() => null)),
-    )
-  })
-  const hasPendingThreads = details.some(hasPendingAgentResponse)
-
-  useEffect(() => {
-    if (!hasPendingThreads) return undefined
-    let cancelled = false
-    let timer: number | undefined
-    const poll = async () => {
-      await refreshPendingThreads()
-      if (!cancelled) timer = window.setTimeout(poll, 100)
-    }
-    timer = window.setTimeout(poll, 100)
-    return () => {
-      cancelled = true
-      if (timer !== undefined) window.clearTimeout(timer)
-    }
-  }, [hasPendingThreads, scopeKey])
-
   const refreshThread = async (threadId: ReviewThreadId) => {
     await refreshThreadDetails(threadId)
+  }
+
+  const reconcileAcceptedAgent = async (
+    threadId: ReviewThreadId,
+    initial: ReviewThreadDetails,
+    requestedScopeKey: string,
+    previousLatestMessageId?: ReviewThreadMessageId,
+  ) => {
+    setAgentErrors((current) => {
+      const { [threadId]: _removed, ...remaining } = current
+      return remaining
+    })
+    setRunningThreadIds((current) =>
+      current.includes(threadId) ? current : [...current, threadId],
+    )
+    setAgentProgress((current) => [
+      ...current.filter((item) => item.threadId !== threadId),
+      ReviewAgentProgress.make({ threadId, stage: "preparing-context" }),
+    ])
+    let current = initial
+    try {
+      while (
+        activeScopeKeyRef.current === requestedScopeKey &&
+        !hasNewTerminalAgentResponse(current, previousLatestMessageId)
+      ) {
+        await new Promise<void>((resolve) => window.setTimeout(resolve, 100))
+        const refreshed = await refreshThreadDetails(threadId)
+        if (refreshed === null) return
+        current = refreshed
+      }
+    } catch (cause) {
+      if (activeScopeKeyRef.current === requestedScopeKey) {
+        setAgentErrors((errors) => ({
+          ...errors,
+          [threadId]: formatError(cause, "Could not refresh the accepted agent response"),
+        }))
+      }
+    } finally {
+      if (activeScopeKeyRef.current === requestedScopeKey) {
+        setRunningThreadIds((threadIds) => threadIds.filter((id) => id !== threadId))
+        setAgentProgress((progress) => progress.filter((item) => item.threadId !== threadId))
+      }
+    }
   }
 
   const runAgent = async (threadId: ReviewThreadId) => {
@@ -372,9 +395,9 @@ export function useReviewThreads(scope: ReviewThreadScope): ReviewThreadsControl
       const receipt = await commentSubmission.submit(
         CommentSubmission.cases.Start.make({ subject, body }),
       )
-      if (activeScopeKeyRef.current !== requestedScopeKey) return
+      if (activeScopeKeyRef.current !== requestedScopeKey) return receipt
       const reflected = await CommentSubmissionReceipt.match(receipt, {
-        StoredLocally: async ({ threadId }) => {
+        StoredLocally: async ({ threadId, agentAccepted }) => {
           const created = await refreshThreadDetails(threadId).catch(() => null)
           if (created === null) return false
           captureAnalytics({
@@ -386,11 +409,15 @@ export function useReviewThreads(scope: ReviewThreadScope): ReviewThreadsControl
                   ? "pull_request"
                   : "local_diff",
           })
+          if (agentAccepted) {
+            void reconcileAcceptedAgent(threadId, created, requestedScopeKey)
+          }
           return true
         },
         Forwarded: async () => true,
       })
       if (reflected) setError(null)
+      return receipt
     } catch (cause) {
       if (activeScopeKeyRef.current === requestedScopeKey) {
         setError(formatError(cause, "Could not submit comment"))
@@ -402,11 +429,13 @@ export function useReviewThreads(scope: ReviewThreadScope): ReviewThreadsControl
   const addUserMessage = async (threadId: ReviewThreadId, bodyMarkdown: string) => {
     const requestedScopeKey = scopeKey
     const body = MarkdownBody.make(bodyMarkdown)
+    const currentDetails = details.find((item) => item.thread.id === threadId)
+    const previousLatestMessageId = currentDetails?.messages.at(-1)?.id
     try {
       const receipt = await runRendererPromise(
         Effect.fromOption(
           Option.all({
-            details: Option.fromNullishOr(details.find((item) => item.thread.id === threadId)),
+            details: Option.fromNullishOr(currentDetails),
             baseRevision: Option.fromNullishOr(baseRevision),
             headRevision: Option.fromNullishOr(headRevision),
           }),
@@ -441,10 +470,19 @@ export function useReviewThreads(scope: ReviewThreadScope): ReviewThreadsControl
       )
       if (activeScopeKeyRef.current !== requestedScopeKey) return
       const reflected = await CommentSubmissionReceipt.match(receipt, {
-        StoredLocally: ({ threadId: updatedThreadId }) =>
-          refreshThreadDetails(updatedThreadId)
-            .then((updated) => updated !== null)
-            .catch(() => false),
+        StoredLocally: async ({ threadId: updatedThreadId, agentAccepted }) => {
+          const updated = await refreshThreadDetails(updatedThreadId).catch(() => null)
+          if (updated === null) return false
+          if (agentAccepted) {
+            void reconcileAcceptedAgent(
+              updatedThreadId,
+              updated,
+              requestedScopeKey,
+              previousLatestMessageId,
+            )
+          }
+          return true
+        },
         Forwarded: async () => true,
       })
       if (reflected) setError(null)
@@ -1189,15 +1227,21 @@ const sortThreadDetails = (details: readonly ReviewThreadDetails[]) =>
     Order.mapInput(Order.String, (detail: ReviewThreadDetails) => detail.thread.createdAt),
   )
 
-const hasPendingAgentResponse = ({ messages }: ReviewThreadDetails): boolean =>
-  messages.some((message) =>
-    Match.valueTags(message, {
-      Pending: () => true,
+const hasNewTerminalAgentResponse = (
+  { messages }: ReviewThreadDetails,
+  previousLatestMessageId?: ReviewThreadMessageId,
+): boolean => {
+  const latest = messages.at(-1)
+  return (
+    latest !== undefined &&
+    Match.valueTags(latest, {
+      Pending: () => false,
       User: () => false,
-      Completed: () => false,
-      Failed: () => false,
-    }),
+      Completed: (message) => message.id !== previousLatestMessageId,
+      Failed: (message) => message.id !== previousLatestMessageId,
+    })
   )
+}
 
 const reviewThreadTarget = (
   hostedReview: HostedReviewLocator | null,
