@@ -10,6 +10,10 @@ import {
 } from "@diffdash/agent-provider"
 import { NoAgentProviderAvailableError } from "@diffdash/agent-provider/registry"
 import type { CodeWorkspaceError } from "@diffdash/domain/code-workspace"
+import type {
+  CommentSubjectMismatchError,
+  CommentSubmissionUnsupportedError,
+} from "@diffdash/domain/comment"
 import type { ReviewAgentProgressStage } from "@diffdash/domain/review-agent"
 import { RepositoryRelativePath } from "@diffdash/domain/repository-path"
 import { ReviewSnapshotId, type ReviewRevision } from "@diffdash/domain/review-identity"
@@ -35,6 +39,7 @@ import type { ProjectWorkspaceStoreError } from "@diffdash/persistence/project-w
 import type { ReviewThreadStoreError } from "@diffdash/persistence/review-thread-store"
 import type {
   ReviewTurnRejectedError,
+  ReviewTurnOwnershipError,
   ReviewTurnStoreError,
   ReviewTurnTargetError,
 } from "@diffdash/persistence/review-turn-store"
@@ -43,7 +48,11 @@ import type { WalkthroughOperationStoreError } from "@diffdash/persistence/walkt
 import type { ResourceCatalogError } from "@diffdash/persistence/resource-catalog"
 import { WalkthroughStoreError } from "@diffdash/persistence/walkthrough-store"
 import type { ProcessExecutionError } from "@diffdash/process"
-import type { ApplicationInstanceId, CoreProcessEpoch } from "@diffdash/core-rpc/identity"
+import type {
+  ApplicationInstanceId,
+  CoreProcessEpoch,
+  HostRequestId,
+} from "@diffdash/core-rpc/identity"
 import { InvokeChannel } from "@diffdash/protocol/channels"
 import type { InvokeRequest, InvokeResponse } from "@diffdash/protocol/ipc"
 import type {
@@ -64,6 +73,7 @@ import type { PrerequisiteInstallError } from "./services/prerequisites"
 import { RepositoryComparisonSourceError } from "./services/repository-comparison-source"
 import { RepositoryLinkError } from "./services/repository-linker"
 import { ReviewContextError } from "./services/git-provider"
+import type { OpenCodeConnectionError } from "./services/opencode-connection"
 
 /** Closed business-operation catalog implemented by DiffDash Core. */
 export const CoreMethod = {
@@ -106,6 +116,9 @@ export const CoreMethod = {
   setRepositoryFavorite: "Repositories.setFavorite",
   projectWorkspaceGet: "ProjectWorkspace.get",
   projectWorkspaceSave: "ProjectWorkspace.save",
+  listOpenCodeSessions: "OpenCode.listSessions",
+  connectOpenCodeSession: "OpenCode.connectSession",
+  submitComment: "CommentSubmission.submit",
   addReviewThreadUserMessage: "ReviewThreads.addUserMessage",
   createReviewThread: "ReviewThreads.create",
   getReviewThread: "ReviewThreads.get",
@@ -168,6 +181,9 @@ export const CoreMethodChannel = {
   [CoreMethod.setRepositoryFavorite]: InvokeChannel.setRepositoryFavorite,
   [CoreMethod.projectWorkspaceGet]: InvokeChannel.projectWorkspaceGet,
   [CoreMethod.projectWorkspaceSave]: InvokeChannel.projectWorkspaceSave,
+  [CoreMethod.listOpenCodeSessions]: InvokeChannel.aiListOpenCodeSessions,
+  [CoreMethod.connectOpenCodeSession]: InvokeChannel.aiConnectOpenCodeSession,
+  [CoreMethod.submitComment]: InvokeChannel.aiSubmitComment,
   [CoreMethod.addReviewThreadUserMessage]: InvokeChannel.addReviewThreadUserMessage,
   [CoreMethod.createReviewThread]: InvokeChannel.createReviewThread,
   [CoreMethod.getReviewThread]: InvokeChannel.getReviewThread,
@@ -200,6 +216,7 @@ export type CoreMethodOutput<Method extends CoreMethod> = InvokeResponse<
 export interface CoreOperationOptions {
   readonly applicationInstanceId?: ApplicationInstanceId
   readonly processEpoch?: CoreProcessEpoch
+  readonly requestId?: HostRequestId
   readonly onReviewThreadAgentProgress?: (stage: ReviewAgentProgressStage) => void
 }
 
@@ -324,6 +341,24 @@ export interface CoreOperationFailureMap {
   readonly [CoreMethod.setRepositoryFavorite]: RepositoryLinkError
   readonly [CoreMethod.projectWorkspaceGet]: ProjectWorkspaceStoreError
   readonly [CoreMethod.projectWorkspaceSave]: ProjectWorkspaceStoreError
+  readonly [CoreMethod.listOpenCodeSessions]: OpenCodeConnectionError
+  readonly [CoreMethod.connectOpenCodeSession]: OpenCodeConnectionError
+  readonly [CoreMethod.submitComment]:
+    | OpenCodeConnectionError
+    | CommentSubjectMismatchError
+    | CommentSubmissionUnsupportedError
+    | CoreThreadResolutionFailure
+    | ReviewAgentFinalizeError
+    | ReviewAgentProviderFailureError
+    | ReviewAgentServiceError
+    | ReviewThreadAnchorInvalidError
+    | ReviewThreadRevisionChangedError
+    | ReviewTurnOwnershipError
+    | ReviewTurnRejectedError
+    | ReviewTurnTargetError
+    | ReviewTurnStoreError
+    | ReviewThreadStoreError
+    | WalkthroughStoreError
   readonly [CoreMethod.addReviewThreadUserMessage]: ReviewThreadStoreError
   readonly [CoreMethod.createReviewThread]:
     | CoreThreadResolutionFailure

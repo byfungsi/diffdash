@@ -351,6 +351,7 @@ export const OpenDiffCard = ({
                                   onCancel={() => onToggleLine(draftAnchor)}
                                   onSubmit={async (bodyMarkdown) => {
                                     await reviewThreads.createThread(draftAnchor, bodyMarkdown)
+                                    onToggleLine(draftAnchor)
                                   }}
                                 />
                               </div>

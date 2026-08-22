@@ -37,6 +37,14 @@ import type {
 import type { ReviewProjectId } from "@diffdash/domain/review-identity"
 import type { WebUrl } from "@diffdash/domain/web-url"
 import type { AgentProviderCatalog } from "./agent-providers"
+import type {
+  ConnectOpenCodeSessionRequest,
+  ListOpenCodeSessionsRequest,
+  OpenCodeConnection,
+  OpenCodeSessionSummary,
+  SubmitCommentReceipt,
+  SubmitCommentRequest,
+} from "./ai-connection"
 import type { AnalyticsEvent } from "./analytics"
 import type { AppUpdateState } from "./app-update"
 import type { CliNavigationCommand } from "./cli-navigation"
@@ -123,6 +131,17 @@ export interface DiffDashApi {
   }
   readonly agentProviders: {
     readonly getCatalog: () => Promise<AgentProviderCatalog>
+  }
+  readonly ai: {
+    readonly listOpenCodeSessions: (
+      request: ListOpenCodeSessionsRequest,
+    ) => Promise<readonly OpenCodeSessionSummary[]>
+    readonly connectOpenCodeSession: (
+      request: ConnectOpenCodeSessionRequest,
+    ) => Promise<OpenCodeConnection>
+    readonly submitComment: (
+      request: SubmitCommentRequest,
+    ) => Promise<typeof SubmitCommentReceipt.Type>
   }
   readonly installDiffDashCli: () => Promise<DiffDashCliInstallResult>
   readonly openExternalUrl: (url: WebUrl) => Promise<void>

@@ -38,8 +38,17 @@ const coreMethods = [
   "Repositories.openProject",
   "Repositories.repairIdentities",
   "Repositories.setFavorite",
+  "CodeWorkspace.open",
+  "CodeWorkspace.heartbeat",
+  "CodeWorkspace.release",
+  "CodeWorkspace.listDirectory",
+  "CodeWorkspace.search",
+  "CodeWorkspace.readFile",
   "ProjectWorkspace.get",
   "ProjectWorkspace.save",
+  "OpenCode.listSessions",
+  "OpenCode.connectSession",
+  "CommentSubmission.submit",
   "ReviewThreads.addUserMessage",
   "ReviewThreads.create",
   "ReviewThreads.get",
@@ -64,8 +73,8 @@ describe("Core application RPC catalog", () => {
       .merge(ReviewAgentBusinessRpcs)
     const coreDeclarations = coreMethods.map((method) => declarations.requests.get(method))
 
-    expect(coreMethods).toHaveLength(48)
-    expect(new Set(coreMethods)).toHaveLength(48)
+    expect(coreMethods).toHaveLength(57)
+    expect(new Set(coreMethods)).toHaveLength(57)
     expect(coreDeclarations.every((declaration) => declaration !== undefined)).toBe(true)
     expect(
       coreDeclarations.every(
@@ -109,5 +118,19 @@ describe("Core application RPC catalog", () => {
     expect(clearPolicy.maxResponseBytes).toBe(16 * 1_024)
     expect(clearPolicy.mutationClass).toBe("idempotentMutation")
     expect(clearPolicy.idempotency).toBe("idempotent")
+  })
+
+  it("keeps comment acceptance running after caller interruption with a small receipt", () => {
+    const submission = CoreApplicationRpcs.requests.get("CommentSubmission.submit")
+
+    expect(submission).toBeDefined()
+    if (submission === undefined) return
+
+    const submissionPolicy = Option.getOrThrow(getCoreRpcMethodPolicy(submission))
+    expect(submissionPolicy.maxRequestBytes).toBe(64 * 1_024)
+    expect(submissionPolicy.maxResponseBytes).toBe(4 * 1_024)
+    expect(submissionPolicy.cancellation).toBe("uninterruptible")
+    expect(submissionPolicy.idempotency).toBe("nonIdempotent")
+    expect(submissionPolicy.restartBehavior).toBe("failOnRestart")
   })
 })

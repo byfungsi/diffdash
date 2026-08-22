@@ -11,6 +11,13 @@ import {
 } from "@diffdash/domain/renderer-layout-settings"
 import { AppState } from "@diffdash/domain/app-state"
 import {
+  CommentDestination,
+  CommentSubmission,
+  CommentSubmissionReceipt,
+  CommentSubmissionUnsupportedError,
+  CommentSubject,
+} from "@diffdash/domain/comment"
+import {
   CodeWorkspaceDirectoryPage,
   CodeWorkspaceFileReadRejected,
   CodeWorkspaceLease,
@@ -124,7 +131,11 @@ import {
   ReviewSessionStateVersion,
 } from "@diffdash/protocol/review-session"
 import { Match } from "effect"
-import { makeDemoReviewSnapshotFileInventory, type MaterializedDemoScenario } from "./demo-scenario"
+import {
+  isDemoReviewAnchorInParsedDiff,
+  makeDemoReviewSnapshotFileInventory,
+  type MaterializedDemoScenario,
+} from "./demo-scenario"
 import { createDemoLocalReviewFixtures, type DemoLocalReviewFixture } from "./local-review-fixtures"
 
 /** One deterministic renderer action recorded by the demo runtime. */
@@ -424,16 +435,19 @@ export const createDemoRuntime = (scenario: MaterializedDemoScenario): DemoRunti
       if (checkpointId === "revision-updated") {
         currentRevision = scenario.currentRevision
         manifestCache.set(currentRevision.manifest.snapshotId, currentRevision.manifest)
-        for (const sourceDetails of scenario.threads) {
-          const current = threadDetails.get(sourceDetails.thread.id)
-          if (current === undefined) continue
+        const sourceThreads = new Map(
+          scenario.threads.map((details) => [details.thread.id, details.thread]),
+        )
+        for (const current of threadDetails.values()) {
+          const sourceThread = sourceThreads.get(current.thread.id)
           replaceThread(
             ReviewThreadDetails.make({
               thread: ReviewThread.make({
                 ...current.thread,
-                currentBaseRevision: sourceDetails.thread.currentBaseRevision,
-                currentHeadRevision: sourceDetails.thread.currentHeadRevision,
-                currentAnchor: sourceDetails.thread.currentAnchor,
+                currentBaseRevision: currentRevision.manifest.baseRevision,
+                currentHeadRevision: currentRevision.manifest.headRevision,
+                currentAnchor:
+                  sourceThread?.currentAnchor ?? CurrentReviewAnchor.cases.Outdated.make({}),
               }),
               conversation: current.conversation,
             }),
@@ -610,6 +624,72 @@ export const createDemoRuntime = (scenario: MaterializedDemoScenario): DemoRunti
               AgentProviderId.make("opencode"),
             ],
           }),
+        }),
+    },
+    ai: {
+      listOpenCodeSessions: async () => [],
+      connectOpenCodeSession: async ({ sessionId }) => ({ sessionId, planMode: true }),
+      submitComment: async ({ destination, submission }) =>
+        CommentDestination.match(destination, {
+          OpenCode: ({ connection }) =>
+            Promise.resolve(
+              CommentSubmissionReceipt.cases.Forwarded.make({
+                sessionId: connection.session.id,
+              }),
+            ),
+          DiffDash: () =>
+            CommentSubmission.match(submission, {
+              Start: ({ subject, body }) =>
+                CommentSubject.match(subject, {
+                  CodeLine: () =>
+                    Promise.reject(
+                      CommentSubmissionUnsupportedError.make({
+                        destination: "DiffDash",
+                        subject: "CodeLine",
+                      }),
+                    ),
+                  ReviewLine: (review) =>
+                    Promise.resolve(requireValidDemoSubject(review))
+                      .then(() =>
+                        api.reviewThreads.create({
+                          target: review.target,
+                          expectedBaseRevision: review.expectedBaseRevision,
+                          expectedHeadRevision: review.expectedHeadRevision,
+                          anchor: review.anchor,
+                          bodyMarkdown: body,
+                        }),
+                      )
+                      .then((details) => {
+                        const agentAccepted = acceptDemoAgent(details, review)
+                        return CommentSubmissionReceipt.cases.StoredLocally.make({
+                          threadId: details.thread.id,
+                          agentAccepted,
+                        })
+                      }),
+                }),
+              FollowUp: ({ subject, threadId, body }) =>
+                CommentSubject.match(subject, {
+                  CodeLine: () =>
+                    Promise.reject(
+                      CommentSubmissionUnsupportedError.make({
+                        destination: "DiffDash",
+                        subject: "CodeLine",
+                      }),
+                    ),
+                  ReviewLine: (review) => {
+                    requireMatchingDemoSubject(requireThread(threadId), review)
+                    return api.reviewThreads
+                      .addUserMessage({ threadId, bodyMarkdown: body })
+                      .then((details) => {
+                        const agentAccepted = acceptDemoAgent(details, review)
+                        return CommentSubmissionReceipt.cases.StoredLocally.make({
+                          threadId,
+                          agentAccepted,
+                        })
+                      })
+                  },
+                }),
+            }),
         }),
     },
     installDiffDashCli: async () => {
@@ -1312,6 +1392,61 @@ export const createDemoRuntime = (scenario: MaterializedDemoScenario): DemoRunti
         return () => walkthroughHintListeners.delete(listener)
       },
     },
+  }
+
+  const requireMatchingDemoSubject = (
+    details: ReviewThreadDetails,
+    subject: typeof CommentSubject.cases.ReviewLine.Type,
+  ) => {
+    requireTarget(subject.target)
+    if (
+      details.thread.repoId !== scenario.repository.id ||
+      details.thread.reviewKey !== targetReviewKey(subject.target) ||
+      details.thread.currentBaseRevision !== subject.expectedBaseRevision ||
+      details.thread.currentHeadRevision !== subject.expectedHeadRevision ||
+      JSON.stringify(details.thread.currentAnchor) !==
+        JSON.stringify(CurrentReviewAnchor.cases.Active.make({ anchor: subject.anchor }))
+    ) {
+      throw new Error("Demo comment subject does not match the current review thread")
+    }
+  }
+
+  const requireValidDemoSubject = (subject: typeof CommentSubject.cases.ReviewLine.Type) => {
+    requireTarget(subject.target)
+    const projection =
+      subject.target.kind === "hosted"
+        ? { manifest: currentRevision.manifest, parsedDiff: currentRevision.parsedDiff }
+        : subject.target.kind === "local"
+          ? (() => {
+              const fixture = requireLocalFixture(subject.target)
+              return { manifest: fixture.manifest, parsedDiff: fixture.parsedDiff }
+            })()
+          : (() => {
+              throw new Error("Repository comparisons are unavailable in the demo runtime")
+            })()
+    if (
+      projection.manifest.baseRevision !== subject.expectedBaseRevision ||
+      projection.manifest.headRevision !== subject.expectedHeadRevision ||
+      !isDemoReviewAnchorInParsedDiff(subject.anchor, projection.parsedDiff)
+    ) {
+      throw new Error("Demo comment subject is stale or unavailable")
+    }
+  }
+
+  const acceptDemoAgent = (
+    details: ReviewThreadDetails,
+    subject: typeof CommentSubject.cases.ReviewLine.Type,
+  ) => {
+    const accepted = api.reviewThreads.runAgent({
+      threadId: details.thread.id,
+      target: subject.target,
+      repoId: ReviewProjectId.make(details.thread.repoId),
+      reviewKey: details.thread.reviewKey,
+      expectedBaseRevision: subject.expectedBaseRevision,
+      expectedHeadRevision: subject.expectedHeadRevision,
+    })
+    void accepted.catch(() => undefined)
+    return requireThread(details.thread.id).messages.at(-1)?._tag === "Pending"
   }
 
   function linkLocalPath(localPath: string) {

@@ -64,6 +64,7 @@ import { AgentProviders } from "./services/agent-providers"
 import { Analytics } from "./services/analytics"
 import { GitProvider } from "./services/git-provider"
 import { Prerequisites } from "./services/prerequisites"
+import { OpenCodeConnectionService } from "./services/opencode-connection"
 import { RepositoryComparisonSource } from "./services/repository-comparison-source"
 import { RepositoryLinker } from "./services/repository-linker"
 import { AgentArtifactNormalizer } from "./services/agent-artifact-normalizer"
@@ -507,6 +508,12 @@ export const createStandaloneCoreLayer = (
     homeDirectory: configuration.environment.homeDirectoryOption,
     platform: configuration.application.platform,
   }).pipe(Layer.provideMerge(gitProviderLayer), Layer.provideMerge(agentProvidersLayer))
+  const openCodeConnectionLayer = OpenCodeConnectionService.layer({
+    executableSearchPath,
+    executablePathExtensions: configuration.environment.executablePathExtensionsOption,
+    homeDirectory: configuration.environment.homeDirectoryOption,
+    platform: configuration.application.platform,
+  }).pipe(Layer.provide(RepositoryStore.layer))
 
   const businessServicesLayer = Layer.mergeAll(
     temporaryDirectoryLayer,
@@ -520,6 +527,7 @@ export const createStandaloneCoreLayer = (
     reviewTurnStoreLayer,
     appStateLayer,
     prerequisitesLayer,
+    openCodeConnectionLayer,
     agentProvidersLayer,
     gitProviderLayer,
     walkthroughLayer,

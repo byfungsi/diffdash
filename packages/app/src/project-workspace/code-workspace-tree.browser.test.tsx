@@ -3,7 +3,7 @@ import type { DiffFileStatus } from "@diffdash/domain/diff"
 import { RepositoryRelativePath } from "@diffdash/domain/repository-path"
 import { flushSync } from "react-dom"
 import { createRoot, type Root } from "react-dom/client"
-import { afterEach, describe, expect, it } from "vitest"
+import { afterEach, describe, expect, it, vi } from "vitest"
 
 import { CodeWorkspaceTree } from "./code-workspace-tree"
 
@@ -61,5 +61,34 @@ describe("CodeWorkspaceTree", () => {
     expect(reactRow?.querySelector('[aria-label="Modified"]')?.textContent).toBe("M")
     expect(container.querySelector("#file-tree-builtin-typescript")).not.toBeNull()
     expect(container.querySelector("#file-tree-builtin-react")).not.toBeNull()
+  })
+
+  it("disables load-more activation while the directory is loading", () => {
+    const onLoadMore = vi.fn<(path: RepositoryRelativePath | null) => void>()
+    const container = document.createElement("div")
+    document.body.append(container)
+    root = createRoot(container)
+
+    flushSync(() => {
+      root?.render(
+        <CodeWorkspaceTree
+          entries={new Map([["", []]])}
+          expandedPaths={new Set()}
+          fileStatuses={new Map()}
+          loadingPaths={new Set([""])}
+          nextOffsets={new Map([["", 500]])}
+          selectedPath={null}
+          onLoadMore={onLoadMore}
+          onOpenFile={() => undefined}
+          onToggleDirectory={() => undefined}
+        />,
+      )
+    })
+
+    const loadMore = container.querySelector<HTMLButtonElement>("button")
+    expect(loadMore?.textContent).toBe("Loading...")
+    expect(loadMore?.disabled).toBe(true)
+    loadMore?.click()
+    expect(onLoadMore).not.toHaveBeenCalled()
   })
 })

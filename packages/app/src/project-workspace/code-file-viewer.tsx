@@ -1,5 +1,10 @@
 import type { CodeThemePreferences } from "@diffdash/domain/ai-settings"
 import type { RepositoryRelativePath } from "@diffdash/domain/repository-path"
+import { CommentDestination, CommentSubmission, CommentSubject } from "@diffdash/domain/comment"
+import type { GitCommitSha } from "@diffdash/domain/repository-comparison"
+import type { ReviewProjectId } from "@diffdash/domain/review-identity"
+import { MarkdownBody } from "@diffdash/domain/review-thread"
+import { Option } from "effect"
 import { ChevronDown, ChevronUp, Search, X } from "lucide-react"
 import { type KeyboardEvent, useEffect, useEffectEvent, useMemo, useRef, useState } from "react"
 
@@ -7,7 +12,10 @@ import {
   CodeView,
   type CodeViewFileItem,
   type CodeViewHandle,
+  type CodeViewReactOptions,
   createDiffsWorker,
+  type LineAnnotation,
+  useStableCallback,
   WorkerPoolContextProvider,
   type WorkerPoolOptions,
   useWorkerPool,
@@ -16,6 +24,8 @@ import { isTextNode } from "@/shared/dom"
 import { Button } from "@/shared/ui/button"
 import { Input } from "@/shared/ui/input"
 import type { ColorScheme } from "@/settings/theme"
+import { useCommentSubmission } from "@/comments/comment-submission"
+import { ReviewThreadComposer } from "@/threads/review-threads"
 
 const CODE_VIEW_WORKER_POOL_OPTIONS = {
   poolSize: 1,
@@ -32,37 +42,65 @@ type CodeSearchMatch = {
   readonly start: number
 }
 
+type CodeCommentAnnotation = {
+  readonly lineNumber: number
+}
+
 /** Read-only Pierre CodeView for one file from the active checkout. */
 export const CodeFileViewer = ({
   codeThemes,
   colorScheme,
   contents,
   path,
+  projectId,
+  revision,
 }: {
   readonly codeThemes: CodeThemePreferences
   readonly colorScheme: ColorScheme
   readonly contents: string
   readonly path: RepositoryRelativePath
+  readonly projectId: ReviewProjectId
+  readonly revision: GitCommitSha
 }) => {
-  const codeViewRef = useRef<CodeViewHandle<undefined>>(null)
+  const commentSubmission = useCommentSubmission()
+  const codeViewRef = useRef<CodeViewHandle<CodeCommentAnnotation>>(null)
   const scrollRootRef = useRef<HTMLDivElement>(null)
   const searchInputRef = useRef<HTMLInputElement>(null)
   const [searchOpen, setSearchOpen] = useState(false)
   const [searchQuery, setSearchQuery] = useState("")
   const [activeMatchIndex, setActiveMatchIndex] = useState(0)
-  const versionRef = useRef({ contents, path, version: 0 })
-  if (versionRef.current.contents !== contents || versionRef.current.path !== path) {
-    versionRef.current = { contents, path, version: versionRef.current.version + 1 }
+  const [draftLineNumber, setDraftLineNumber] = useState<Option.Option<number>>(Option.none())
+  const versionRef = useRef({ contents, path, draftLineNumber, version: 0 })
+  if (
+    versionRef.current.contents !== contents ||
+    versionRef.current.path !== path ||
+    versionRef.current.draftLineNumber !== draftLineNumber
+  ) {
+    versionRef.current = {
+      contents,
+      path,
+      draftLineNumber,
+      version: versionRef.current.version + 1,
+    }
   }
   const version = versionRef.current.version
+  const annotations = useMemo<readonly LineAnnotation<CodeCommentAnnotation>[]>(
+    () =>
+      Option.match(draftLineNumber, {
+        onNone: () => [],
+        onSome: (lineNumber) => [{ lineNumber, metadata: { lineNumber } }],
+      }),
+    [draftLineNumber],
+  )
   const item = useMemo(() => {
     return {
       id: path,
       type: "file",
       file: { contents, name: path },
+      annotations: [...annotations],
       version,
-    } satisfies CodeViewFileItem
-  }, [contents, path, version])
+    } satisfies CodeViewFileItem<CodeCommentAnnotation>
+  }, [annotations, contents, path, version])
   const items = useMemo(() => [item], [item])
   const searchMatches = useMemo(
     () => findCodeSearchMatches(contents, searchQuery),
@@ -96,11 +134,60 @@ export const CodeFileViewer = ({
   const openSearchFromEffect = useEffectEvent(openSearch)
   const closeSearchFromEffect = useEffectEvent(closeSearch)
   const moveSearchFromEffect = useEffectEvent(moveSearch)
+  const toggleLine = (lineNumber: number) => {
+    setDraftLineNumber((current) =>
+      Option.contains(current, lineNumber) ? Option.none() : Option.some(lineNumber),
+    )
+  }
+  const toggleLineFromEffect = useEffectEvent(toggleLine)
+  const onLineClick = useStableCallback<
+    NonNullable<CodeViewReactOptions<CodeCommentAnnotation>["onLineClick"]>
+  >(({ lineNumber }) => {
+    toggleLine(lineNumber)
+  })
 
   useEffect(() => {
     const scrollRoot = scrollRootRef.current
-    if (scrollRoot !== null) scrollRoot.dataset.codeFileScroll = ""
-  }, [])
+    if (scrollRoot === null) return
+    scrollRoot.dataset.codeFileScroll = ""
+    scrollRoot.tabIndex = 0
+    scrollRoot.setAttribute("role", "region")
+    scrollRoot.setAttribute(
+      "aria-label",
+      `Source code for ${path}. Use arrow keys to select a line and Enter to comment.`,
+    )
+    const lineCount = Math.max(1, contents.split("\n").length)
+    const onKeyDown = (event: globalThis.KeyboardEvent) => {
+      if (event.target !== scrollRoot || !["ArrowUp", "ArrowDown", "Enter"].includes(event.key)) {
+        return
+      }
+      const selected = codeViewRef.current?.getSelectedLines()
+      const currentLine = selected?.range.start ?? 1
+      if (event.key === "Enter") {
+        event.preventDefault()
+        toggleLineFromEffect(currentLine)
+        return
+      }
+      event.preventDefault()
+      const lineNumber = Math.min(
+        lineCount,
+        Math.max(1, currentLine + (event.key === "ArrowDown" ? 1 : -1)),
+      )
+      codeViewRef.current?.setSelectedLines({
+        id: path,
+        range: { start: lineNumber, end: lineNumber },
+      })
+      codeViewRef.current?.scrollTo({
+        type: "line",
+        id: path,
+        lineNumber,
+        align: "center",
+        behavior: "instant",
+      })
+    }
+    scrollRoot.addEventListener("keydown", onKeyDown)
+    return () => scrollRoot.removeEventListener("keydown", onKeyDown)
+  }, [contents, path])
 
   useEffect(() => {
     const handleSearchShortcut = (event: globalThis.KeyboardEvent) => {
@@ -235,13 +322,14 @@ export const CodeFileViewer = ({
             }}
           />
         ) : null}
-        <CodeView
+        <CodeView<CodeCommentAnnotation>
           ref={codeViewRef}
           containerRef={scrollRootRef}
           className="h-0 min-h-0 flex-1 overflow-auto bg-diff-canvas"
           items={items}
           options={{
             disableFileHeader: false,
+            onLineClick,
             lineHoverHighlight: "line",
             overflow: "scroll",
             stickyHeaders: true,
@@ -271,6 +359,45 @@ export const CodeFileViewer = ({
               color: var(--review-search-active-foreground);
             }
           `,
+          }}
+          renderAnnotation={(annotation) => {
+            const lineNumber = annotation.metadata.lineNumber
+            return CommentDestination.match(commentSubmission.destination, {
+              DiffDash: () => (
+                <div className="bg-diff-canvas px-3 py-1.5">
+                  <div className="bg-card text-muted-foreground rounded-lg border px-3 py-2 text-xs shadow-xs">
+                    Code comments in DiffDash are not supported yet. Connect OpenCode to comment on
+                    code.
+                  </div>
+                </div>
+              ),
+              OpenCode: () => (
+                <div className="bg-diff-canvas px-3 py-1.5">
+                  <section className="bg-card rounded-lg border p-3 shadow-xs">
+                    <ReviewThreadComposer
+                      label={`Comment on ${path} line ${String(lineNumber)}`}
+                      onCancel={() => setDraftLineNumber(Option.none())}
+                      onSubmit={async (bodyMarkdown) => {
+                        const lineContent = contents.split("\n")[lineNumber - 1] ?? ""
+                        await commentSubmission.submit(
+                          CommentSubmission.cases.Start.make({
+                            subject: CommentSubject.cases.CodeLine.make({
+                              projectId,
+                              revision,
+                              path,
+                              lineNumber,
+                              lineContent,
+                            }),
+                            body: MarkdownBody.make(bodyMarkdown),
+                          }),
+                        )
+                        setDraftLineNumber(Option.none())
+                      }}
+                    />
+                  </section>
+                </div>
+              ),
+            })
           }}
         />
       </div>

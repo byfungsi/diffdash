@@ -96,6 +96,11 @@ interface ApplicationCoreRuntime {
   readonly setRepositoryFavorite: ApplicationCoreOperation<typeof CoreMethod.setRepositoryFavorite>
   readonly projectWorkspaceGet: ApplicationCoreOperation<typeof CoreMethod.projectWorkspaceGet>
   readonly projectWorkspaceSave: ApplicationCoreOperation<typeof CoreMethod.projectWorkspaceSave>
+  readonly listOpenCodeSessions: ApplicationCoreOperation<typeof CoreMethod.listOpenCodeSessions>
+  readonly connectOpenCodeSession: ApplicationCoreOperation<
+    typeof CoreMethod.connectOpenCodeSession
+  >
+  readonly submitComment: ApplicationCoreOperation<typeof CoreMethod.submitComment>
   readonly addReviewThreadUserMessage: ApplicationCoreOperation<
     typeof CoreMethod.addReviewThreadUserMessage
   >

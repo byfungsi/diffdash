@@ -47,6 +47,13 @@ const api: DiffDashBridgeApi = {
   agentProviders: {
     getCatalog: () => transport.invoke(InvokeChannel.agentProvidersGetCatalog, {}),
   },
+  ai: {
+    listOpenCodeSessions: (request) =>
+      transport.invoke(InvokeChannel.aiListOpenCodeSessions, request),
+    connectOpenCodeSession: (request) =>
+      transport.invoke(InvokeChannel.aiConnectOpenCodeSession, request),
+    submitComment: (request) => transport.invoke(InvokeChannel.aiSubmitComment, request),
+  },
   installDiffDashCli: () => transport.invoke(InvokeChannel.appInstallDiffDashCli, {}),
   openExternalUrl: (url) => transport.invoke(InvokeChannel.appOpenExternalUrl, { url }),
   openRepositoryFile: (request) => transport.invoke(InvokeChannel.appOpenRepositoryFile, request),

@@ -1,6 +1,7 @@
 /* oxlint-disable eslint/no-underscore-dangle -- Domain unions use Effect-compatible _tag discriminants. */
 import { AISettings } from "@diffdash/domain/ai-settings"
 import type { AppState } from "@diffdash/domain/app-state"
+import type { OpenCodeConnectionSelection } from "@diffdash/domain/comment"
 import {
   type CodeWorkspaceTarget,
   ProjectHeadCodeWorkspaceTarget,
@@ -91,16 +92,19 @@ import {
 } from "@/settings/theme"
 import { useSettingsMutation } from "@/settings/use-settings-mutation"
 import { useCaptureAnalytics } from "@/shared/analytics"
+import { CommentSubmissionProvider } from "@/comments/comment-submission"
 import { formatError } from "@/shared/errors"
 import { Button } from "@/shared/ui/button"
 import { EmptyState } from "@/shared/ui/empty-state"
 import { UpdateBanner } from "@/shared/ui/update-banner"
 import { agentProviderCatalogAtom } from "@/walkthrough/atoms"
 import { CommandPaletteDialog, type CommandPaletteItem } from "./command-palette"
+import { AIConnectionMenu } from "./ai-connection-menu"
 import { isMacPlatform } from "./keyboard-shortcut-platform"
 import { KeyboardShortcutReference } from "./keyboard-shortcut-reference"
 import { WorkbenchContextActionsProvider } from "./workbench-context-actions"
 import { WorkbenchTitlebar } from "./workbench-titlebar"
+
 import {
   type PendingProjectRemoteSelection,
   type ProjectOpenIntent,
@@ -176,6 +180,7 @@ export function AppShell() {
   )
   const [goToPaletteOpen, setGoToPaletteOpen] = useState(false)
   const [shortcutReferenceOpen, setShortcutReferenceOpen] = useState(false)
+  const [aiConnection, setAIConnection] = useState(Option.none<OpenCodeConnectionSelection>())
   const [updateState, setUpdateState] = useState<AppUpdateState | null>(null)
   const [debouncedRemoteSearchQuery, setDebouncedRemoteSearchQuery] = useState("")
   const deferredSearchQuery = useDeferredValue(query.trim())
@@ -391,6 +396,7 @@ export function AppShell() {
     setSelectedCodePath(Option.none())
     setActiveRibbon("reviews")
     setWorkspaceNotice(null)
+    setAIConnection(Option.none())
   }
 
   useEffect(() => {
@@ -568,6 +574,9 @@ export function AppShell() {
   }, [screen])
 
   const applyProjectProjection = (projection: ProjectSessionProjection) => {
+    setAIConnection((current) =>
+      Option.filter(current, (connection) => connection.projectId === projection.repo.id),
+    )
     setSelectedRepo(projection.repo)
     setSelectedCodeTarget(ProjectHeadCodeWorkspaceTarget.make({ projectId: projection.repo.id }))
     setCodeWorkspaceMounted(projection.activeRibbon === "code")
@@ -1045,271 +1054,291 @@ export function AppShell() {
   }
 
   return (
-    <WorkbenchContextActionsProvider host={contextActionsHost}>
-      <div
-        data-workbench-shell
-        className="bg-shell-bevel text-foreground flex h-full min-h-0 flex-col"
-      >
-        <WorkbenchTitlebar
-          canNavigateBack={canNavigateBack}
-          commandLabel={commandLabel}
-          commandNavigationDisabled={appState?.onboardingCompleted !== true}
-          showSidebarToggle={showProjectShell}
-          sidebarExpanded={reviewSidebarExpanded}
-          onContextActionsHostChange={setContextActionsHost}
-          onNavigateBack={navigateBack}
-          onOpenKeyboardShortcuts={() => setShortcutReferenceOpen(true)}
-          onOpenQuickNavigation={openQuickNavigation}
-          onToggleSidebar={() => setReviewSidebarExpanded((expanded) => !expanded)}
-        />
-        <span className="sr-only" aria-live="polite">
-          {actionStatus}
-        </span>
-        {updateState === null ? null : (
-          <UpdateBanner
-            state={updateState}
-            onCheck={() => void runRendererPromise(desktop.updates.check()).catch(() => undefined)}
-            onDownload={() => {
-              captureAnalytics({ event: "update_download_started" })
-              void runRendererPromise(desktop.updates.download()).catch(() => undefined)
-            }}
-            onRestart={() => {
-              captureAnalytics({ event: "update_install_started" })
-              void runRendererPromise(desktop.updates.restartAndInstall()).catch(() => undefined)
-            }}
-          />
-        )}
-        {cliNavigationError === null ? null : (
-          <div
-            role="alert"
-            className="bg-destructive text-destructive-foreground fixed top-[calc(var(--shell-titlebar-height)+0.75rem)] left-1/2 z-50 flex max-w-xl -translate-x-1/2 items-center gap-3 rounded-lg px-4 py-3 text-sm shadow-lg"
-          >
-            <span className="min-w-0 flex-1">{cliNavigationError}</span>
-            <Button size="sm" variant="secondary" onClick={() => setCliNavigationError(null)}>
-              Dismiss
-            </Button>
-          </div>
-        )}
-        {showProjectShell && reviewWorkbenchReady && workspaceNotice !== null ? (
-          <output className="bg-popover text-popover-foreground fixed top-[calc(var(--shell-titlebar-height)+0.75rem)] right-4 z-40 flex max-w-md items-center gap-3 rounded-lg border px-4 py-3 text-xs shadow-lg">
-            <span className="min-w-0 flex-1">{workspaceNotice}</span>
-            <Button size="xs" variant="ghost" onClick={() => setWorkspaceNotice(null)}>
-              Dismiss
-            </Button>
-          </output>
-        ) : null}
-        <div data-workbench-viewport className="workbench-viewport min-h-0 min-w-0 flex-1">
-          <div
-            data-workbench-frame
-            data-workbench-frame-mode={showProjectShell ? "project" : "route"}
-            className={`min-h-0 min-w-0 overflow-hidden ${
-              showProjectShell ? "bg-shell-bevel" : "workbench-frame bg-workspace-canvas"
-            }`}
-          >
-            <main
-              data-workbench-content
-              className={`h-full min-h-0 ${showProjectShell ? "overflow-hidden" : "overflow-auto"}`}
-            >
-              {appStateLoadError !== null ? (
-                <section className="mx-auto flex min-h-full max-w-3xl flex-col justify-center px-8 py-10">
-                  <EmptyState>
-                    <div className="space-y-4" role="alert">
-                      <div className="space-y-1">
-                        <h1 className="text-foreground text-base font-semibold">
-                          DiffDash could not load application state
-                        </h1>
-                        <p>{appStateLoadError}</p>
-                      </div>
-                      <Button
-                        variant="outline"
-                        onClick={() => {
-                          setAppState(null)
-                          setAppStateLoadError(null)
-                          setAppStateLoadAttempt((attempt) => attempt + 1)
-                        }}
-                      >
-                        Retry
-                      </Button>
-                    </div>
-                  </EmptyState>
-                </section>
-              ) : appState === null ? (
-                <section className="mx-auto flex min-h-full max-w-3xl flex-col justify-center px-8 py-10">
-                  <EmptyState>Loading DiffDash...</EmptyState>
-                </section>
-              ) : !appState.onboardingCompleted ? (
-                <OnboardingScreen
-                  diagnostics={diagnostics}
-                  isLoadingDiagnostics={isLoadingDiagnostics}
-                  status={setupActionStatus}
-                  onComplete={(telemetryEnabled) => void completeOnboarding(telemetryEnabled)}
-                  onInstallDiffDashCli={() => void installDiffDashCli()}
-                  onOpenDocs={openSetupDocs}
-                  onRecheck={recheckPrerequisites}
-                />
-              ) : screen === "project" && selectedRepo !== null ? (
-                <>
-                  {codeWorkspaceMounted ? (
-                    <CodeScreen
-                      key={selectedRepo.id}
-                      active={activeRibbon === "code"}
-                      codeThemes={aiSettings.codeThemes}
-                      colorScheme={THEME_DEFINITIONS[resolvedTheme].colorScheme}
-                      contextWidth={aiSettings.layout.review.contextWidth}
-                      fileStatuses={codeFileStatuses}
-                      repo={selectedRepo}
-                      selectedPath={Option.getOrNull(selectedCodePath)}
-                      sidebarExpanded={reviewSidebarExpanded}
-                      target={
-                        selectedCodeTarget ??
-                        ProjectHeadCodeWorkspaceTarget.make({ projectId: selectedRepo.id })
-                      }
-                      threadDetailWidth={aiSettings.layout.review.threadDetailWidth}
-                      onActiveRibbonChange={updateProjectRibbon}
-                      onLinkRepository={linkSelectedProjectRepository}
-                      onSelectedPathChange={(path) =>
-                        setSelectedCodePath(path === null ? Option.none : Option.some(path))
-                      }
-                      onSidebarExpandedChange={setReviewSidebarExpanded}
-                      onSidebarWidthChange={updateReviewContextWidth}
-                      onThreadDetailWidthChange={updateReviewThreadDetailWidth}
-                    />
-                  ) : null}
-                  {Option.match(reviewRibbon, {
-                    onNone: () => null,
-                    onSome: (activeReviewRibbon) => (
-                      <ReviewScreen
-                        activeRibbon={activeReviewRibbon}
-                        detailEnvironment={{
-                          aiAgentAvailable:
-                            agentRouteAvailable(
-                              agentProviderCatalog,
-                              aiSettings.selections.walkthrough,
-                              "walkthrough",
-                            ) || AsyncResult.isWaiting(agentProviderCatalogResult),
-                          aiSettings,
-                          quickNavigationRequest: reviewQuickNavigationRequest,
-                          repositoryLinkState: reviewRepositoryLinkState,
-                          sidebarExpanded: reviewSidebarExpanded,
-                          sidebarWidth: aiSettings.layout.review.contextWidth,
-                          threadDetailWidth: aiSettings.layout.review.threadDetailWidth,
-                          colorScheme: THEME_DEFINITIONS[resolvedTheme].colorScheme,
-                          onAISettingsChange: updateAISettings,
-                          onLinkRepository: linkSelectedReviewRepository,
-                          onOpenCodeFile: openCodeFile,
-                          onSidebarExpandedChange: setReviewSidebarExpanded,
-                          onSidebarWidthChange: updateReviewContextWidth,
-                          onThreadDetailWidthChange: updateReviewThreadDetailWidth,
-                        }}
-                        reviewsContext={
-                          <ReviewsPane
-                            hosted={projectHostedReviewsLifecycle(selectedRepo, pullRequestsResult)}
-                            local={projectLocalReviewsLifecycle(selectedRepo, workingTreeResult)}
-                            repo={selectedRepo}
-                            onRefreshHosted={refreshSelectedPullRequests}
-                            onRefreshLocal={refreshSelectedWorkingTree}
-                            onLinkRepository={() => void linkSelectedProjectRepository()}
-                            onSelect={selectProjectReview}
-                          />
-                        }
-                        reviewsMain={
-                          <ProjectReviewsOverview
-                            hosted={projectHostedReviewsLifecycle(selectedRepo, pullRequestsResult)}
-                            local={projectLocalReviewsLifecycle(selectedRepo, workingTreeResult)}
-                            repo={selectedRepo}
-                            onRefreshHosted={refreshSelectedPullRequests}
-                            onRefreshLocal={refreshSelectedWorkingTree}
-                            onLinkRepository={() => void linkSelectedProjectRepository()}
-                            onSelect={selectProjectReview}
-                          />
-                        }
-                        selection={reviewSelection}
-                        sourceOperations={reviewSourceOperations}
-                        workspaceNotice={workspaceNotice}
-                        onActiveRibbonChange={updateProjectRibbon}
-                        onRetrySelection={() => {
-                          refreshSelectedHostedReview()
-                          refreshSelectedLocalReview()
-                          refreshSelectedRepositoryComparison()
-                        }}
-                      />
-                    ),
-                  })}
-                </>
-              ) : (
-                <HomeScreen
-                  activeProviderId={activeProviderId}
-                  diagnostics={diagnostics}
-                  hasQuery={hasQuery}
-                  isLoadingDiagnostics={isLoadingDiagnostics}
-                  isSearching={isSearching}
-                  localResults={localResults}
-                  projects={repos}
-                  projectsStatus={projectsStatus}
-                  providers={providers}
-                  query={query}
-                  remoteResults={uniqueRemoteResults}
-                  searchError={searchError}
-                  searchScopes={searchScopes}
-                  selectedProvider={selectedProvider}
-                  selectedSearchScope={selectedSearchScope}
-                  setupStatus={setupActionStatus}
-                  onForget={(repo) => void forgetRepository(repo)}
-                  onInstallDiffDashCli={() => void installDiffDashCli()}
-                  onOpenDocs={openSetupDocs}
-                  onOpenProject={() => void chooseProjectFolder()}
-                  onOpenRepo={(repo) => void restoreProject(repo)}
-                  onPinRemote={(repo) => void pinRemote(repo)}
-                  onQueryChange={setQuery}
-                  onRecheck={recheckPrerequisites}
-                  onRetryProjects={refreshRepositories}
-                  onSelectProvider={(providerId) => {
-                    setSelectedProviderId(GitProviderId.make(providerId))
-                    setSelectedSearchScope(null)
-                  }}
-                  onSelectRemote={(repo) => void openRemoteRepository(repo)}
-                  onSelectScope={(scope) =>
-                    setSelectedSearchScope((current) => (current === scope ? null : scope))
-                  }
-                  onSetFavorite={(repo, isFavorite) => void setRepositoryFavorite(repo, isFavorite)}
-                />
-              )}
-            </main>
-          </div>
-          <div aria-hidden="true" data-workbench-global-rail />
-        </div>
-        <CommandPaletteDialog
-          items={goToPaletteItems({
-            projects: repos,
-            onOpenPullRequest: (pullRequest) =>
-              selectProjectReview({ kind: "hosted", review: pullRequest.locator }),
-            onOpenRepo: (repo) => void restoreProject(repo),
-            pullRequests,
-          })}
-          open={goToPaletteOpen}
-          placeholder="Search projects and reviews"
-          title="Go anywhere"
-          onOpenChange={setGoToPaletteOpen}
-        />
-        <KeyboardShortcutReference
-          open={shortcutReferenceOpen}
-          onOpenChange={setShortcutReferenceOpen}
-        />
-        {pendingRemoteSelection === null ? null : (
-          <ProjectRemoteChooser
-            selection={pendingRemoteSelection.selection}
-            onCancel={() => setPendingRemoteSelection(null)}
-            onSelect={(candidate) =>
-              void openProjectPath(
-                pendingRemoteSelection.selection.rootPath,
-                pendingRemoteSelection.intent,
-                candidate.repository,
-              )
+    <CommentSubmissionProvider connection={aiConnection}>
+      <WorkbenchContextActionsProvider host={contextActionsHost}>
+        <div
+          data-workbench-shell
+          className="bg-shell-bevel text-foreground flex h-full min-h-0 flex-col"
+        >
+          <WorkbenchTitlebar
+            aiConnectionControl={
+              <AIConnectionMenu
+                directory={Option.fromNullishOr(selectedRepo?.localPath)}
+                projectId={Option.fromNullishOr(selectedRepo?.id)}
+                selected={aiConnection}
+                onChange={setAIConnection}
+              />
             }
+            canNavigateBack={canNavigateBack}
+            commandLabel={commandLabel}
+            commandNavigationDisabled={appState?.onboardingCompleted !== true}
+            showSidebarToggle={showProjectShell}
+            sidebarExpanded={reviewSidebarExpanded}
+            onContextActionsHostChange={setContextActionsHost}
+            onNavigateBack={navigateBack}
+            onOpenKeyboardShortcuts={() => setShortcutReferenceOpen(true)}
+            onOpenQuickNavigation={openQuickNavigation}
+            onToggleSidebar={() => setReviewSidebarExpanded((expanded) => !expanded)}
           />
-        )}
-      </div>
-    </WorkbenchContextActionsProvider>
+          <span className="sr-only" aria-live="polite">
+            {actionStatus}
+          </span>
+          {updateState === null ? null : (
+            <UpdateBanner
+              state={updateState}
+              onCheck={() =>
+                void runRendererPromise(desktop.updates.check()).catch(() => undefined)
+              }
+              onDownload={() => {
+                captureAnalytics({ event: "update_download_started" })
+                void runRendererPromise(desktop.updates.download()).catch(() => undefined)
+              }}
+              onRestart={() => {
+                captureAnalytics({ event: "update_install_started" })
+                void runRendererPromise(desktop.updates.restartAndInstall()).catch(() => undefined)
+              }}
+            />
+          )}
+          {cliNavigationError === null ? null : (
+            <div
+              role="alert"
+              className="bg-destructive text-destructive-foreground fixed top-[calc(var(--shell-titlebar-height)+0.75rem)] left-1/2 z-50 flex max-w-xl -translate-x-1/2 items-center gap-3 rounded-lg px-4 py-3 text-sm shadow-lg"
+            >
+              <span className="min-w-0 flex-1">{cliNavigationError}</span>
+              <Button size="sm" variant="secondary" onClick={() => setCliNavigationError(null)}>
+                Dismiss
+              </Button>
+            </div>
+          )}
+          {showProjectShell && reviewWorkbenchReady && workspaceNotice !== null ? (
+            <output className="bg-popover text-popover-foreground fixed top-[calc(var(--shell-titlebar-height)+0.75rem)] right-4 z-40 flex max-w-md items-center gap-3 rounded-lg border px-4 py-3 text-xs shadow-lg">
+              <span className="min-w-0 flex-1">{workspaceNotice}</span>
+              <Button size="xs" variant="ghost" onClick={() => setWorkspaceNotice(null)}>
+                Dismiss
+              </Button>
+            </output>
+          ) : null}
+          <div data-workbench-viewport className="workbench-viewport min-h-0 min-w-0 flex-1">
+            <div
+              data-workbench-frame
+              data-workbench-frame-mode={showProjectShell ? "project" : "route"}
+              className={`min-h-0 min-w-0 overflow-hidden ${
+                showProjectShell ? "bg-shell-bevel" : "workbench-frame bg-workspace-canvas"
+              }`}
+            >
+              <main
+                data-workbench-content
+                className={`h-full min-h-0 ${showProjectShell ? "overflow-hidden" : "overflow-auto"}`}
+              >
+                {appStateLoadError !== null ? (
+                  <section className="mx-auto flex min-h-full max-w-3xl flex-col justify-center px-8 py-10">
+                    <EmptyState>
+                      <div className="space-y-4" role="alert">
+                        <div className="space-y-1">
+                          <h1 className="text-foreground text-base font-semibold">
+                            DiffDash could not load application state
+                          </h1>
+                          <p>{appStateLoadError}</p>
+                        </div>
+                        <Button
+                          variant="outline"
+                          onClick={() => {
+                            setAppState(null)
+                            setAppStateLoadError(null)
+                            setAppStateLoadAttempt((attempt) => attempt + 1)
+                          }}
+                        >
+                          Retry
+                        </Button>
+                      </div>
+                    </EmptyState>
+                  </section>
+                ) : appState === null ? (
+                  <section className="mx-auto flex min-h-full max-w-3xl flex-col justify-center px-8 py-10">
+                    <EmptyState>Loading DiffDash...</EmptyState>
+                  </section>
+                ) : !appState.onboardingCompleted ? (
+                  <OnboardingScreen
+                    diagnostics={diagnostics}
+                    isLoadingDiagnostics={isLoadingDiagnostics}
+                    status={setupActionStatus}
+                    onComplete={(telemetryEnabled) => void completeOnboarding(telemetryEnabled)}
+                    onInstallDiffDashCli={() => void installDiffDashCli()}
+                    onOpenDocs={openSetupDocs}
+                    onRecheck={recheckPrerequisites}
+                  />
+                ) : screen === "project" && selectedRepo !== null ? (
+                  <>
+                    {codeWorkspaceMounted ? (
+                      <CodeScreen
+                        key={selectedRepo.id}
+                        active={activeRibbon === "code"}
+                        codeThemes={aiSettings.codeThemes}
+                        colorScheme={THEME_DEFINITIONS[resolvedTheme].colorScheme}
+                        contextWidth={aiSettings.layout.review.contextWidth}
+                        fileStatuses={codeFileStatuses}
+                        repo={selectedRepo}
+                        selectedPath={Option.getOrNull(selectedCodePath)}
+                        sidebarExpanded={reviewSidebarExpanded}
+                        target={
+                          selectedCodeTarget ??
+                          ProjectHeadCodeWorkspaceTarget.make({ projectId: selectedRepo.id })
+                        }
+                        threadDetailWidth={aiSettings.layout.review.threadDetailWidth}
+                        onActiveRibbonChange={updateProjectRibbon}
+                        onLinkRepository={linkSelectedProjectRepository}
+                        onSelectedPathChange={(path) =>
+                          setSelectedCodePath(path === null ? Option.none : Option.some(path))
+                        }
+                        onSidebarExpandedChange={setReviewSidebarExpanded}
+                        onSidebarWidthChange={updateReviewContextWidth}
+                        onThreadDetailWidthChange={updateReviewThreadDetailWidth}
+                      />
+                    ) : null}
+                    {Option.match(reviewRibbon, {
+                      onNone: () => null,
+                      onSome: (activeReviewRibbon) => (
+                        <ReviewScreen
+                          activeRibbon={activeReviewRibbon}
+                          detailEnvironment={{
+                            aiAgentAvailable:
+                              agentRouteAvailable(
+                                agentProviderCatalog,
+                                aiSettings.selections.walkthrough,
+                                "walkthrough",
+                              ) || AsyncResult.isWaiting(agentProviderCatalogResult),
+                            aiSettings,
+                            quickNavigationRequest: reviewQuickNavigationRequest,
+                            repositoryLinkState: reviewRepositoryLinkState,
+                            sidebarExpanded: reviewSidebarExpanded,
+                            sidebarWidth: aiSettings.layout.review.contextWidth,
+                            threadDetailWidth: aiSettings.layout.review.threadDetailWidth,
+                            colorScheme: THEME_DEFINITIONS[resolvedTheme].colorScheme,
+                            onAISettingsChange: updateAISettings,
+                            onLinkRepository: linkSelectedReviewRepository,
+                            onOpenCodeFile: openCodeFile,
+                            onSidebarExpandedChange: setReviewSidebarExpanded,
+                            onSidebarWidthChange: updateReviewContextWidth,
+                            onThreadDetailWidthChange: updateReviewThreadDetailWidth,
+                          }}
+                          reviewsContext={
+                            <ReviewsPane
+                              hosted={projectHostedReviewsLifecycle(
+                                selectedRepo,
+                                pullRequestsResult,
+                              )}
+                              local={projectLocalReviewsLifecycle(selectedRepo, workingTreeResult)}
+                               repo={selectedRepo}
+                               onRefreshHosted={refreshSelectedPullRequests}
+                               onRefreshLocal={refreshSelectedWorkingTree}
+                               onLinkRepository={() => void linkSelectedProjectRepository()}
+                               onSelect={selectProjectReview}
+                            />
+                          }
+                          reviewsMain={
+                            <ProjectReviewsOverview
+                              hosted={projectHostedReviewsLifecycle(
+                                selectedRepo,
+                                pullRequestsResult,
+                              )}
+                              local={projectLocalReviewsLifecycle(selectedRepo, workingTreeResult)}
+                               repo={selectedRepo}
+                               onRefreshHosted={refreshSelectedPullRequests}
+                               onRefreshLocal={refreshSelectedWorkingTree}
+                               onLinkRepository={() => void linkSelectedProjectRepository()}
+                               onSelect={selectProjectReview}
+                            />
+                          }
+                          selection={reviewSelection}
+                          sourceOperations={reviewSourceOperations}
+                          workspaceNotice={workspaceNotice}
+                          onActiveRibbonChange={updateProjectRibbon}
+                          onRetrySelection={() => {
+                            refreshSelectedHostedReview()
+                            refreshSelectedLocalReview()
+                            refreshSelectedRepositoryComparison()
+                          }}
+                        />
+                      ),
+                    })}
+                  </>
+                ) : (
+                  <HomeScreen
+                    activeProviderId={activeProviderId}
+                    diagnostics={diagnostics}
+                    hasQuery={hasQuery}
+                    isLoadingDiagnostics={isLoadingDiagnostics}
+                    isSearching={isSearching}
+                    localResults={localResults}
+                    projects={repos}
+                    projectsStatus={projectsStatus}
+                    providers={providers}
+                    query={query}
+                    remoteResults={uniqueRemoteResults}
+                    searchError={searchError}
+                    searchScopes={searchScopes}
+                    selectedProvider={selectedProvider}
+                    selectedSearchScope={selectedSearchScope}
+                    setupStatus={setupActionStatus}
+                    onForget={(repo) => void forgetRepository(repo)}
+                    onInstallDiffDashCli={() => void installDiffDashCli()}
+                    onOpenDocs={openSetupDocs}
+                    onOpenProject={() => void chooseProjectFolder()}
+                    onOpenRepo={(repo) => void restoreProject(repo)}
+                    onPinRemote={(repo) => void pinRemote(repo)}
+                    onQueryChange={setQuery}
+                    onRecheck={recheckPrerequisites}
+                    onRetryProjects={refreshRepositories}
+                    onSelectProvider={(providerId) => {
+                      setSelectedProviderId(GitProviderId.make(providerId))
+                      setSelectedSearchScope(null)
+                    }}
+                    onSelectRemote={(repo) => void openRemoteRepository(repo)}
+                    onSelectScope={(scope) =>
+                      setSelectedSearchScope((current) => (current === scope ? null : scope))
+                    }
+                    onSetFavorite={(repo, isFavorite) =>
+                      void setRepositoryFavorite(repo, isFavorite)
+                    }
+                  />
+                )}
+              </main>
+            </div>
+            <div aria-hidden="true" data-workbench-global-rail />
+          </div>
+          <CommandPaletteDialog
+            items={goToPaletteItems({
+              projects: repos,
+              onOpenPullRequest: (pullRequest) =>
+                selectProjectReview({ kind: "hosted", review: pullRequest.locator }),
+              onOpenRepo: (repo) => void restoreProject(repo),
+              pullRequests,
+            })}
+            open={goToPaletteOpen}
+            placeholder="Search projects and reviews"
+            title="Go anywhere"
+            onOpenChange={setGoToPaletteOpen}
+          />
+          <KeyboardShortcutReference
+            open={shortcutReferenceOpen}
+            onOpenChange={setShortcutReferenceOpen}
+          />
+          {pendingRemoteSelection === null ? null : (
+            <ProjectRemoteChooser
+              selection={pendingRemoteSelection.selection}
+              onCancel={() => setPendingRemoteSelection(null)}
+              onSelect={(candidate) =>
+                void openProjectPath(
+                  pendingRemoteSelection.selection.rootPath,
+                  pendingRemoteSelection.intent,
+                  candidate.repository,
+                )
+              }
+            />
+          )}
+        </div>
+      </WorkbenchContextActionsProvider>
+    </CommentSubmissionProvider>
   )
 }
 

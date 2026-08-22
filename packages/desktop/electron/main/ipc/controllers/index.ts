@@ -6,6 +6,7 @@ import type { RendererSecurityPolicy } from "../../electron-policy"
 import { createShutdown } from "../../shutdown"
 import { electronUpdaterLifecycleHost, startUpdaterLifecycle } from "../../updater-lifecycle"
 import { defineAnalyticsHandlers } from "./analytics"
+import { defineAIHandlers } from "./ai"
 import { IpcControllerRegistry } from "./controller-registry"
 import { defineNavigationHandlers } from "./navigation"
 import { defineProjectWorkspaceHandlers } from "./project-workspace"
@@ -29,6 +30,7 @@ export const defineIpcHandlers = (
   shutdown: ReturnType<typeof createShutdown>,
   configuration: DesktopHostConfiguration,
 ) => {
+  defineAIHandlers(runtime, handlers)
   defineRepositoryHandlers(runtime, handlers)
   defineProjectWorkspaceHandlers(runtime, handlers)
   defineReviewHandlers(runtime, handlers)
