@@ -250,6 +250,30 @@ export function useReviewThreads(scope: ReviewThreadScope): ReviewThreadsControl
       throw cause
     }
   }
+  const refreshPendingThreads = useEffectEvent(async () => {
+    await Promise.all(
+      details
+        .filter(hasPendingAgentResponse)
+        .map(({ thread }) => refreshThreadDetails(thread.id).catch(() => null)),
+    )
+  })
+  const hasPendingThreads = details.some(hasPendingAgentResponse)
+
+  useEffect(() => {
+    if (!hasPendingThreads) return undefined
+    let cancelled = false
+    let timer: number | undefined
+    const poll = async () => {
+      await refreshPendingThreads()
+      if (!cancelled) timer = window.setTimeout(poll, 100)
+    }
+    timer = window.setTimeout(poll, 100)
+    return () => {
+      cancelled = true
+      if (timer !== undefined) window.clearTimeout(timer)
+    }
+  }, [hasPendingThreads, scopeKey])
+
   const refreshThread = async (threadId: ReviewThreadId) => {
     await refreshThreadDetails(threadId)
   }
@@ -1163,6 +1187,16 @@ const sortThreadDetails = (details: readonly ReviewThreadDetails[]) =>
   EffectArray.sort(
     details,
     Order.mapInput(Order.String, (detail: ReviewThreadDetails) => detail.thread.createdAt),
+  )
+
+const hasPendingAgentResponse = ({ messages }: ReviewThreadDetails): boolean =>
+  messages.some((message) =>
+    Match.valueTags(message, {
+      Pending: () => true,
+      User: () => false,
+      Completed: () => false,
+      Failed: () => false,
+    }),
   )
 
 const reviewThreadTarget = (
