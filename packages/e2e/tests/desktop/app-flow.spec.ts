@@ -2025,6 +2025,9 @@ import { spawnSync } from "node:child_process"
 const args = process.argv.slice(2)
 const joined = args.join(" ")
 const repoRoot = process.env.FAKE_REPO_ROOT ?? "/tmp/diffdash-local-repo"
+const isUnifiedDiff = (revision) =>
+  joined.includes("diff --no-ext-diff --no-color " + revision + " --") ||
+  joined.includes("diff --binary --full-index --no-ext-diff --no-color " + revision + " --")
 
 if (process.env.FAKE_USE_REAL_GIT === "1") {
   if (joined.includes("remote get-url --all origin")) {
@@ -2107,7 +2110,7 @@ if (joined.includes("status --porcelain=v2 --branch --untracked-files=all")) {
   process.exit(0)
 }
 
-if (joined.includes("diff --no-ext-diff --no-color HEAD --")) {
+if (isUnifiedDiff("HEAD")) {
   console.log([
     "diff --git a/src/local.ts b/src/local.ts",
     "index 1111111..2222222 100644",
@@ -2140,7 +2143,7 @@ if (joined.includes("diff --numstat -z --no-ext-diff --no-color cccccccccccccccc
   process.exit(0)
 }
 
-if (joined.includes("diff --no-ext-diff --no-color bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb --")) {
+if (isUnifiedDiff("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb")) {
   console.log([
     "diff --git a/src/local.ts b/src/local.ts",
     "index 1111111..2222222 100644",
@@ -2153,7 +2156,7 @@ if (joined.includes("diff --no-ext-diff --no-color bbbbbbbbbbbbbbbbbbbbbbbbbbbbb
   process.exit(0)
 }
 
-if (joined.includes("diff --no-ext-diff --no-color cccccccccccccccccccccccccccccccccccccccc --")) {
+if (isUnifiedDiff("cccccccccccccccccccccccccccccccccccccccc")) {
   console.log([
     "diff --git a/src/local.ts b/src/local.ts",
     "index 1111111..2222222 100644",
