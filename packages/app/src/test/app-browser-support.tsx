@@ -83,10 +83,15 @@ import {
 import { AgentPromptVersion, CompletedAgentRun } from "@diffdash/domain/agent-run"
 import { AgentRunId, ReviewAgentProviderId } from "@diffdash/domain/review-agent"
 import {
+  PROJECT_WORKSPACE_CODE_ACTIVITY_ID,
+  PROJECT_WORKSPACE_FILES_ACTIVITY_ID,
+  PROJECT_WORKSPACE_REVIEWS_ACTIVITY_ID,
   ProjectOpened,
   ProjectRemoteCandidate,
   ProjectRemoteSelectionRequired,
+  ProjectWorkspaceActivityId,
   ProjectWorkspaceState,
+  REVIEW_COMMENTS_ACTIVITY_ID,
 } from "@diffdash/domain/project-workspace"
 import {
   LinkedCheckout,
@@ -1111,6 +1116,7 @@ type AppBrowserScenarioId =
   | "onboardingTelemetryOptOut"
   | "providerTerminology"
   | "projectOpenChooser"
+  | "projectActivityRepair"
   | "projectReviewFailureRecovery"
   | "projectRestoreRace"
   | "projectStateRestoration"
@@ -2033,6 +2039,19 @@ scenario("codeRibbon", async () => {
     expect(calls.openCodeWorkspace).toHaveBeenCalledTimes(2)
     expect(calls.releaseCodeWorkspace).toHaveBeenCalledTimes(1)
   })
+
+  document.querySelector<HTMLButtonElement>('button[aria-label="Threads"]')?.click()
+  await vi.waitFor(() => {
+    expect(
+      document.querySelector('button[aria-label="Threads"][aria-pressed="true"]'),
+    ).not.toBeNull()
+    expect(calls.saveProjectWorkspace).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        activeSurface: "review",
+        activeActivity: REVIEW_COMMENTS_ACTIVITY_ID,
+      }),
+    )
+  })
 })
 
 scenario("codeRibbonLink", async () => {
@@ -2273,7 +2292,8 @@ scenario("codeRibbonShortcuts", async () => {
 scenario("projectStateRestoration", async () => {
   const persisted = ProjectWorkspaceState.make({
     projectId: ReviewProjectId.make(repo.id),
-    activeRibbon: "reviews",
+    activeSurface: "review",
+    activeActivity: PROJECT_WORKSPACE_REVIEWS_ACTIVITY_ID,
     selectedReviewTarget: HostedReviewTarget.make({
       kind: "hosted",
       review: pullRequest.locator,
@@ -2294,10 +2314,47 @@ scenario("projectStateRestoration", async () => {
   })
 })
 
+scenario("projectActivityRepair", async () => {
+  const persisted = ProjectWorkspaceState.make({
+    projectId: ReviewProjectId.make(repo.id),
+    activeSurface: "code",
+    activeActivity: ProjectWorkspaceActivityId.make("example.extension.missing"),
+    selectedReviewTarget: null,
+    updatedAt: "2026-08-02T00:00:00.000Z",
+  })
+  const calls = installDiffDashApi({
+    projectWorkspaceState: persisted,
+    repositories: [linkedRepo(repo, "/workspace/diffdash")],
+  })
+  renderApp()
+
+  const projectButton = await vi.waitFor(() => {
+    const button = document.querySelector<HTMLButtonElement>(
+      'button[aria-label="Open project fungsi/diffdash"]',
+    )
+    expect(button).not.toBeNull()
+    return button
+  })
+  projectButton?.click()
+  await vi.waitFor(() => {
+    expect(document.querySelector('button[aria-label="Code"][aria-pressed="true"]')).not.toBeNull()
+    expect(document.body.textContent).toContain(
+      "The saved workspace activity is unavailable. A built-in activity was restored instead.",
+    )
+    expect(calls.saveProjectWorkspace).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        activeSurface: "code",
+        activeActivity: PROJECT_WORKSPACE_CODE_ACTIVITY_ID,
+      }),
+    )
+  })
+})
+
 scenario("projectReviewFailureRecovery", async () => {
   const persisted = ProjectWorkspaceState.make({
     projectId: ReviewProjectId.make(repo.id),
-    activeRibbon: "files",
+    activeSurface: "review",
+    activeActivity: PROJECT_WORKSPACE_FILES_ACTIVITY_ID,
     selectedReviewTarget: HostedReviewTarget.make({
       kind: "hosted",
       review: pullRequest.locator,
@@ -3254,7 +3311,8 @@ scenario("cliRepositoryComparison", async () => {
     expect(calls.resolveBranch).not.toHaveBeenCalled()
     expect(calls.saveProjectWorkspace).toHaveBeenCalledWith(
       expect.objectContaining({
-        activeRibbon: "files",
+        activeSurface: "review",
+        activeActivity: PROJECT_WORKSPACE_FILES_ACTIVITY_ID,
         selectedReviewTarget: expect.objectContaining({ kind: "repositoryComparison" }),
       }),
     )

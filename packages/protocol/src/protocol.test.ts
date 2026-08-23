@@ -328,7 +328,12 @@ describe("protocol boundaries", () => {
     const workspace = Schema.decodeUnknownResult(
       InvokeContract[InvokeChannel.projectWorkspaceSave].request,
     )({
-      input: { projectId: "", activeRibbon: "files", selectedReviewTarget: null },
+      input: {
+        projectId: "",
+        activeSurface: "review",
+        activeActivity: "diffdash.core.files",
+        selectedReviewTarget: null,
+      },
     })
     const relativeCheckout = Schema.decodeUnknownResult(
       InvokeContract[InvokeChannel.openProject].request,

@@ -42,6 +42,11 @@ describe("App shell browser interactions", () => {
     await appBrowserScenario("projectStateRestoration")()
   })
 
+  it("repairs and reports an unavailable activity without changing Code", async () => {
+    expect.hasAssertions()
+    await appBrowserScenario("projectActivityRepair")()
+  })
+
   it("recovers a failed restored review when the same review is selected again", async () => {
     expect.hasAssertions()
     await appBrowserScenario("projectReviewFailureRecovery")()

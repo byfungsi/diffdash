@@ -95,10 +95,33 @@ const UserVersionRow = Schema.Struct({ user_version: Schema.Number })
 const IntegrityCheckRow = Schema.Struct({ integrity_check: Schema.String })
 const WorkspaceStateRow = Schema.Struct({
   repo_id: Schema.String,
-  active_ribbon: Schema.String,
+  active_surface: Schema.String,
+  active_activity: Schema.String,
   selected_review_target_json: Schema.NullOr(Schema.String),
   updated_at: Schema.String,
 })
+const WorkspaceTableInfoRows = Schema.Array(
+  Schema.Struct({
+    cid: Schema.Number,
+    name: Schema.String,
+    type: Schema.String,
+    notnull: Schema.Number,
+    dflt_value: Schema.NullOr(Schema.String),
+    pk: Schema.Number,
+  }),
+)
+const WorkspaceForeignKeyRows = Schema.Array(
+  Schema.Struct({
+    id: Schema.Number,
+    seq: Schema.Number,
+    table: Schema.String,
+    from: Schema.String,
+    to: Schema.String,
+    on_update: Schema.String,
+    on_delete: Schema.String,
+    match: Schema.String,
+  }),
+)
 const AgentRunFixtureRow = Schema.Struct({
   id: AgentRunId,
   thread_id: ReviewThreadId,
@@ -253,9 +276,8 @@ describe("database-node", () => {
           ),
         )
         expect(workspaceTable.sql).toContain("REFERENCES repos(id) ON DELETE CASCADE")
-        expect(workspaceTable.sql).toContain(
-          "active_ribbon IN ('reviews', 'files', 'code', 'walkthrough', 'threads')",
-        )
+        expect(workspaceTable.sql).toContain("active_surface IN ('review', 'code')")
+        expect(workspaceTable.sql).toContain("length(active_activity) BETWEEN 1 AND 128")
         const localViewedFilesTable = decodeTableSqlRow(
           yield* database.get(
             "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'local_viewed_files'",
@@ -269,82 +291,150 @@ describe("database-node", () => {
     }),
   )
 
-  it.effect(
-    "adds the code ribbon while preserving legacy workspace rows and cascade behavior",
-    () =>
-      Effect.gen(function* () {
-        const databasePath = yield* makeTempDatabasePath
+  it.effect("migrates legacy workspace ribbons into source surfaces and activity IDs", () =>
+    Effect.gen(function* () {
+      const databasePath = yield* makeTempDatabasePath
+      const freshSchema = yield* Effect.gen(function* () {
+        const database = makeDatabase(yield* SqlClient.SqlClient)
+        return {
+          columns: Schema.decodeUnknownSync(WorkspaceTableInfoRows)(
+            yield* database.all("PRAGMA table_info(project_workspace_state)"),
+          ),
+          foreignKeys: Schema.decodeUnknownSync(WorkspaceForeignKeyRows)(
+            yield* database.all("PRAGMA foreign_key_list(project_workspace_state)"),
+          ),
+        }
+      }).pipe(Effect.provide(makeLayer(`${databasePath}.fresh`)))
 
-        yield* Effect.gen(function* () {
-          const database = makeDatabase(yield* SqlClient.SqlClient)
-          yield* database.run(
-            "DELETE FROM diffdash_capabilities WHERE name = 'project-workspace-code-ribbon'",
-          )
-          yield* database.run("DROP TABLE project_workspace_state")
-          yield* database.run(`CREATE TABLE project_workspace_state (
+      yield* Effect.gen(function* () {
+        const database = makeDatabase(yield* SqlClient.SqlClient)
+        yield* database.run(
+          "DELETE FROM diffdash_capabilities WHERE name = 'project-workspace-code-ribbon'",
+        )
+        yield* database.run(
+          "DELETE FROM diffdash_capabilities WHERE name = 'project-workspace-activity-selection'",
+        )
+        yield* database.run("DROP TABLE project_workspace_state")
+        yield* database.run(`CREATE TABLE project_workspace_state (
           repo_id TEXT PRIMARY KEY REFERENCES repos(id) ON DELETE CASCADE,
           active_ribbon TEXT NOT NULL CHECK (
-            active_ribbon IN ('reviews', 'files', 'walkthrough', 'threads')
+            active_ribbon IN ('reviews', 'files', 'code', 'walkthrough', 'threads')
           ),
           selected_review_target_json TEXT,
           updated_at TEXT NOT NULL
         )`)
-          yield* database.run(`INSERT INTO repos (
+        yield* database.run(`INSERT INTO repos (
           id, provider, owner, name, remote_url, local_path, is_favorite,
           last_opened_at, last_synced_at, created_at, updated_at
-        ) VALUES (
-          'repo-workspace-migration', 'github', 'fungsi', 'workspace-migration',
-          'https://github.com/fungsi/workspace-migration', NULL, 0, NULL, NULL,
-          '2026-08-20T00:00:00.000Z', '2026-08-20T00:00:00.000Z'
-        )`)
-          yield* database.run(`INSERT INTO project_workspace_state (
+        ) VALUES
+          ('repo-workspace-reviews', 'github', 'fungsi', 'workspace-reviews',
+           'https://github.com/fungsi/workspace-reviews', NULL, 0, NULL, NULL,
+           '2026-08-20T00:00:00.000Z', '2026-08-20T00:00:00.000Z'),
+          ('repo-workspace-files', 'github', 'fungsi', 'workspace-files',
+           'https://github.com/fungsi/workspace-files', NULL, 0, NULL, NULL,
+           '2026-08-20T00:00:00.000Z', '2026-08-20T00:00:00.000Z'),
+          ('repo-workspace-code', 'github', 'fungsi', 'workspace-code',
+           'https://github.com/fungsi/workspace-code', NULL, 0, NULL, NULL,
+           '2026-08-20T00:00:00.000Z', '2026-08-20T00:00:00.000Z'),
+          ('repo-workspace-walkthrough', 'github', 'fungsi', 'workspace-walkthrough',
+           'https://github.com/fungsi/workspace-walkthrough', NULL, 0, NULL, NULL,
+           '2026-08-20T00:00:00.000Z', '2026-08-20T00:00:00.000Z'),
+          ('repo-workspace-threads', 'github', 'fungsi', 'workspace-threads',
+           'https://github.com/fungsi/workspace-threads', NULL, 0, NULL, NULL,
+           '2026-08-20T00:00:00.000Z', '2026-08-20T00:00:00.000Z')`)
+        yield* database.run(`INSERT INTO project_workspace_state (
           repo_id, active_ribbon, selected_review_target_json, updated_at
-        ) VALUES (
-          'repo-workspace-migration', 'threads', NULL, '2026-08-20T00:00:00.000Z'
-        )`)
-        }).pipe(Effect.provide(makeLayer(databasePath)))
+        ) VALUES
+          ('repo-workspace-reviews', 'reviews', NULL, '2026-08-20T00:00:00.000Z'),
+          ('repo-workspace-files', 'files', NULL, '2026-08-20T00:00:00.000Z'),
+          ('repo-workspace-code', 'code', NULL, '2026-08-20T00:00:00.000Z'),
+          ('repo-workspace-walkthrough', 'walkthrough', NULL, '2026-08-20T00:00:00.000Z'),
+          ('repo-workspace-threads', 'threads', '{"kind":"hosted"}', '2026-08-20T00:00:00.000Z')`)
+      }).pipe(Effect.provide(makeLayer(databasePath)))
 
-        yield* Effect.gen(function* () {
-          const database = makeDatabase(yield* SqlClient.SqlClient)
-          const workspaceTable = decodeTableSqlRow(
-            yield* database.get(
-              "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'project_workspace_state'",
-            ),
-          )
-          const workspaceState = Schema.decodeUnknownSync(WorkspaceStateRow)(
-            Option.getOrThrow(
-              yield* database.get(
-                "SELECT * FROM project_workspace_state WHERE repo_id = 'repo-workspace-migration'",
-              ),
-            ),
-          )
+      yield* Effect.gen(function* () {
+        const database = makeDatabase(yield* SqlClient.SqlClient)
+        const workspaceTable = decodeTableSqlRow(
+          yield* database.get(
+            "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'project_workspace_state'",
+          ),
+        )
+        const workspaceStates = Schema.decodeUnknownSync(Schema.Array(WorkspaceStateRow))(
+          yield* database.all("SELECT * FROM project_workspace_state ORDER BY repo_id"),
+        )
+        const migratedSchema = {
+          columns: Schema.decodeUnknownSync(WorkspaceTableInfoRows)(
+            yield* database.all("PRAGMA table_info(project_workspace_state)"),
+          ),
+          foreignKeys: Schema.decodeUnknownSync(WorkspaceForeignKeyRows)(
+            yield* database.all("PRAGMA foreign_key_list(project_workspace_state)"),
+          ),
+        }
 
-          expect(workspaceTable.sql).toContain(
-            "active_ribbon IN ('reviews', 'files', 'code', 'walkthrough', 'threads')",
-          )
-          expect(workspaceTable.sql).toContain("REFERENCES repos(id) ON DELETE CASCADE")
-          expect(workspaceState).toEqual({
-            repo_id: "repo-workspace-migration",
-            active_ribbon: "threads",
+        expect(migratedSchema).toEqual(freshSchema)
+        expect(workspaceTable.sql).toContain("active_surface IN ('review', 'code')")
+        expect(workspaceTable.sql).toContain("length(active_activity) BETWEEN 1 AND 128")
+        expect(workspaceTable.sql).toContain("REFERENCES repos(id) ON DELETE CASCADE")
+        expect(workspaceStates).toEqual([
+          {
+            repo_id: "repo-workspace-code",
+            active_surface: "code",
+            active_activity: "diffdash.core.code",
             selected_review_target_json: null,
             updated_at: "2026-08-20T00:00:00.000Z",
-          })
-          expect(
-            Option.getOrThrow(
-              yield* database.get(
-                "SELECT version FROM diffdash_capabilities WHERE name = 'project-workspace-code-ribbon'",
-              ),
+          },
+          {
+            repo_id: "repo-workspace-files",
+            active_surface: "review",
+            active_activity: "diffdash.core.files",
+            selected_review_target_json: null,
+            updated_at: "2026-08-20T00:00:00.000Z",
+          },
+          {
+            repo_id: "repo-workspace-reviews",
+            active_surface: "review",
+            active_activity: "diffdash.core.reviews",
+            selected_review_target_json: null,
+            updated_at: "2026-08-20T00:00:00.000Z",
+          },
+          {
+            repo_id: "repo-workspace-threads",
+            active_surface: "review",
+            active_activity: "diffdash.builtin.review-comments.comments",
+            selected_review_target_json: '{"kind":"hosted"}',
+            updated_at: "2026-08-20T00:00:00.000Z",
+          },
+          {
+            repo_id: "repo-workspace-walkthrough",
+            active_surface: "review",
+            active_activity: "diffdash.core.walkthrough",
+            selected_review_target_json: null,
+            updated_at: "2026-08-20T00:00:00.000Z",
+          },
+        ])
+        expect(
+          Option.getOrThrow(
+            yield* database.get(
+              "SELECT version FROM diffdash_capabilities WHERE name = 'project-workspace-code-ribbon'",
             ),
-          ).toEqual({ version: 1 })
+          ),
+        ).toEqual({ version: 1 })
+        expect(
+          Option.getOrThrow(
+            yield* database.get(
+              "SELECT version FROM diffdash_capabilities WHERE name = 'project-workspace-activity-selection'",
+            ),
+          ),
+        ).toEqual({ version: 1 })
 
-          yield* database.run("DELETE FROM repos WHERE id = 'repo-workspace-migration'")
-          expect(
-            decodeCountRow(
-              yield* database.get("SELECT COUNT(*) AS count FROM project_workspace_state"),
-            ).count,
-          ).toBe(0)
-        }).pipe(Effect.provide(makeLayer(databasePath)))
-      }),
+        yield* database.run("DELETE FROM repos WHERE id = 'repo-workspace-threads'")
+        expect(
+          decodeCountRow(
+            yield* database.get("SELECT COUNT(*) AS count FROM project_workspace_state"),
+          ).count,
+        ).toBe(4)
+      }).pipe(Effect.provide(makeLayer(databasePath)))
+    }),
   )
 
   it.effect("installs durable walkthrough acceptance evidence without bumping user_version", () =>

@@ -8,7 +8,16 @@ import {
   RevisionRangeComparison,
   workingTreeReviewTarget,
 } from "@diffdash/domain/local-review"
-import { ProjectWorkspaceStateInput } from "@diffdash/domain/project-workspace"
+import {
+  PROJECT_WORKSPACE_CODE_ACTIVITY_ID,
+  PROJECT_WORKSPACE_FILES_ACTIVITY_ID,
+  PROJECT_WORKSPACE_REVIEWS_ACTIVITY_ID,
+  PROJECT_WORKSPACE_WALKTHROUGH_ACTIVITY_ID,
+  ProjectWorkspaceActivityId,
+  ProjectWorkspaceStateInput,
+  type ProjectWorkspaceSurface,
+  REVIEW_COMMENTS_ACTIVITY_ID,
+} from "@diffdash/domain/project-workspace"
 import { RepositoryCheckoutPath } from "@diffdash/domain/repository"
 import {
   GitCommitSha,
@@ -85,7 +94,8 @@ const insertProject = Effect.gen(function* () {
 })
 
 const saveInput = (
-  activeRibbon: "reviews" | "files" | "code" | "walkthrough" | "threads",
+  activeSurface: ProjectWorkspaceSurface,
+  activeActivity: ProjectWorkspaceActivityId,
   selectedReviewTarget:
     | typeof hostedTarget
     | typeof workingTreeTarget
@@ -96,7 +106,8 @@ const saveInput = (
 ) =>
   ProjectWorkspaceStateInput.make({
     projectId,
-    activeRibbon,
+    activeSurface,
+    activeActivity,
     selectedReviewTarget,
   })
 
@@ -119,12 +130,15 @@ describe("ProjectWorkspaceStore", () => {
       yield* Effect.gen(function* () {
         yield* insertProject
         const store = yield* ProjectWorkspaceStore
-        const saved = yield* store.save(saveInput("files", null))
+        const saved = yield* store.save(
+          saveInput("review", PROJECT_WORKSPACE_FILES_ACTIVITY_ID, null),
+        )
 
         expect(saved).toEqual(
           expect.objectContaining({
             projectId,
-            activeRibbon: "files",
+            activeSurface: "review",
+            activeActivity: PROJECT_WORKSPACE_FILES_ACTIVITY_ID,
             selectedReviewTarget: null,
           }),
         )
@@ -140,10 +154,28 @@ describe("ProjectWorkspaceStore", () => {
       yield* Effect.gen(function* () {
         yield* insertProject
         const store = yield* ProjectWorkspaceStore
-        const saved = yield* store.save(saveInput("code", null))
+        const saved = yield* store.save(saveInput("code", PROJECT_WORKSPACE_CODE_ACTIVITY_ID, null))
 
-        expect(saved.activeRibbon).toBe("code")
+        expect(saved.activeSurface).toBe("code")
+        expect(saved.activeActivity).toBe(PROJECT_WORKSPACE_CODE_ACTIVITY_ID)
         expect(yield* store.get(projectId)).toEqual(saved)
+      }).pipe(Effect.provide(makeLayer(databasePath)))
+    }),
+  )
+
+  it.effect("round trips an extension activity without a built-in database constraint", () =>
+    Effect.gen(function* () {
+      const databasePath = yield* makeTempDatabasePath
+
+      yield* Effect.gen(function* () {
+        yield* insertProject
+        const activityId = ProjectWorkspaceActivityId.make("example.extension.comments")
+        const saved = yield* (yield* ProjectWorkspaceStore).save(
+          saveInput("code", activityId, null),
+        )
+
+        expect(saved.activeSurface).toBe("code")
+        expect(saved.activeActivity).toBe(activityId)
       }).pipe(Effect.provide(makeLayer(databasePath)))
     }),
   )
@@ -155,10 +187,10 @@ describe("ProjectWorkspaceStore", () => {
       yield* Effect.gen(function* () {
         yield* insertProject
         const saved = yield* (yield* ProjectWorkspaceStore).save(
-          saveInput("walkthrough", hostedTarget),
+          saveInput("review", PROJECT_WORKSPACE_WALKTHROUGH_ACTIVITY_ID, hostedTarget),
         )
 
-        expect(saved.activeRibbon).toBe("walkthrough")
+        expect(saved.activeActivity).toBe(PROJECT_WORKSPACE_WALKTHROUGH_ACTIVITY_ID)
         expect(saved.selectedReviewTarget).toEqual(hostedTarget)
       }).pipe(Effect.provide(makeLayer(databasePath)))
     }),
@@ -171,7 +203,7 @@ describe("ProjectWorkspaceStore", () => {
       yield* Effect.gen(function* () {
         yield* insertProject
         const saved = yield* (yield* ProjectWorkspaceStore).save(
-          saveInput("reviews", workingTreeTarget),
+          saveInput("review", PROJECT_WORKSPACE_REVIEWS_ACTIVITY_ID, workingTreeTarget),
         )
 
         expect(saved.selectedReviewTarget).toEqual(workingTreeTarget)
@@ -185,7 +217,9 @@ describe("ProjectWorkspaceStore", () => {
 
       yield* Effect.gen(function* () {
         yield* insertProject
-        const saved = yield* (yield* ProjectWorkspaceStore).save(saveInput("threads", branchTarget))
+        const saved = yield* (yield* ProjectWorkspaceStore).save(
+          saveInput("review", REVIEW_COMMENTS_ACTIVITY_ID, branchTarget),
+        )
 
         expect(saved.selectedReviewTarget).toEqual(branchTarget)
         expect(saved.selectedReviewTarget?.kind).toBe("local")
@@ -203,7 +237,7 @@ describe("ProjectWorkspaceStore", () => {
       yield* Effect.gen(function* () {
         yield* insertProject
         const saved = yield* (yield* ProjectWorkspaceStore).save(
-          saveInput("threads", revisionRangeTarget),
+          saveInput("review", REVIEW_COMMENTS_ACTIVITY_ID, revisionRangeTarget),
         )
 
         expect(saved.selectedReviewTarget).toEqual(revisionRangeTarget)
@@ -218,7 +252,9 @@ describe("ProjectWorkspaceStore", () => {
       yield* Effect.gen(function* () {
         yield* insertProject
         const store = yield* ProjectWorkspaceStore
-        yield* store.save(saveInput("files", comparisonTarget))
+        yield* store.save(
+          saveInput("review", PROJECT_WORKSPACE_FILES_ACTIVITY_ID, comparisonTarget),
+        )
 
         const restored = yield* store.get(projectId)
         expect(restored?.selectedReviewTarget).toEqual(comparisonTarget)
@@ -239,13 +275,15 @@ describe("ProjectWorkspaceStore", () => {
         yield* insertProject
         const store = yield* ProjectWorkspaceStore
         const database = makeDatabase(yield* SqlClient.SqlClient)
-        yield* store.save(saveInput("reviews", hostedTarget))
+        yield* store.save(saveInput("review", PROJECT_WORKSPACE_REVIEWS_ACTIVITY_ID, hostedTarget))
         yield* database.run(
           "UPDATE project_workspace_state SET updated_at = '2000-01-01T00:00:00.000Z' WHERE repo_id = ?",
           [projectId],
         )
 
-        const latest = yield* store.save(saveInput("threads", branchTarget))
+        const latest = yield* store.save(
+          saveInput("review", REVIEW_COMMENTS_ACTIVITY_ID, branchTarget),
+        )
         const count = decodeCountRow(
           Option.getOrThrow(
             yield* database.get("SELECT COUNT(*) AS count FROM project_workspace_state"),
@@ -253,7 +291,7 @@ describe("ProjectWorkspaceStore", () => {
         )
 
         expect(count.count).toBe(1)
-        expect(latest.activeRibbon).toBe("threads")
+        expect(latest.activeActivity).toBe(REVIEW_COMMENTS_ACTIVITY_ID)
         expect(latest.selectedReviewTarget).toEqual(branchTarget)
         expect(latest.updatedAt).not.toBe("2000-01-01T00:00:00.000Z")
         expect(yield* store.get(projectId)).toEqual(latest)
@@ -269,7 +307,7 @@ describe("ProjectWorkspaceStore", () => {
         yield* insertProject
         const store = yield* ProjectWorkspaceStore
         const database = makeDatabase(yield* SqlClient.SqlClient)
-        yield* store.save(saveInput("reviews", hostedTarget))
+        yield* store.save(saveInput("review", PROJECT_WORKSPACE_REVIEWS_ACTIVITY_ID, hostedTarget))
         yield* database.run(
           "UPDATE project_workspace_state SET selected_review_target_json = '{' WHERE repo_id = ?",
           [projectId],
@@ -293,7 +331,9 @@ describe("ProjectWorkspaceStore", () => {
       yield* Effect.gen(function* () {
         const store = yield* ProjectWorkspaceStore
         const database = makeDatabase(yield* SqlClient.SqlClient)
-        const orphan = yield* Effect.result(store.save(saveInput("reviews", null)))
+        const orphan = yield* Effect.result(
+          store.save(saveInput("review", PROJECT_WORKSPACE_REVIEWS_ACTIVITY_ID, null)),
+        )
         expect(Result.isFailure(orphan) && orphan.failure).toEqual(
           expect.objectContaining<Partial<ProjectWorkspaceStoreError>>({
             _tag: "ProjectWorkspaceStoreError",
@@ -302,7 +342,7 @@ describe("ProjectWorkspaceStore", () => {
         )
 
         yield* insertProject
-        yield* store.save(saveInput("reviews", hostedTarget))
+        yield* store.save(saveInput("review", PROJECT_WORKSPACE_REVIEWS_ACTIVITY_ID, hostedTarget))
         yield* database.run("DELETE FROM repos WHERE id = ?", [projectId])
         expect(yield* store.get(projectId)).toBeNull()
       }).pipe(Effect.provide(makeLayer(databasePath)))

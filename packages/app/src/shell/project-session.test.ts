@@ -5,10 +5,12 @@ import {
 } from "@diffdash/domain/git-provider"
 import { LocalReviewTarget, RevisionRangeComparison } from "@diffdash/domain/local-review"
 import {
+  PROJECT_WORKSPACE_FILES_ACTIVITY_ID,
   ProjectOpened,
   ProjectRemoteCandidate,
   ProjectRemoteSelectionRequired,
   ProjectWorkspaceState,
+  REVIEW_COMMENTS_ACTIVITY_ID,
 } from "@diffdash/domain/project-workspace"
 import { LinkedCheckout, Repo, RepositoryCheckoutPath } from "@diffdash/domain/repository"
 import { ReviewProjectId, ReviewRevision } from "@diffdash/domain/review-identity"
@@ -62,18 +64,22 @@ describe("ProjectSession", () => {
     const session = new ProjectSession({
       ...dependencies,
       saveWorkspace: async (input) => {
-        if (input.activeRibbon === "files") await firstWait
-        committed.push(input.activeRibbon)
+        if (input.activeActivity === PROJECT_WORKSPACE_FILES_ACTIVITY_ID) await firstWait
+        committed.push(input.activeActivity)
       },
     })
 
-    const first = session.persist(session.project(repo, "files", null))
-    const second = session.persist(session.project(repo, "threads", null))
+    const first = session.persist(
+      session.project(repo, "review", PROJECT_WORKSPACE_FILES_ACTIVITY_ID, null),
+    )
+    const second = session.persist(
+      session.project(repo, "review", REVIEW_COMMENTS_ACTIVITY_ID, null),
+    )
     await Promise.resolve()
     expect(committed).toEqual([])
     firstGate.release()
     await Promise.all([first, second])
-    expect(committed).toEqual(["files", "threads"])
+    expect(committed).toEqual([PROJECT_WORKSPACE_FILES_ACTIVITY_ID, REVIEW_COMMENTS_ACTIVITY_ID])
   })
 
   it("rejects a stale restoration after a newer project restoration starts", async () => {
@@ -108,7 +114,7 @@ describe("ProjectSession", () => {
     })
 
     const restoration = session.restore(repo)
-    session.project(repo, "threads", null)
+    session.project(repo, "review", REVIEW_COMMENTS_ACTIVITY_ID, null)
     release?.(Option.none())
 
     await expect(restoration).resolves.toEqual({ _tag: "stale" })
@@ -149,7 +155,11 @@ describe("ProjectSession", () => {
     )
     expect(opened).toMatchObject({
       _tag: "opened",
-      projection: { activeRibbon: "files", selectedReview: { kind: "hosted" } },
+      projection: {
+        activeSurface: "review",
+        activeActivity: PROJECT_WORKSPACE_FILES_ACTIVITY_ID,
+        selectedReview: { kind: "hosted" },
+      },
       reviewType: "pull_request",
     })
     expect(openProject).toHaveBeenLastCalledWith("/workspace/diffdash", Option.some(github))

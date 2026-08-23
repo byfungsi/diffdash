@@ -4,7 +4,14 @@ import {
   makeHostedReviewLocator,
 } from "@diffdash/domain/git-provider"
 import { workingTreeReviewTarget } from "@diffdash/domain/local-review"
-import { ProjectWorkspaceState } from "@diffdash/domain/project-workspace"
+import {
+  PROJECT_WORKSPACE_CODE_ACTIVITY_ID,
+  PROJECT_WORKSPACE_FILES_ACTIVITY_ID,
+  PROJECT_WORKSPACE_REVIEWS_ACTIVITY_ID,
+  ProjectWorkspaceActivityId,
+  ProjectWorkspaceState,
+  REVIEW_COMMENTS_ACTIVITY_ID,
+} from "@diffdash/domain/project-workspace"
 import { LinkedCheckout, Repo, RepositoryCheckoutPath } from "@diffdash/domain/repository"
 import {
   GitCommitSha,
@@ -36,7 +43,8 @@ const repo = Repo.make({
 describe("project workspace state", () => {
   it("defaults a first open to Reviews without a selection", () => {
     expect(resolveProjectWorkspaceState(repo, null)).toEqual({
-      activeRibbon: "reviews",
+      activeSurface: "review",
+      activeActivity: PROJECT_WORKSPACE_REVIEWS_ACTIVITY_ID,
       notice: null,
       selectedReview: null,
     })
@@ -54,13 +62,15 @@ describe("project workspace state", () => {
         repo,
         ProjectWorkspaceState.make({
           projectId: repo.id,
-          activeRibbon: "threads",
+          activeSurface: "review",
+          activeActivity: REVIEW_COMMENTS_ACTIVITY_ID,
           selectedReviewTarget: hosted,
           updatedAt: "2026-08-02T00:00:00.000Z",
         }),
       ),
     ).toEqual({
-      activeRibbon: "threads",
+      activeSurface: "review",
+      activeActivity: REVIEW_COMMENTS_ACTIVITY_ID,
       notice: null,
       selectedReview: { kind: "hosted", review: hosted.review },
     })
@@ -73,12 +83,18 @@ describe("project workspace state", () => {
         repo,
         ProjectWorkspaceState.make({
           projectId: repo.id,
-          activeRibbon: "code",
+          activeSurface: "code",
+          activeActivity: PROJECT_WORKSPACE_CODE_ACTIVITY_ID,
           selectedReviewTarget: null,
           updatedAt: "2026-08-20T00:00:00.000Z",
         }),
       ),
-    ).toEqual({ activeRibbon: "code", notice: null, selectedReview: null })
+    ).toEqual({
+      activeSurface: "code",
+      activeActivity: PROJECT_WORKSPACE_CODE_ACTIVITY_ID,
+      notice: null,
+      selectedReview: null,
+    })
   })
 
   it("rehydrates structural repository comparisons at the persistence boundary", () => {
@@ -102,12 +118,13 @@ describe("project workspace state", () => {
   })
 
   it("falls back visibly for malformed, mismatched, and foreign targets", () => {
-    const malformed = resolveProjectWorkspaceState(repo, { activeRibbon: "files" })
+    const malformed = resolveProjectWorkspaceState(repo, { activeActivity: "diffdash.core.files" })
     const mismatched = resolveProjectWorkspaceState(
       repo,
       ProjectWorkspaceState.make({
         projectId: ReviewProjectId.make("github:other/project"),
-        activeRibbon: "files",
+        activeSurface: "review",
+        activeActivity: PROJECT_WORKSPACE_FILES_ACTIVITY_ID,
         selectedReviewTarget: null,
         updatedAt: "2026-08-02T00:00:00.000Z",
       }),
@@ -116,7 +133,8 @@ describe("project workspace state", () => {
       repo,
       ProjectWorkspaceState.make({
         projectId: repo.id,
-        activeRibbon: "files",
+        activeSurface: "review",
+        activeActivity: PROJECT_WORKSPACE_FILES_ACTIVITY_ID,
         selectedReviewTarget: HostedReviewTarget.make({
           kind: "hosted",
           review: makeHostedReviewLocator("github", "other", "project", 1),
@@ -126,9 +144,31 @@ describe("project workspace state", () => {
     )
 
     for (const resolved of [malformed, mismatched, foreign]) {
-      expect(resolved.activeRibbon).toBe("reviews")
+      expect(resolved.activeSurface).toBe("review")
+      expect(resolved.activeActivity).toBe(PROJECT_WORKSPACE_REVIEWS_ACTIVITY_ID)
       expect(resolved.selectedReview).toBeNull()
       expect(resolved.notice).not.toBeNull()
     }
+  })
+
+  it("repairs an unavailable activity without changing the source surface", () => {
+    const resolved = resolveProjectWorkspaceState(
+      repo,
+      ProjectWorkspaceState.make({
+        projectId: repo.id,
+        activeSurface: "code",
+        activeActivity: ProjectWorkspaceActivityId.make("example.extension.missing"),
+        selectedReviewTarget: null,
+        updatedAt: "2026-08-20T00:00:00.000Z",
+      }),
+    )
+
+    expect(resolved).toEqual({
+      activeSurface: "code",
+      activeActivity: PROJECT_WORKSPACE_CODE_ACTIVITY_ID,
+      notice:
+        "The saved workspace activity is unavailable. A built-in activity was restored instead.",
+      selectedReview: null,
+    })
   })
 })
