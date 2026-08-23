@@ -7,6 +7,11 @@ describe("App shell browser interactions", () => {
     await appBrowserScenario("workbenchTitlebar")()
   })
 
+  it("keeps the Review Comments connection scoped to its project", async () => {
+    expect.hasAssertions()
+    await appBrowserScenario("reviewCommentsConnectionScope")()
+  })
+
   it("shows a retryable error instead of onboarding when application state is unavailable", async () => {
     expect.hasAssertions()
     await appBrowserScenario("appStateRecovery")()

@@ -17,6 +17,7 @@ import {
 } from "./extension-registry"
 import {
   REVIEW_COMMENTS_ACTIVITY,
+  REVIEW_COMMENTS_CONNECTION_ACTION_ID,
   REVIEW_COMMENTS_EXTENSION_ID,
   reviewCommentsExtension,
 } from "./review-comments/review-comments-extension"
@@ -191,7 +192,8 @@ describe("TrustedExtensionRegistry", () => {
   })
 
   it("advertises Comments on Code and Review with preserve-surface selection", () => {
-    const [comments] = compose([reviewCommentsExtension]).snapshot().projectActivities
+    const snapshot = compose([reviewCommentsExtension]).snapshot()
+    const [comments] = snapshot.projectActivities
 
     expect(comments).toEqual(
       expect.objectContaining({
@@ -200,6 +202,12 @@ describe("TrustedExtensionRegistry", () => {
         surfacePolicy: "preserve",
       }),
     )
+    expect(snapshot.titlebarActions).toEqual([
+      expect.objectContaining({
+        id: REVIEW_COMMENTS_CONNECTION_ACTION_ID,
+        ownerExtensionId: REVIEW_COMMENTS_EXTENSION_ID,
+      }),
+    ])
   })
 
   it("isolates subscriber defects and notifies healthy subscribers for each ownership change", () => {

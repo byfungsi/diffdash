@@ -33,7 +33,7 @@ import { isHTMLElement } from "@/shared/dom"
 import { Button } from "@/shared/ui/button"
 import { Input } from "@/shared/ui/input"
 import type { ColorScheme } from "@/settings/theme"
-import { useCommentSubmission } from "@/comments/comment-submission-context"
+import { useCommentSubmission } from "@/extensions/review-comments/comment-submission-context"
 import { ReviewThreadComposer } from "@/threads/review-threads"
 import { useLineChangeCapability } from "@/source-surface/line-change-capability"
 import {

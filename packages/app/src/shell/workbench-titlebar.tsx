@@ -16,7 +16,7 @@ export const WorkbenchTitlebar = ({
   onOpenQuickNavigation,
   onContextActionsHostChange,
   onToggleSidebar,
-  aiConnectionControl,
+  titlebarActions,
 }: {
   readonly canNavigateBack: boolean
   readonly commandLabel: string
@@ -28,7 +28,7 @@ export const WorkbenchTitlebar = ({
   readonly onOpenQuickNavigation: () => void
   readonly onContextActionsHostChange: (host: HTMLDivElement | null) => void
   readonly onToggleSidebar: () => void
-  readonly aiConnectionControl?: ReactNode
+  readonly titlebarActions?: ReactNode
 }) => {
   const isMac = isMacPlatform()
   const shortcutModifier = keyboardShortcutModifierLabel()
@@ -111,7 +111,7 @@ export const WorkbenchTitlebar = ({
       </div>
 
       <div className="workbench-titlebar-interactive ml-auto flex items-center pr-2">
-        {aiConnectionControl}
+        {titlebarActions}
         <Button
           type="button"
           size="sm"
