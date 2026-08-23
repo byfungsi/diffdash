@@ -15,6 +15,8 @@ import {
   CommentSubmissionReceipt,
   CommentSubmissionUnsupportedError,
   CommentSubject,
+  OpenCodeSessionId,
+  OpenCodeSessionSummary,
 } from "@diffdash/domain/comment"
 import {
   CodeWorkspaceDirectoryPage,
@@ -1123,6 +1125,7 @@ type AppBrowserScenarioId =
   | "cleanProjectReviews"
   | "failedProjectReviews"
   | "reviewNavigationLifecycle"
+  | "reviewCommentsConnectionScope"
   | "remoteRepositorySearch"
   | "repositoryInvalidation"
   | "repositorySearchFailure"
@@ -1806,6 +1809,9 @@ scenario("workbenchTitlebar", async () => {
   expect(commandCenter?.disabled).toBe(false)
   expect(back).toBeNull()
   expect(titlebar?.querySelector('button[aria-label="Review actions"]')).toBeNull()
+  expect(titlebar?.querySelector("[data-workbench-ai-connection]")?.textContent).toContain(
+    "Connect AI",
+  )
   if (
     titlebar === null ||
     viewport === null ||
@@ -1857,6 +1863,129 @@ scenario("workbenchTitlebar", async () => {
   await vi.waitFor(() => {
     expect(document.querySelector('dialog[aria-label="Go anywhere"]')).toBeNull()
     expect(document.activeElement).toBe(commandCenter)
+  })
+})
+
+scenario("reviewCommentsConnectionScope", async () => {
+  const firstRepo = linkedRepo(repo, "/workspace/diffdash")
+  const secondRepo = Repo.make({
+    ...firstRepo,
+    id: ReviewProjectId.make("repo-2"),
+    source: HostedRepositorySource.make({
+      locator: makeHostedRepositoryLocator("github", "fungsi", "other"),
+    }),
+    checkout: LinkedCheckout.make({
+      remoteUrl: "https://github.com/fungsi/other",
+      path: RepositoryCheckoutPath.make("/workspace/other"),
+    }),
+  })
+  const session = OpenCodeSessionSummary.make({
+    id: OpenCodeSessionId.make("ses_browserComments"),
+    title: "Review with OpenCode",
+    directory: RepositoryCheckoutPath.make("/workspace/diffdash"),
+    updatedAt: Date.now(),
+  })
+  let connectionAttempt = 0
+  const staleConnectionGate: { reject: ((error: Error) => void) | null } = { reject: null }
+  const staleConnection = new Promise<{
+    readonly sessionId: OpenCodeSessionId
+    readonly planMode: boolean
+  }>((_resolve, reject) => {
+    staleConnectionGate.reject = reject
+  })
+  const calls = installDiffDashApi({
+    connectOpenCodeSession: async ({ sessionId }) => {
+      connectionAttempt += 1
+      return connectionAttempt === 1 ? { sessionId, planMode: true } : staleConnection
+    },
+    openCodeSessions: [session],
+    repositories: [firstRepo, secondRepo],
+    openProject: async (localPath) =>
+      ProjectOpened.make({ repo: localPath === secondRepo.localPath ? secondRepo : firstRepo }),
+  })
+  renderApp()
+
+  const chooseOpenCodeSession = async () => {
+    const connectionButton = await vi.waitFor(() => {
+      const button = document.querySelector<HTMLButtonElement>("[data-workbench-ai-connection]")
+      expect(button).not.toBeNull()
+      expect(button?.disabled).toBe(false)
+      return button
+    })
+    connectionButton?.dispatchEvent(
+      new PointerEvent("pointerdown", {
+        bubbles: true,
+        button: 0,
+        composed: true,
+        pointerId: 1,
+        pointerType: "mouse",
+      }),
+    )
+    const openCodeItem = await vi.waitFor(() => {
+      const item = [...document.querySelectorAll<HTMLElement>('[role="menuitem"]')].find(
+        (candidate) => candidate.textContent?.includes("OpenCode") ?? false,
+      )
+      expect(item).not.toBeUndefined()
+      return item
+    })
+    openCodeItem?.dispatchEvent(
+      new PointerEvent("pointermove", { bubbles: true, pointerType: "mouse" }),
+    )
+    const sessionItem = await vi.waitFor(() => {
+      const item = [...document.querySelectorAll<HTMLElement>('[role="menuitem"]')].find(
+        (candidate) => candidate.textContent?.includes(session.title) ?? false,
+      )
+      expect(item).not.toBeUndefined()
+      return item
+    })
+    sessionItem?.click()
+  }
+
+  await openDefaultProject()
+  await chooseOpenCodeSession()
+  await vi.waitFor(() => {
+    expect(calls.connectOpenCodeSession).toHaveBeenCalledWith({
+      sessionId: session.id,
+      projectId: firstRepo.id,
+    })
+    expect(document.querySelector("[data-workbench-ai-connection]")?.textContent).toContain(
+      session.title,
+    )
+  })
+
+  document.querySelector<HTMLButtonElement>('button[aria-label="Back"]')?.click()
+  const secondProject = await vi.waitFor(() => {
+    const button = document.querySelector<HTMLButtonElement>(
+      'button[aria-label="Open project fungsi/other"]',
+    )
+    expect(button).not.toBeNull()
+    return button
+  })
+  secondProject?.click()
+  await vi.waitFor(() => {
+    expect(document.querySelector("[data-workbench-ai-connection]")?.textContent).toContain(
+      "Connect AI",
+    )
+    expect(document.body.textContent).toContain("fungsi/other")
+  })
+
+  await chooseOpenCodeSession()
+  await vi.waitFor(() => expect(calls.connectOpenCodeSession).toHaveBeenCalledTimes(2))
+  document.querySelector<HTMLButtonElement>('button[aria-label="Back"]')?.click()
+  const firstProject = await vi.waitFor(() => {
+    const button = document.querySelector<HTMLButtonElement>(
+      'button[aria-label="Open project fungsi/diffdash"]',
+    )
+    expect(button).not.toBeNull()
+    return button
+  })
+  firstProject?.click()
+  staleConnectionGate.reject?.(new Error("Old project connection failed"))
+  await vi.waitFor(() => {
+    expect(document.querySelector("[data-workbench-ai-connection]")?.textContent).toContain(
+      "Connect AI",
+    )
+    expect(document.body.textContent).not.toContain("Old project connection failed")
   })
 })
 
@@ -7664,6 +7793,7 @@ export const installDiffDashApi = (
     readonly codeWorkspaceReferences?: DiffDashApi["codeWorkspace"]["references"]
     readonly codeWorkspaceChanges?: DiffDashApi["codeWorkspace"]["changes"]
     readonly codeWorkspaceLineChanges?: DiffDashApi["codeWorkspace"]["lineChanges"]
+    readonly connectOpenCodeSession?: DiffDashApi["ai"]["connectOpenCodeSession"]
     readonly expireFirstSnapshotPage?: boolean
     readonly getAppState?: DiffDashApi["appState"]["get"]
     readonly getDiagnostics?: DiffDashApi["diagnostics"]
@@ -7672,6 +7802,7 @@ export const installDiffDashApi = (
       projectId: ReviewProjectId,
     ) => Promise<LocalCheckoutFileListResult>
     readonly openProject?: DiffDashApi["repositories"]["openProject"]
+    readonly openCodeSessions?: readonly OpenCodeSessionSummary[]
     readonly projectWorkspaceState?: ProjectWorkspaceState | null
     readonly pullRequestDetail?: HostedReviewDetail
     readonly pullRequestDiff?: HostedReviewDiff
@@ -7846,6 +7977,12 @@ export const installDiffDashApi = (
     generateWalkthrough: vi.fn<(request: WalkthroughBridgeStartRequest) => void>(),
     getWalkthrough:
       vi.fn<(request: Parameters<DiffDashApi["walkthroughOperations"]["getStored"]>[0]) => void>(),
+    listOpenCodeSessions: vi.fn<DiffDashApi["ai"]["listOpenCodeSessions"]>(async () =>
+      Promise.resolve(options.openCodeSessions ?? []),
+    ),
+    connectOpenCodeSession: vi.fn<DiffDashApi["ai"]["connectOpenCodeSession"]>(
+      options.connectOpenCodeSession ?? (async ({ sessionId }) => ({ sessionId, planMode: true })),
+    ),
     getAppState: vi.fn<DiffDashApi["appState"]["get"]>(
       options.getAppState ?? (async () => appState),
     ),
@@ -8384,8 +8521,8 @@ export const installDiffDashApi = (
       getCatalog: async () => options.agentProviderCatalog ?? readyAgentProviderCatalog,
     },
     ai: {
-      listOpenCodeSessions: async () => [],
-      connectOpenCodeSession: async ({ sessionId }) => ({ sessionId, planMode: true }),
+      listOpenCodeSessions: calls.listOpenCodeSessions,
+      connectOpenCodeSession: calls.connectOpenCodeSession,
       submitComment: async ({ destination, submission }) =>
         CommentDestination.match(destination, {
           OpenCode: ({ connection }) =>

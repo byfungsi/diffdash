@@ -58,7 +58,7 @@ import { Button } from "@/shared/ui/button"
 import { Textarea } from "@/shared/ui/textarea"
 import { UnicodeLoadingText } from "@/shared/ui/unicode-loading-text"
 import { cn } from "@/shared/utils"
-import { useCommentSubmission } from "@/comments/comment-submission-context"
+import { useCommentSubmission } from "@/extensions/review-comments/comment-submission-context"
 import {
   recordReviewThreadHistoryScrollState,
   reviewThreadIsPreviousRevision,

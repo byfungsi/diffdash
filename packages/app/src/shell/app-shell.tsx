@@ -2,7 +2,6 @@
 import { AISettings } from "@diffdash/domain/ai-settings"
 import type { AppState } from "@diffdash/domain/app-state"
 import type { CodeLineChangeRange } from "@diffdash/domain/code-line-change"
-import type { OpenCodeConnectionSelection } from "@diffdash/domain/comment"
 import {
   type CodeWorkspaceTarget,
   ProjectHeadCodeWorkspaceTarget,
@@ -50,6 +49,8 @@ import { Equal, HashMap, Match, Option } from "effect"
 import { AsyncResult } from "effect/unstable/reactivity"
 import { useDeferredValue, useEffect, useEffectEvent, useRef, useState } from "react"
 import { useTrustedExtensionRegistry } from "@/extensions/extension-registry-context"
+import { ReviewCommentsProvider } from "@/extensions/review-comments/review-comments-provider"
+import { TrustedTitlebarActions } from "@/extensions/trusted-titlebar-actions"
 import { HomeScreen, hostedRepositoryLabel } from "@/home/home-screen"
 import { diagnosticsAtom } from "@/onboarding/atoms"
 import { OnboardingScreen } from "@/onboarding/onboarding-screen"
@@ -102,7 +103,6 @@ import {
 } from "@/settings/theme"
 import { useSettingsMutation } from "@/settings/use-settings-mutation"
 import { useCaptureAnalytics } from "@/shared/analytics"
-import { CommentSubmissionProvider } from "@/comments/comment-submission"
 import { formatError } from "@/shared/errors"
 import { Button } from "@/shared/ui/button"
 import { EmptyState } from "@/shared/ui/empty-state"
@@ -110,7 +110,6 @@ import { FloatingPaneWorkspace } from "@/shared/ui/floating-pane"
 import { UpdateBanner } from "@/shared/ui/update-banner"
 import { agentProviderCatalogAtom } from "@/walkthrough/atoms"
 import { CommandPaletteDialog, type CommandPaletteItem } from "./command-palette"
-import { AIConnectionMenu } from "./ai-connection-menu"
 import { KeyboardShortcutReference } from "./keyboard-shortcut-reference"
 import { useKeyboardShortcut } from "./keyboard-shortcuts"
 import { WorkbenchContextActionsProvider } from "./workbench-context-actions"
@@ -192,7 +191,7 @@ export function AppShell() {
   const preferences = useRendererPreferences()
   const projectWorkspace = useProjectWorkspace()
   const repositories = useRepositories()
-  const { projectActivities } = useTrustedExtensionRegistry()
+  const { projectActivities, titlebarActions } = useTrustedExtensionRegistry()
   const [screen, setScreen] = useState<Screen>("home")
   const [selectedRepo, setSelectedRepo] = useState<Repo | null>(null)
   const [selectedReview, setSelectedReview] = useState<SelectedReviewTarget | null>(null)
@@ -263,7 +262,6 @@ export function AppShell() {
   )
   const [goToPaletteOpen, setGoToPaletteOpen] = useState(false)
   const [shortcutReferenceOpen, setShortcutReferenceOpen] = useState(false)
-  const [aiConnection, setAIConnection] = useState(Option.none<OpenCodeConnectionSelection>())
   const [updateState, setUpdateState] = useState<AppUpdateState | null>(null)
   const [debouncedRemoteSearchQuery, setDebouncedRemoteSearchQuery] = useState("")
   const deferredSearchQuery = useDeferredValue(query.trim())
@@ -481,13 +479,9 @@ export function AppShell() {
       setActiveSurface("review")
       setActiveActivity(PROJECT_WORKSPACE_REVIEWS_ACTIVITY_ID)
       setWorkspaceNotice(null)
-      setAIConnection(Option.none())
       return
     }
 
-    setAIConnection((current) =>
-      Option.filter(current, (connection) => connection.projectId === location.repo.id),
-    )
     setScreen("project")
     setSelectedRepo(location.repo)
     setSelectedReview(location.selectedReview)
@@ -1318,19 +1312,20 @@ export function AppShell() {
   }
 
   return (
-    <CommentSubmissionProvider connection={aiConnection}>
+    <ReviewCommentsProvider
+      directory={selectedRepo?.localPath ?? null}
+      projectId={selectedRepo?.id ?? null}
+    >
       <WorkbenchContextActionsProvider host={contextActionsHost}>
         <div
           data-workbench-shell
           className="bg-shell-bevel text-foreground flex h-full min-h-0 flex-col"
         >
           <WorkbenchTitlebar
-            aiConnectionControl={
-              <AIConnectionMenu
-                directory={Option.fromNullishOr(selectedRepo?.localPath)}
-                projectId={Option.fromNullishOr(selectedRepo?.id)}
-                selected={aiConnection}
-                onChange={setAIConnection}
+            titlebarActions={
+              <TrustedTitlebarActions
+                actions={titlebarActions}
+                projectId={selectedRepo?.id ?? null}
               />
             }
             canNavigateBack={canNavigateBack}
@@ -1616,7 +1611,7 @@ export function AppShell() {
           )}
         </div>
       </WorkbenchContextActionsProvider>
-    </CommentSubmissionProvider>
+    </ReviewCommentsProvider>
   )
 }
 
