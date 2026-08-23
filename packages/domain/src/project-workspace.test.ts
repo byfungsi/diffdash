@@ -250,7 +250,8 @@ describe("project workspace", () => {
     for (const selectedReviewTarget of selections) {
       const input = decodeInput({
         projectId,
-        activeRibbon: "reviews",
+        activeSurface: "review",
+        activeActivity: PROJECT_WORKSPACE_REVIEWS_ACTIVITY_ID,
         selectedReviewTarget,
       })
       expect(input.selectedReviewTarget).toEqual(selectedReviewTarget)
@@ -270,7 +271,8 @@ describe("project workspace", () => {
   it("returns persisted state with its update timestamp", () => {
     const state = ProjectWorkspaceState.make({
       projectId,
-      activeRibbon: "threads",
+      activeSurface: "review",
+      activeActivity: REVIEW_COMMENTS_ACTIVITY_ID,
       selectedReviewTarget: targets[0],
       updatedAt: "2026-08-02T00:00:00.000Z",
     })

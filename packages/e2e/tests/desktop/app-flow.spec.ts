@@ -585,7 +585,11 @@ test("covers finished Home to Review flow with fake CLI fixtures", async ({
       beforeRestart,
     )
     expect(afterRestart.workspaceStates).toEqual([
-      expect.objectContaining({ active_ribbon: "files", repo_id: "github:byfungsi/diffdash" }),
+      expect.objectContaining({
+        active_surface: "review",
+        active_activity: "diffdash.core.files",
+        repo_id: "github:byfungsi/diffdash",
+      }),
     ])
   } finally {
     await app.close().catch(() => undefined)
@@ -1173,7 +1177,11 @@ test("opens the current project Reviews ribbon from the versioned CLI command", 
     }),
   ])
   expect(persisted.workspaceStates).toEqual([
-    expect.objectContaining({ repo_id: "github:byfungsi/diffdash", active_ribbon: "files" }),
+    expect.objectContaining({
+      repo_id: "github:byfungsi/diffdash",
+      active_surface: "review",
+      active_activity: "diffdash.core.files",
+    }),
   ])
 })
 
@@ -1305,7 +1313,8 @@ test("opens a merge-base branch comparison from the versioned CLI command", asyn
   expect(persisted.workspaceStates).toHaveLength(1)
   expect(persisted.workspaceStates[0]).toMatchObject({
     repo_id: "github:byfungsi/diffdash",
-    active_ribbon: "files",
+    active_surface: "review",
+    active_activity: "diffdash.core.files",
   })
   expect(String(persisted.workspaceStates[0]?.selected_review_target_json)).toContain(
     '"_tag":"branch"',
@@ -1812,7 +1821,7 @@ const readReviewPersistenceSnapshot = (databasePath: string) => {
     const workspaceStates = parseSqliteRows(
       database
         .prepare(
-          `SELECT repo_id, active_ribbon, selected_review_target_json, updated_at
+          `SELECT repo_id, active_surface, active_activity, selected_review_target_json, updated_at
            FROM project_workspace_state ORDER BY repo_id`,
         )
         .all(),

@@ -178,7 +178,8 @@ export class ProjectWorkspaceStateInput extends Schema.Class<ProjectWorkspaceSta
   "ProjectWorkspaceStateInput",
 )({
   projectId: ReviewProjectId,
-  activeRibbon: ProjectWorkspaceRibbon,
+  activeSurface: ProjectWorkspaceSurface,
+  activeActivity: ProjectWorkspaceActivityId,
   selectedReviewTarget: Schema.NullOr(ProjectWorkspaceReviewTarget),
 }) {}
 
@@ -187,7 +188,8 @@ export class ProjectWorkspaceState extends Schema.Class<ProjectWorkspaceState>(
   "ProjectWorkspaceState",
 )({
   projectId: ReviewProjectId,
-  activeRibbon: ProjectWorkspaceRibbon,
+  activeSurface: ProjectWorkspaceSurface,
+  activeActivity: ProjectWorkspaceActivityId,
   selectedReviewTarget: Schema.NullOr(ProjectWorkspaceReviewTarget),
   updatedAt: Schema.String,
 }) {}

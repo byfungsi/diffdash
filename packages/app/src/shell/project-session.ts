@@ -7,11 +7,16 @@ import { workingTreeReviewTarget, type LocalReviewTarget } from "@diffdash/domai
 import type {
   ProjectOpenResult,
   ProjectRemoteSelectionRequired,
-  ProjectWorkspaceRibbon,
+  ProjectWorkspaceActivityId,
   ProjectWorkspaceState,
   ProjectWorkspaceStateInput,
+  ProjectWorkspaceSurface,
 } from "@diffdash/domain/project-workspace"
-import { ProjectWorkspaceStateInput as ProjectWorkspaceStateInputSchema } from "@diffdash/domain/project-workspace"
+import {
+  PROJECT_WORKSPACE_FILES_ACTIVITY_ID,
+  PROJECT_WORKSPACE_REVIEWS_ACTIVITY_ID,
+  ProjectWorkspaceStateInput as ProjectWorkspaceStateInputSchema,
+} from "@diffdash/domain/project-workspace"
 import type { Repo } from "@diffdash/domain/repository"
 import type { ReviewProjectId } from "@diffdash/domain/review-identity"
 import type { OpenRepositoryComparisonCommand } from "@diffdash/protocol/cli-navigation"
@@ -35,7 +40,8 @@ export type ProjectOpenIntent =
 /** React-independent project state produced by session orchestration. */
 export type ProjectSessionProjection = {
   readonly repo: Repo
-  readonly activeRibbon: ProjectWorkspaceRibbon
+  readonly activeSurface: ProjectWorkspaceSurface
+  readonly activeActivity: ProjectWorkspaceActivityId
   readonly selectedReview: SelectedReviewTarget | null
   readonly notice: string | null
 }
@@ -102,7 +108,7 @@ export class ProjectSession {
 
   /** Returns the immediate project projection shown while persisted state is restored. */
   initial(repo: Repo): ProjectSessionProjection {
-    return projectProjection(repo, "reviews", null, null)
+    return projectProjection(repo, "review", PROJECT_WORKSPACE_REVIEWS_ACTIVITY_ID, null, null)
   }
 
   /** Restores valid persisted state and rejects completion after a newer navigation request. */
@@ -115,7 +121,8 @@ export class ProjectSession {
       const restored = resolveProjectWorkspaceState(repo, persisted)
       const projection = projectProjection(
         repo,
-        restored.activeRibbon,
+        restored.activeSurface,
+        restored.activeActivity,
         restored.selectedReview,
         restored.notice,
       )
@@ -160,7 +167,13 @@ export class ProjectSession {
       comparison.target.kind === "local"
         ? { kind: "localDiff", target: comparison.target }
         : { kind: "repositoryComparison", target: comparison.target }
-    const projection = projectProjection(comparison.repo, "files", selectedReview, null)
+    const projection = projectProjection(
+      comparison.repo,
+      "review",
+      PROJECT_WORKSPACE_FILES_ACTIVITY_ID,
+      selectedReview,
+      null,
+    )
     return {
       _tag: "opened",
       projection,
@@ -173,7 +186,8 @@ export class ProjectSession {
   persist(projection: ProjectSessionProjection): Promise<void> {
     const input = ProjectWorkspaceStateInputSchema.make({
       projectId: projection.repo.id,
-      activeRibbon: projection.activeRibbon,
+      activeSurface: projection.activeSurface,
+      activeActivity: projection.activeActivity,
       selectedReviewTarget: selectedReviewTargetForPersistence(projection.selectedReview),
     })
     const requested = this.saveQueue.then(async () => {
@@ -187,12 +201,13 @@ export class ProjectSession {
   /** Invalidates restoration and creates a projection for a UI-owned workspace transition. */
   project(
     repo: Repo,
-    activeRibbon: ProjectWorkspaceRibbon,
+    activeSurface: ProjectWorkspaceSurface,
+    activeActivity: ProjectWorkspaceActivityId,
     selectedReview: SelectedReviewTarget | null,
     notice: string | null = null,
   ): ProjectSessionProjection {
     this.cancelRestore()
-    return projectProjection(repo, activeRibbon, selectedReview, notice)
+    return projectProjection(repo, activeSurface, activeActivity, selectedReview, notice)
   }
 
   private async completeOpen(repo: Repo, intent: ProjectOpenIntent): Promise<OpenedProjectSession> {
@@ -202,7 +217,8 @@ export class ProjectSession {
       if (repo.localPath === null) throw new Error("The opened project has no local checkout.")
       projection = projectProjection(
         repo,
-        "files",
+        "review",
+        PROJECT_WORKSPACE_FILES_ACTIVITY_ID,
         { kind: "localDiff", target: workingTreeReviewTarget(repo.localPath) },
         null,
       )
@@ -213,12 +229,24 @@ export class ProjectSession {
         repo.localPath,
         Option.fromNullishOr(intent.branchName),
       )
-      projection = projectProjection(repo, "files", { kind: "localDiff", target }, null)
+      projection = projectProjection(
+        repo,
+        "review",
+        PROJECT_WORKSPACE_FILES_ACTIVITY_ID,
+        { kind: "localDiff", target },
+        null,
+      )
       reviewType = "local_diff"
     } else if (intent.kind === "lastCommit") {
       if (repo.localPath === null) throw new Error("The opened project has no local checkout.")
       const target = await this.dependencies.resolveLastCommit(repo.localPath)
-      projection = projectProjection(repo, "files", { kind: "localDiff", target }, null)
+      projection = projectProjection(
+        repo,
+        "review",
+        PROJECT_WORKSPACE_FILES_ACTIVITY_ID,
+        { kind: "localDiff", target },
+        null,
+      )
       reviewType = "local_diff"
     } else if (intent.kind === "pullRequest") {
       if (repo.hostedLocator === null) {
@@ -226,7 +254,8 @@ export class ProjectSession {
       }
       projection = projectProjection(
         repo,
-        "files",
+        "review",
+        PROJECT_WORKSPACE_FILES_ACTIVITY_ID,
         {
           kind: "hosted",
           review: makeHostedReviewLocator(
@@ -240,7 +269,13 @@ export class ProjectSession {
       )
       reviewType = "pull_request"
     } else {
-      projection = projectProjection(repo, "reviews", null, null)
+      projection = projectProjection(
+        repo,
+        "review",
+        PROJECT_WORKSPACE_REVIEWS_ACTIVITY_ID,
+        null,
+        null,
+      )
     }
     return {
       _tag: "opened",
@@ -253,7 +288,8 @@ export class ProjectSession {
 
 const projectProjection = (
   repo: Repo,
-  activeRibbon: ProjectWorkspaceRibbon,
+  activeSurface: ProjectWorkspaceSurface,
+  activeActivity: ProjectWorkspaceActivityId,
   selectedReview: SelectedReviewTarget | null,
   notice: string | null,
-): ProjectSessionProjection => ({ repo, activeRibbon, selectedReview, notice })
+): ProjectSessionProjection => ({ repo, activeSurface, activeActivity, selectedReview, notice })

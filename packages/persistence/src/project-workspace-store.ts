@@ -2,9 +2,10 @@ import { Context, Effect, Layer, Option, Schema } from "effect"
 import * as SqlClient from "effect/unstable/sql/SqlClient"
 
 import {
-  ProjectWorkspaceRibbon,
+  ProjectWorkspaceActivityId,
   ProjectWorkspaceReviewTarget,
   ProjectWorkspaceState,
+  ProjectWorkspaceSurface,
   type ProjectWorkspaceStateInput,
 } from "@diffdash/domain/project-workspace"
 import { ReviewProjectId } from "@diffdash/domain/review-identity"
@@ -14,7 +15,8 @@ const ReviewTargetJson = Schema.fromJsonString(ProjectWorkspaceReviewTarget)
 
 const ProjectWorkspaceStateRow = Schema.Struct({
   repo_id: ReviewProjectId,
-  active_ribbon: ProjectWorkspaceRibbon,
+  active_surface: ProjectWorkspaceSurface,
+  active_activity: ProjectWorkspaceActivityId,
   selected_review_target_json: Schema.NullOr(ReviewTargetJson),
   updated_at: Schema.String,
 })
@@ -87,13 +89,20 @@ export class ProjectWorkspaceStore extends Context.Service<
         yield* database
           .run(
             `INSERT INTO project_workspace_state (
-              repo_id, active_ribbon, selected_review_target_json, updated_at
-            ) VALUES (?, ?, ?, ?)
+              repo_id, active_surface, active_activity, selected_review_target_json, updated_at
+            ) VALUES (?, ?, ?, ?, ?)
             ON CONFLICT(repo_id) DO UPDATE SET
-              active_ribbon = excluded.active_ribbon,
+              active_surface = excluded.active_surface,
+              active_activity = excluded.active_activity,
               selected_review_target_json = excluded.selected_review_target_json,
               updated_at = excluded.updated_at`,
-            [input.projectId, input.activeRibbon, selectedReviewTargetJson, updatedAt],
+            [
+              input.projectId,
+              input.activeSurface,
+              input.activeActivity,
+              selectedReviewTargetJson,
+              updatedAt,
+            ],
           )
           .pipe(
             Effect.mapError((cause) =>
@@ -122,7 +131,8 @@ const decodeStateRow = (operation: ProjectWorkspaceStoreOperation, input: Databa
     Effect.map((row) =>
       ProjectWorkspaceState.make({
         projectId: row.repo_id,
-        activeRibbon: row.active_ribbon,
+        activeSurface: row.active_surface,
+        activeActivity: row.active_activity,
         selectedReviewTarget: row.selected_review_target_json,
         updatedAt: row.updated_at,
       }),

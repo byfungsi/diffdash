@@ -8,7 +8,10 @@ import {
   CommentSubject,
 } from "@diffdash/domain/comment"
 import { HostedReviewTarget, MarkdownBody } from "@diffdash/domain/review-thread"
-import { ProjectWorkspaceStateInput } from "@diffdash/domain/project-workspace"
+import {
+  PROJECT_WORKSPACE_FILES_ACTIVITY_ID,
+  ProjectWorkspaceStateInput,
+} from "@diffdash/domain/project-workspace"
 import { ReviewHunkId, ReviewProjectId, ReviewRevision } from "@diffdash/domain/review-identity"
 import { RepositoryRelativePath } from "@diffdash/domain/repository-path"
 import { RepositoryCheckoutPath } from "@diffdash/domain/repository"
@@ -67,7 +70,8 @@ describe("scenario-backed DiffDash API", () => {
         api.projectWorkspace.save(
           ProjectWorkspaceStateInput.make({
             projectId,
-            activeRibbon: "files",
+            activeSurface: "review",
+            activeActivity: PROJECT_WORKSPACE_FILES_ACTIVITY_ID,
             selectedReviewTarget: null,
           }),
         ),

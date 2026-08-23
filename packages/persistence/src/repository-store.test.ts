@@ -395,9 +395,15 @@ describe("RepositoryStore", () => {
         )
         yield* database.run(
           `INSERT INTO project_workspace_state (
-            repo_id, active_ribbon, selected_review_target_json, updated_at
-          ) VALUES (?, ?, ?, ?)`,
-          [alias.id, "threads", null, "2026-08-02T01:00:00.000Z"],
+            repo_id, active_surface, active_activity, selected_review_target_json, updated_at
+          ) VALUES (?, ?, ?, ?, ?)`,
+          [
+            alias.id,
+            "review",
+            "diffdash.builtin.review-comments.comments",
+            null,
+            "2026-08-02T01:00:00.000Z",
+          ],
         )
         yield* database.run(INSERT_REVIEW_THREAD_SQL, [
           "alias-thread",
@@ -513,10 +519,15 @@ describe("RepositoryStore", () => {
         expect(
           yield* getRow(
             database,
-            "SELECT repo_id, active_ribbon FROM project_workspace_state WHERE repo_id = ?",
+            `SELECT repo_id, active_surface, active_activity
+             FROM project_workspace_state WHERE repo_id = ?`,
             [hosted.id],
           ),
-        ).toEqual({ repo_id: hosted.id, active_ribbon: "threads" })
+        ).toEqual({
+          repo_id: hosted.id,
+          active_surface: "review",
+          active_activity: "diffdash.builtin.review-comments.comments",
+        })
         expect(
           yield* getRow(database, "SELECT id, repo_id FROM review_threads WHERE id = ?", [
             "alias-thread",
@@ -679,15 +690,20 @@ describe("RepositoryStore", () => {
         )
         yield* database.run(
           `INSERT INTO project_workspace_state (
-            repo_id, active_ribbon, selected_review_target_json, updated_at
-          ) VALUES (?, ?, NULL, ?)`,
-          [hosted.id, "reviews", "2026-08-02T04:00:00.000Z"],
+            repo_id, active_surface, active_activity, selected_review_target_json, updated_at
+          ) VALUES (?, ?, ?, NULL, ?)`,
+          [hosted.id, "review", "diffdash.core.reviews", "2026-08-02T04:00:00.000Z"],
         )
         yield* database.run(
           `INSERT INTO project_workspace_state (
-            repo_id, active_ribbon, selected_review_target_json, updated_at
-          ) VALUES (?, ?, NULL, ?)`,
-          [alias.id, "threads", "2026-08-02T03:00:00.000Z"],
+            repo_id, active_surface, active_activity, selected_review_target_json, updated_at
+          ) VALUES (?, ?, ?, NULL, ?)`,
+          [
+            alias.id,
+            "review",
+            "diffdash.builtin.review-comments.comments",
+            "2026-08-02T03:00:00.000Z",
+          ],
         )
         yield* database.run(INSERT_REVIEW_THREAD_SQL, [
           "canonical-thread",
@@ -798,11 +814,13 @@ describe("RepositoryStore", () => {
         expect(
           yield* getRow(
             database,
-            "SELECT active_ribbon, updated_at FROM project_workspace_state WHERE repo_id = ?",
+            `SELECT active_surface, active_activity, updated_at
+             FROM project_workspace_state WHERE repo_id = ?`,
             [hosted.id],
           ),
         ).toEqual({
-          active_ribbon: "reviews",
+          active_surface: "review",
+          active_activity: "diffdash.core.reviews",
           updated_at: "2026-08-02T04:00:00.000Z",
         })
         expect(

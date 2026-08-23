@@ -18,7 +18,18 @@ import {
   RepositorySource,
 } from "@diffdash/domain/git-provider"
 import { workingTreeReviewTarget } from "@diffdash/domain/local-review"
-import { type ProjectWorkspaceRibbon } from "@diffdash/domain/project-workspace"
+import {
+  PROJECT_WORKSPACE_CODE_ACTIVITY_ID,
+  PROJECT_WORKSPACE_FILES_ACTIVITY_ID,
+  PROJECT_WORKSPACE_REVIEWS_ACTIVITY_ID,
+  PROJECT_WORKSPACE_WALKTHROUGH_ACTIVITY_ID,
+  type ProjectWorkspaceActivityId,
+  type ProjectWorkspaceActivitySurfacePolicy,
+  type ProjectWorkspaceRibbon,
+  type ProjectWorkspaceSurface,
+  REVIEW_COMMENTS_ACTIVITY_ID,
+  selectProjectWorkspaceActivity,
+} from "@diffdash/domain/project-workspace"
 import type { ReviewSnapshotFileInventory } from "@diffdash/domain/review-context"
 import { RepositoryRelativePath } from "@diffdash/domain/repository-path"
 import {
@@ -180,6 +191,33 @@ const sameAppNavigationLocation = (
   return false
 }
 
+interface ProjectWorkspaceRibbonActivity {
+  readonly id: ProjectWorkspaceActivityId
+  readonly surfacePolicy: ProjectWorkspaceActivitySurfacePolicy
+}
+
+const projectWorkspaceRibbonActivities = {
+  reviews: { id: PROJECT_WORKSPACE_REVIEWS_ACTIVITY_ID, surfacePolicy: "review" },
+  files: { id: PROJECT_WORKSPACE_FILES_ACTIVITY_ID, surfacePolicy: "review" },
+  code: { id: PROJECT_WORKSPACE_CODE_ACTIVITY_ID, surfacePolicy: "code" },
+  walkthrough: { id: PROJECT_WORKSPACE_WALKTHROUGH_ACTIVITY_ID, surfacePolicy: "review" },
+  threads: { id: REVIEW_COMMENTS_ACTIVITY_ID, surfacePolicy: "review" },
+} as const satisfies Readonly<Record<ProjectWorkspaceRibbon, ProjectWorkspaceRibbonActivity>>
+
+const projectWorkspaceRibbonActivity = (
+  ribbon: ProjectWorkspaceRibbon,
+): ProjectWorkspaceRibbonActivity => projectWorkspaceRibbonActivities[ribbon]
+
+const projectWorkspaceActivityToRibbon = (
+  activityId: ProjectWorkspaceActivityId,
+): ProjectWorkspaceRibbon => {
+  if (activityId === PROJECT_WORKSPACE_FILES_ACTIVITY_ID) return "files"
+  if (activityId === PROJECT_WORKSPACE_CODE_ACTIVITY_ID) return "code"
+  if (activityId === PROJECT_WORKSPACE_WALKTHROUGH_ACTIVITY_ID) return "walkthrough"
+  if (activityId === REVIEW_COMMENTS_ACTIVITY_ID) return "threads"
+  return "reviews"
+}
+
 /** Application shell coordinating navigation and feature composition. */
 export function AppShell() {
   const captureAnalytics = useCaptureAnalytics()
@@ -190,7 +228,11 @@ export function AppShell() {
   const [screen, setScreen] = useState<Screen>("home")
   const [selectedRepo, setSelectedRepo] = useState<Repo | null>(null)
   const [selectedReview, setSelectedReview] = useState<SelectedReviewTarget | null>(null)
-  const [activeRibbon, setActiveRibbon] = useState<ProjectWorkspaceRibbon>("reviews")
+  const [activeSurface, setActiveSurface] = useState<ProjectWorkspaceSurface>("review")
+  const [activeActivity, setActiveActivity] = useState<ProjectWorkspaceActivityId>(
+    PROJECT_WORKSPACE_REVIEWS_ACTIVITY_ID,
+  )
+  const activeRibbon = projectWorkspaceActivityToRibbon(activeActivity)
   const [selectedCodePath, setSelectedCodePath] = useState<Option.Option<RepositoryRelativePath>>(
     Option.none,
   )
@@ -468,7 +510,8 @@ export function AppShell() {
       setSelectedReview(null)
       setSelectedCodePath(Option.none())
       setCodeDefinitionNavigation(Option.none())
-      setActiveRibbon("reviews")
+      setActiveSurface("review")
+      setActiveActivity(PROJECT_WORKSPACE_REVIEWS_ACTIVITY_ID)
       setWorkspaceNotice(null)
       setAIConnection(Option.none())
       return
@@ -481,7 +524,14 @@ export function AppShell() {
     setSelectedRepo(location.repo)
     setSelectedReview(location.selectedReview)
     if (location.kind === "projectReview") {
-      setActiveRibbon(location.activeRibbon)
+      const activity = projectWorkspaceRibbonActivity(location.activeRibbon)
+      const selection = selectProjectWorkspaceActivity(
+        { activeSurface, activeActivity },
+        activity.id,
+        activity.surfacePolicy,
+      )
+      setActiveSurface(selection.activeSurface)
+      setActiveActivity(selection.activeActivity)
       setCodeDefinitionNavigation(Option.none())
       if (selectedRepo?.id !== location.repo.id) {
         setSelectedCodeTarget(ProjectHeadCodeWorkspaceTarget.make({ projectId: location.repo.id }))
@@ -493,7 +543,8 @@ export function AppShell() {
       return
     }
 
-    setActiveRibbon("code")
+    setActiveSurface("code")
+    setActiveActivity(PROJECT_WORKSPACE_CODE_ACTIVITY_ID)
     setSelectedCodeTarget(location.target)
     setSelectedCodePath(location.path)
     setCodeFileStatuses(location.fileStatuses)
@@ -690,8 +741,9 @@ export function AppShell() {
     projection: ProjectSessionProjection,
     mode: "push" | "replace" = "push",
   ) => {
+    const projectionRibbon = projectWorkspaceActivityToRibbon(projection.activeActivity)
     const location: AppNavigationLocation =
-      projection.activeRibbon === "code"
+      projection.activeSurface === "code"
         ? {
             kind: "projectCode",
             repo: projection.repo,
@@ -706,7 +758,7 @@ export function AppShell() {
             kind: "projectReview",
             repo: projection.repo,
             selectedReview: projection.selectedReview,
-            activeRibbon: projection.activeRibbon,
+            activeRibbon: projectionRibbon === "code" ? "reviews" : projectionRibbon,
           }
     if (mode === "replace") replaceAppNavigationLocation(location)
     else pushAppNavigationLocation(location)
@@ -747,7 +799,8 @@ export function AppShell() {
       applyProjectProjection(
         projectSession.project(
           repo,
-          "reviews",
+          "review",
+          PROJECT_WORKSPACE_REVIEWS_ACTIVITY_ID,
           null,
           formatError(error, "Saved workspace state could not be restored"),
         ),
@@ -759,6 +812,12 @@ export function AppShell() {
   const updateProjectRibbon = (ribbon: ProjectWorkspaceRibbon) => {
     projectSession.cancelRestore()
     if (selectedRepo === null) return
+    const activity = projectWorkspaceRibbonActivity(ribbon)
+    const selection = selectProjectWorkspaceActivity(
+      { activeSurface, activeActivity },
+      activity.id,
+      activity.surfacePolicy,
+    )
     const location: AppNavigationLocation =
       ribbon === "code"
         ? {
@@ -780,7 +839,14 @@ export function AppShell() {
     pushAppNavigationLocation(location)
     if (selectedRepo !== null) {
       observeWorkspacePersistence(
-        projectSession.persist(projectSession.project(selectedRepo, ribbon, selectedReview)),
+        projectSession.persist(
+          projectSession.project(
+            selectedRepo,
+            selection.activeSurface,
+            selection.activeActivity,
+            selectedReview,
+          ),
+        ),
       )
     }
   }
@@ -812,7 +878,14 @@ export function AppShell() {
     pushAppNavigationLocation(location)
     setReviewSidebarExpanded(true)
     observeWorkspacePersistence(
-      projectSession.persist(projectSession.project(selectedRepo, "code", selectedReview)),
+      projectSession.persist(
+        projectSession.project(
+          selectedRepo,
+          "code",
+          PROJECT_WORKSPACE_CODE_ACTIVITY_ID,
+          selectedReview,
+        ),
+      ),
     )
   }
 
@@ -880,7 +953,14 @@ export function AppShell() {
     setWorkspaceNotice(null)
     if (selectedRepo !== null) {
       observeWorkspacePersistence(
-        projectSession.persist(projectSession.project(selectedRepo, "files", selection)),
+        projectSession.persist(
+          projectSession.project(
+            selectedRepo,
+            "review",
+            PROJECT_WORKSPACE_FILES_ACTIVITY_ID,
+            selection,
+          ),
+        ),
       )
     }
     captureAnalytics({
@@ -1013,7 +1093,12 @@ export function AppShell() {
       const linked = await repositoryMutations.install(localPath)
       setActionStatus(`Linked ${linked.displayIdentity} to ${linked.localPath ?? localPath}.`)
       captureAnalytics({ event: "repository_linked" })
-      const projection = projectSession.project(linked, "reviews", null)
+      const projection = projectSession.project(
+        linked,
+        "review",
+        PROJECT_WORKSPACE_REVIEWS_ACTIVITY_ID,
+        null,
+      )
       applyProjectProjection(projection)
       observeWorkspacePersistence(projectSession.persist(projection))
     } catch (error) {
@@ -1247,7 +1332,7 @@ export function AppShell() {
     appState?.onboardingCompleted === true && canNavigateHistoryForward(navigationHistory)
   const reviewRibbon = Option.liftPredicate(
     activeRibbon,
-    (ribbon): ribbon is ReviewWorkspaceRibbon => ribbon !== "code",
+    (ribbon): ribbon is ReviewWorkspaceRibbon => activeSurface === "review" && ribbon !== "code",
   )
   const openQuickNavigation = () => {
     if (reviewWorkbenchReady) {
@@ -1316,7 +1401,7 @@ export function AppShell() {
               </Button>
             </div>
           )}
-          {showProjectShell && reviewWorkbenchReady && workspaceNotice !== null ? (
+          {showProjectShell && workspaceNotice !== null ? (
             <output className="bg-popover text-popover-foreground fixed top-[calc(var(--shell-titlebar-height)+0.75rem)] right-4 z-40 flex max-w-md items-center gap-3 rounded-lg border px-4 py-3 text-xs shadow-lg">
               <span className="min-w-0 flex-1">{workspaceNotice}</span>
               <Button size="xs" variant="ghost" onClick={() => setWorkspaceNotice(null)}>
@@ -1381,7 +1466,7 @@ export function AppShell() {
                     {codeWorkspaceMounted ? (
                       <CodeScreen
                         key={selectedRepo.id}
-                        active={activeRibbon === "code"}
+                        active={activeSurface === "code"}
                         codeThemes={aiSettings.codeThemes}
                         colorScheme={THEME_DEFINITIONS[resolvedTheme].colorScheme}
                         contextWidth={aiSettings.layout.review.contextWidth}

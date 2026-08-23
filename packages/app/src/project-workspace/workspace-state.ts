@@ -1,16 +1,26 @@
 import { makeHostedRepositoryLocator } from "@diffdash/domain/git-provider"
-import type { ProjectWorkspaceRibbon } from "@diffdash/domain/project-workspace"
-import { ProjectWorkspaceState } from "@diffdash/domain/project-workspace"
+import {
+  PROJECT_WORKSPACE_CODE_ACTIVITY_ID,
+  PROJECT_WORKSPACE_FILES_ACTIVITY_ID,
+  PROJECT_WORKSPACE_REVIEWS_ACTIVITY_ID,
+  PROJECT_WORKSPACE_WALKTHROUGH_ACTIVITY_ID,
+  type ProjectWorkspaceActivityId,
+  ProjectWorkspaceState,
+  type ProjectWorkspaceSurface,
+  REVIEW_COMMENTS_ACTIVITY_ID,
+  resolveProjectWorkspaceActivity,
+} from "@diffdash/domain/project-workspace"
 import type { Repo } from "@diffdash/domain/repository"
 import { RepositoryComparisonTarget } from "@diffdash/domain/repository-comparison"
 import { HostedReviewTarget } from "@diffdash/domain/review-thread"
-import { Result, Schema } from "effect"
+import { Match, Result, Schema } from "effect"
 
 import type { SelectedReviewTarget } from "@/review/review-subject"
 
 /** Renderer workspace state after validating persisted data against its active project. */
 export interface ResolvedProjectWorkspaceState {
-  readonly activeRibbon: ProjectWorkspaceRibbon
+  readonly activeSurface: ProjectWorkspaceSurface
+  readonly activeActivity: ProjectWorkspaceActivityId
   readonly notice: string | null
   readonly selectedReview: SelectedReviewTarget | null
 }
@@ -54,17 +64,38 @@ export const resolveProjectWorkspaceState = <Persisted>(
     )
   }
 
+  const activityResolution = resolveProjectWorkspaceActivity(
+    {
+      activeSurface: state.activeSurface,
+      activeActivity: state.activeActivity,
+    },
+    [
+      PROJECT_WORKSPACE_REVIEWS_ACTIVITY_ID,
+      PROJECT_WORKSPACE_FILES_ACTIVITY_ID,
+      PROJECT_WORKSPACE_CODE_ACTIVITY_ID,
+      PROJECT_WORKSPACE_WALKTHROUGH_ACTIVITY_ID,
+      REVIEW_COMMENTS_ACTIVITY_ID,
+    ],
+  )
+  const selection = activityResolution.selection
+  const activityNotice = Match.valueTags(activityResolution, {
+    available: () => null,
+    repaired: () =>
+      "The saved workspace activity is unavailable. A built-in activity was restored instead.",
+    unresolved: () => "No activity is available for the saved workspace surface.",
+  })
+
   const target = state.selectedReviewTarget
   if (target === null) {
-    return { activeRibbon: state.activeRibbon, notice: null, selectedReview: null }
+    return { ...selection, notice: activityNotice, selectedReview: null }
   }
 
   if (target.kind === "hosted") {
     const belongsToProject = repo.matchesHosted(target.review.repository)
     return belongsToProject
       ? {
-          activeRibbon: state.activeRibbon,
-          notice: null,
+          ...selection,
+          notice: activityNotice,
           selectedReview: { kind: "hosted", review: target.review },
         }
       : defaultProjectWorkspaceState(
@@ -76,8 +107,8 @@ export const resolveProjectWorkspaceState = <Persisted>(
     const belongsToProject = repo.matchesHosted(target.repository)
     return belongsToProject
       ? {
-          activeRibbon: state.activeRibbon,
-          notice: null,
+          ...selection,
+          notice: activityNotice,
           selectedReview: { kind: "repositoryComparison", target },
         }
       : defaultProjectWorkspaceState(
@@ -87,8 +118,8 @@ export const resolveProjectWorkspaceState = <Persisted>(
 
   return repo.localPath === target.rootPath
     ? {
-        activeRibbon: state.activeRibbon,
-        notice: null,
+        ...selection,
+        notice: activityNotice,
         selectedReview: { kind: "localDiff", target },
       }
     : defaultProjectWorkspaceState(
@@ -97,7 +128,8 @@ export const resolveProjectWorkspaceState = <Persisted>(
 }
 
 const defaultProjectWorkspaceState = (notice: string | null): ResolvedProjectWorkspaceState => ({
-  activeRibbon: "reviews",
+  activeSurface: "review",
+  activeActivity: PROJECT_WORKSPACE_REVIEWS_ACTIVITY_ID,
   notice,
   selectedReview: null,
 })

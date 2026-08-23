@@ -847,7 +847,8 @@ export const createDemoRuntime = (scenario: MaterializedDemoScenario): DemoRunti
         projectWorkspaceStates.set(input.projectId, state)
         record("projectWorkspace.save", {
           projectId: input.projectId,
-          activeRibbon: input.activeRibbon,
+          activeSurface: input.activeSurface,
+          activeActivity: input.activeActivity,
         })
         return state
       },
