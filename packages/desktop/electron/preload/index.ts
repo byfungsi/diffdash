@@ -1,6 +1,7 @@
 import type { DiffDashBridgeApi } from "@diffdash/protocol/api"
 import { EventChannel, InvokeChannel } from "@diffdash/protocol/channels"
-import { Match } from "effect"
+import { bridgeResult, invokeResponseSchema, successEnvelope } from "@diffdash/protocol/ipc"
+import { Match, Schema } from "effect"
 import { contextBridge, ipcRenderer } from "electron"
 import {
   createDiffDashE2eDiagnosticsBridgeApi,
@@ -30,14 +31,7 @@ const api: DiffDashBridgeApi = {
     activateWindow: () => transport.invoke(InvokeChannel.appActivateWindow, {}),
     drainCommands: () => transport.invoke(InvokeChannel.drainNavigationCommands, {}),
     onCommandsAvailable: (listener) =>
-      transport.subscribe(EventChannel.navigationCommandsAvailable, (result) =>
-        listener(
-          Match.valueTags(result, {
-            Failure: (failure) => failure,
-            Success: () => ({ _tag: "Success" as const, value: undefined }),
-          }),
-        ),
-      ),
+      transport.subscribe(EventChannel.navigationCommandsAvailable, listener),
   },
   diagnostics: () => transport.invoke(InvokeChannel.appDiagnostics, {}),
   resources: {
@@ -93,6 +87,10 @@ const api: DiffDashBridgeApi = {
     listDirectory: (request) => transport.invoke(InvokeChannel.listCodeWorkspaceDirectory, request),
     search: (request) => transport.invoke(InvokeChannel.searchCodeWorkspace, request),
     readFile: (request) => transport.invoke(InvokeChannel.readCodeWorkspaceFile, request),
+    definitions: (request) => transport.invoke(InvokeChannel.codeWorkspaceDefinitions, request),
+    references: (request) => transport.invoke(InvokeChannel.codeWorkspaceReferences, request),
+    changes: (request) => transport.invoke(InvokeChannel.codeWorkspaceChanges, request),
+    lineChanges: (request) => transport.invoke(InvokeChannel.codeWorkspaceLineChanges, request),
   },
   projectWorkspace: {
     get: (projectId) => transport.invoke(InvokeChannel.projectWorkspaceGet, { projectId }),
@@ -166,8 +164,14 @@ const api: DiffDashBridgeApi = {
       return Match.valueTags(result, {
         Failure: (failure) => failure,
         Success: (success) => {
-          for (const publication of success.value) onPublication(publication)
-          return { _tag: "Success" as const, value: undefined }
+          const publications = Schema.decodeUnknownSync(
+            invokeResponseSchema(InvokeChannel.searchProgressiveReview),
+          )(success.value)
+          for (const publication of publications) onPublication(publication)
+          const responseSchema = invokeResponseSchema(InvokeChannel.analyticsStart)
+          return Schema.encodeSync(bridgeResult(responseSchema))(
+            successEnvelope(responseSchema).make({ value: undefined }),
+          )
         },
       })
     },

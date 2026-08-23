@@ -1,9 +1,11 @@
 import { Schema } from "effect"
 
+import { DiffFileStatus } from "./diff"
+import { CodeLineChangeRange } from "./code-line-change"
 import { HostedReviewLocator } from "./git-provider"
 import { GitCommitSha } from "./repository-comparison"
 import { RepositoryRelativePath } from "./repository-path"
-import { ReviewProjectId, ReviewRevision } from "./review-identity"
+import { ReviewProjectId, ReviewRevision, ReviewSnapshotId } from "./review-identity"
 
 /** Opaque authority for one renderer-owned managed Code workspace. */
 export const CodeWorkspaceLeaseId = Schema.String.pipe(
@@ -31,12 +33,21 @@ export class HostedReviewCodeWorkspaceTarget extends Schema.TaggedClass<HostedRe
   },
 ) {}
 
-/** Exact project revision materialized for local or repository-comparison diffs. */
+/** Exact persisted local-review snapshot materialized when Code is opened from a local diff. */
+export class LocalReviewSnapshotCodeWorkspaceTarget extends Schema.TaggedClass<LocalReviewSnapshotCodeWorkspaceTarget>()(
+  "localReviewSnapshot",
+  {
+    projectId: ReviewProjectId,
+    snapshotId: ReviewSnapshotId,
+  },
+) {}
+
+/** Exact Git revision materialized for repository-comparison diffs. */
 export class ProjectRevisionCodeWorkspaceTarget extends Schema.TaggedClass<ProjectRevisionCodeWorkspaceTarget>()(
   "projectRevision",
   {
     projectId: ReviewProjectId,
-    revision: ReviewRevision,
+    revision: GitCommitSha,
   },
 ) {}
 
@@ -45,6 +56,7 @@ export const CodeWorkspaceTarget = Schema.Union([
   ProjectHeadCodeWorkspaceTarget,
   ProjectRevisionCodeWorkspaceTarget,
   HostedReviewCodeWorkspaceTarget,
+  LocalReviewSnapshotCodeWorkspaceTarget,
 ]).pipe(Schema.toTaggedUnion("_tag"))
 
 /** Source identity requested by a Code workspace consumer. */
@@ -53,7 +65,8 @@ export type CodeWorkspaceTarget = typeof CodeWorkspaceTarget.Type
 /** Managed Code workspace returned after its detached checkout is ready. */
 export class CodeWorkspaceLease extends Schema.Class<CodeWorkspaceLease>("CodeWorkspaceLease")({
   id: CodeWorkspaceLeaseId,
-  revision: GitCommitSha,
+  revision: ReviewRevision,
+  gitRevision: Schema.OptionFromNullOr(GitCommitSha),
   expiresAtMs: Schema.Int.pipe(Schema.check(Schema.isGreaterThan(0))),
 }) {}
 
@@ -122,6 +135,7 @@ export const CodeWorkspaceFailureReason = Schema.Literals([
   "repositoryNotFound",
   "repositoryUnavailable",
   "revisionUnavailable",
+  "snapshotUnavailable",
   "workspaceUnavailable",
 ])
 
@@ -137,3 +151,27 @@ export class CodeWorkspaceError extends Schema.TaggedError<CodeWorkspaceError>()
     message: Schema.String,
   },
 ) {}
+
+/** One changed path from the linked checkout backing a project-head Code workspace. */
+export class CodeWorkspaceFileChange extends Schema.Class<CodeWorkspaceFileChange>(
+  "CodeWorkspaceFileChange",
+)({
+  path: RepositoryRelativePath,
+  status: DiffFileStatus,
+}) {}
+
+/** Bounded working-tree changes associated with a managed Code workspace. */
+export class CodeWorkspaceChangesResult extends Schema.Class<CodeWorkspaceChangesResult>(
+  "CodeWorkspaceChangesResult",
+)({
+  changes: Schema.Array(CodeWorkspaceFileChange).pipe(Schema.check(Schema.isMaxLength(5_000))),
+  truncated: Schema.Boolean,
+}) {}
+
+/** Bounded changed-line ranges for one file in a Code workspace. */
+export class CodeWorkspaceLineChangesResult extends Schema.Class<CodeWorkspaceLineChangesResult>(
+  "CodeWorkspaceLineChangesResult",
+)({
+  changes: Schema.Array(CodeLineChangeRange).pipe(Schema.check(Schema.isMaxLength(5_000))),
+  truncated: Schema.Boolean,
+}) {}

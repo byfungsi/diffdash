@@ -112,7 +112,7 @@ describe("createProgressiveReviewApi", () => {
         success({ identity, file, blockOrdinal: 0, firstLine: 0, line: 1 }),
       search: async (_request, onPublication) => {
         onPublication(publication)
-        return success(undefined)
+        return success(null)
       },
     }
     const api = createProgressiveReviewApi(bridge)

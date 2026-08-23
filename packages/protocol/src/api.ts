@@ -50,14 +50,20 @@ import type { AppUpdateState } from "./app-update"
 import type { CliNavigationCommand } from "./cli-navigation"
 import type {
   CodeWorkspaceDirectoryPage,
+  CodeWorkspaceChangesResult,
+  CodeWorkspaceDefinitionsRequest,
+  CodeWorkspaceReferencesRequest,
   CodeWorkspaceFileReadResult,
   CodeWorkspaceLease,
   CodeWorkspaceLeaseRequest,
+  CodeWorkspaceLineChangesRequest,
+  CodeWorkspaceLineChangesResult,
   ListCodeWorkspaceDirectoryRequest,
   OpenCodeWorkspaceRequest,
   ReadCodeWorkspaceFileRequest,
   SearchCodeWorkspaceRequest,
   CodeWorkspaceSearchResult,
+  RepositoryLanguageLocationResult,
 } from "./code-workspace"
 import type { OpenRepositoryComparisonCommand } from "./cli-navigation"
 import type {
@@ -88,7 +94,7 @@ import type {
   SetRepositoryComparisonViewedFileRequest,
   ViewedFileRecord,
 } from "./viewed-files"
-import type { BridgeResult } from "./ipc"
+import type { RendererBridgeResult } from "./ipc"
 import type { ProgressiveReviewApi } from "./review-session"
 import type { ClearDisposableResourcesResult, ResourceDiagnostics } from "./resource-diagnostics"
 import type {
@@ -103,7 +109,6 @@ import type {
   WalkthroughGetStoredBridgeResult,
   WalkthroughOperationBridgeHint,
 } from "./walkthrough-operation-state"
-
 type EventSubscription<Value> = (listener: (value: Value) => void) => () => void
 
 /** Complete renderer-facing platform contract implemented by preload and demo runtimes. */
@@ -176,6 +181,16 @@ export interface DiffDashApi {
     readonly readFile: (
       request: ReadCodeWorkspaceFileRequest,
     ) => Promise<CodeWorkspaceFileReadResult>
+    readonly definitions: (
+      request: CodeWorkspaceDefinitionsRequest,
+    ) => Promise<RepositoryLanguageLocationResult>
+    readonly references: (
+      request: CodeWorkspaceReferencesRequest,
+    ) => Promise<RepositoryLanguageLocationResult>
+    readonly changes: (request: CodeWorkspaceLeaseRequest) => Promise<CodeWorkspaceChangesResult>
+    readonly lineChanges: (
+      request: CodeWorkspaceLineChangesRequest,
+    ) => Promise<CodeWorkspaceLineChangesResult>
   }
   readonly projectWorkspace: {
     readonly get: (projectId: ReviewProjectId) => Promise<ProjectWorkspaceState | null>
@@ -271,9 +286,9 @@ export interface DiffDashApi {
 type BridgeApiMember<Value> = Value extends (
   ...arguments_: infer Arguments
 ) => Promise<infer Result>
-  ? (...arguments_: Arguments) => Promise<BridgeResult<Result>>
+  ? (...arguments_: Arguments) => Promise<RendererBridgeResult<Result>>
   : Value extends EventSubscription<infer Event>
-    ? EventSubscription<BridgeResult<Event>>
+    ? EventSubscription<RendererBridgeResult<Event>>
     : Value extends (...arguments_: infer Arguments) => infer Result
       ? (...arguments_: Arguments) => Result
       : Value extends object

@@ -13,6 +13,10 @@ type CodeWorkspaceMethod =
   | typeof CoreMethod.listCodeWorkspaceDirectory
   | typeof CoreMethod.searchCodeWorkspace
   | typeof CoreMethod.readCodeWorkspaceFile
+  | typeof CoreMethod.codeWorkspaceDefinitions
+  | typeof CoreMethod.codeWorkspaceReferences
+  | typeof CoreMethod.codeWorkspaceChanges
+  | typeof CoreMethod.codeWorkspaceLineChanges
 
 /** Acquires all managed Code workspace operation handlers. */
 export const makeCodeWorkspaceOperationHandlers: Effect.Effect<
@@ -39,6 +43,20 @@ export const makeCodeWorkspaceOperationHandlers: Effect.Effect<
     [CoreMethod.readCodeWorkspaceFile]: ({ leaseId, path }, options) =>
       requireOwner(options).pipe(
         Effect.flatMap((owner) => workspaces.readFile(leaseId, owner, path)),
+      ),
+    [CoreMethod.codeWorkspaceDefinitions]: ({ leaseId, path, position }, options) =>
+      requireOwner(options).pipe(
+        Effect.flatMap((owner) => workspaces.definitions(leaseId, owner, path, position)),
+      ),
+    [CoreMethod.codeWorkspaceReferences]: ({ leaseId, path, position }, options) =>
+      requireOwner(options).pipe(
+        Effect.flatMap((owner) => workspaces.references(leaseId, owner, path, position)),
+      ),
+    [CoreMethod.codeWorkspaceChanges]: ({ leaseId }, options) =>
+      requireOwner(options).pipe(Effect.flatMap((owner) => workspaces.changes(leaseId, owner))),
+    [CoreMethod.codeWorkspaceLineChanges]: ({ leaseId, path }, options) =>
+      requireOwner(options).pipe(
+        Effect.flatMap((owner) => workspaces.lineChanges(leaseId, owner, path)),
       ),
   }
 })

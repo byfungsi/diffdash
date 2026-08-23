@@ -26,6 +26,8 @@
     "@diffdash/git-provider-fixture": "workspace:*",
     "@diffdash/git-provider-github": "workspace:*",
     "@diffdash/local-git": "workspace:*",
+    "@diffdash/language-provider": "workspace:*",
+    "@diffdash/language-provider-typescript": "workspace:*",
     "@diffdash/mcp": "workspace:*",
     "@diffdash/persistence": "workspace:*",
     "@diffdash/process": "workspace:*",

@@ -8,8 +8,13 @@ import {
   DiffViewMode,
 } from "@diffdash/domain/ai-settings"
 import {
+  codeLineChangesFromHunks,
+  type CodeLineChangeRange,
+} from "@diffdash/domain/code-line-change"
+import {
   type CodeWorkspaceTarget,
   HostedReviewCodeWorkspaceTarget,
+  LocalReviewSnapshotCodeWorkspaceTarget,
   ProjectRevisionCodeWorkspaceTarget,
 } from "@diffdash/domain/code-workspace"
 import { DiffFileVisibility, type ParsedDiffFile } from "@diffdash/domain/diff"
@@ -41,7 +46,7 @@ import {
 import { ReviewSnapshotSearchFileAnchor } from "@diffdash/protocol/review-snapshot"
 import { RegistryContext, useAtomValue } from "@effect/atom-react"
 import { AsyncResult } from "effect/unstable/reactivity"
-import { Match, Option } from "effect"
+import { Effect, HashMap, Match, Option } from "effect"
 import {
   Check,
   Ellipsis,
@@ -99,6 +104,11 @@ import {
   type ReviewThreadSidebarState,
 } from "@/threads/review-thread-sidebar"
 import { useReviewThreads } from "@/threads/review-threads"
+import {
+  SourceSurfaceContributionId,
+  type SourceSurfaceRenderObserver,
+  useSourceSurfaceRuntime,
+} from "@/source-surface/source-surface-runtime"
 import { agentProviderCatalogAtom } from "@/walkthrough/atoms"
 import { useWalkthroughOperations } from "@/walkthrough/use-walkthrough-operations"
 import { walkthroughErrorPresentation } from "@/walkthrough/walkthrough-error-report"
@@ -115,6 +125,7 @@ import {
   DiffVirtualizer,
   isVirtualizedFileDiff,
   type FileDiffOptions,
+  type PierreFileDiff,
   type PostRenderPhase,
   prepareFileTreeInput,
   useStableCallback,
@@ -175,6 +186,7 @@ export type ReviewDetailEnvironment = {
     path: RepositoryRelativePath,
     target: CodeWorkspaceTarget,
     files: readonly ReviewSnapshotFileInventory[],
+    lineChanges: HashMap.HashMap<RepositoryRelativePath, readonly CodeLineChangeRange[]>,
   ) => void
   readonly onSidebarExpandedChange: (expanded: boolean) => void
   readonly onSidebarWidthChange: (width: number) => void
@@ -427,10 +439,8 @@ export const ReviewDetailView = ({
     readonly clientY: number
   } | null>(null)
   const reviewDiffRegistrationsRef = useRef<Map<string, ReviewDiffRegistration>>(new Map())
-  const reviewDiffRegistrationsByHostRef = useRef(
-    new WeakMap<HTMLElement, ReviewDiffRegistration>(),
-  )
   const diffSettlementFramesRef = useRef<Map<string, number>>(new Map())
+  const reviewSurfaceRuntime = useSourceSurfaceRuntime<PierreFileDiff<ReviewThreadAnnotation>>()
   const [diffVirtualizer] = useState(() => new DiffVirtualizer(REVIEW_DIFF_VIRTUALIZER_CONFIG))
   const [reviewNavigationAnchors] = useState(() => new ReviewNavigationAnchorRegistry())
   const [reviewNavigator] = useState(() => new ReviewNavigatorController(atomRegistry))
@@ -562,7 +572,6 @@ export const ReviewDetailView = ({
       }
       diffSettlementFramesRef.current.clear()
       reviewDiffRegistrationsRef.current.clear()
-      reviewDiffRegistrationsByHostRef.current = new WeakMap()
     },
     [],
   )
@@ -859,36 +868,10 @@ export const ReviewDetailView = ({
     viewedFileKeys,
     visibleFiles: visibleChangedFiles,
   })
-  const handleDiffRendered = useStableCallback<
-    (
-      reviewKey: string,
-      node: HTMLElement,
-      instance: Parameters<NonNullable<FileDiffOptions<ReviewThreadAnnotation>["onPostRender"]>>[1],
-      phase: PostRenderPhase,
-    ) => void
-  >((reviewKey, node, instance, phase) => {
+  const reconcileReviewDiffRegistration = useStableCallback<
+    SourceSurfaceRenderObserver<PierreFileDiff<ReviewThreadAnnotation>>
+  >(({ generation, host: node, instance, phase, surfaceId: reviewKey }) => {
     if (isVirtualizedFileDiff<ReviewThreadAnnotation>(instance)) {
-      const previousHostOwner = reviewDiffRegistrationsByHostRef.current.get(node)
-      if (previousHostOwner !== undefined && previousHostOwner.reviewKey !== reviewKey) {
-        const retainedOwner = reviewDiffRegistrationsRef.current.get(previousHostOwner.reviewKey)
-        if (retainedOwner === previousHostOwner) {
-          reviewDiffRegistrationsRef.current.delete(previousHostOwner.reviewKey)
-        }
-      }
-      const previous = reviewDiffRegistrationsRef.current.get(reviewKey)
-      if (previous !== undefined && previous.host !== node) {
-        reviewDiffRegistrationsByHostRef.current.delete(previous.host)
-      }
-      const registration = {
-        generation:
-          previous?.host === node && previous.instance === instance ? previous.generation + 1 : 1,
-        host: node,
-        instance,
-        reviewKey,
-        rendered: phase !== "unmount",
-      } satisfies ReviewDiffRegistration
-      reviewDiffRegistrationsRef.current.set(reviewKey, registration)
-      reviewDiffRegistrationsByHostRef.current.set(node, registration)
       const phaseHandlers = {
         unmount: () => {
           Option.match(Option.fromNullishOr(diffSettlementFramesRef.current.get(reviewKey)), {
@@ -896,15 +879,19 @@ export const ReviewDetailView = ({
             onSome: (frame) => window.cancelAnimationFrame(frame),
           })
           diffSettlementFramesRef.current.delete(reviewKey)
-          queueMicrotask(() => {
-            const current = reviewDiffRegistrationsRef.current.get(reviewKey)
-            if (current?.host === node && !node.isConnected) {
-              reviewDiffRegistrationsRef.current.delete(reviewKey)
-              reviewDiffRegistrationsByHostRef.current.delete(node)
-            }
-          })
+          const current = reviewDiffRegistrationsRef.current.get(reviewKey)
+          if (current?.host === node && current.instance === instance) {
+            reviewDiffRegistrationsRef.current.delete(reviewKey)
+          }
         },
         mount: () => {
+          reviewDiffRegistrationsRef.current.set(reviewKey, {
+            generation,
+            host: node,
+            instance,
+            reviewKey,
+            rendered: true,
+          })
           Option.match(Option.fromNullishOr(diffSettlementFramesRef.current.get(reviewKey)), {
             onNone: () => undefined,
             onSome: (frame) => window.cancelAnimationFrame(frame),
@@ -936,14 +923,74 @@ export const ReviewDetailView = ({
           }
           settle(instance.getVirtualizedHeight(), 0, 8)
         },
-        update: () => undefined,
+        update: () => {
+          reviewDiffRegistrationsRef.current.set(reviewKey, {
+            generation,
+            host: node,
+            instance,
+            reviewKey,
+            rendered: true,
+          })
+        },
       } satisfies Readonly<Record<PostRenderPhase, () => void>>
       phaseHandlers[phase]()
     }
-    reviewSearchHighlights.handlePostRender(reviewKey, node, instance, phase)
-    if (phase !== "unmount") reviewViewportBridge.reconcileRenderedFocus(reviewKey)
-    handleViewedDiffRendered(reviewKey, phase)
   })
+  const reconcileReviewSearchHighlights = useStableCallback<
+    SourceSurfaceRenderObserver<PierreFileDiff<ReviewThreadAnnotation>>
+  >(({ host, instance, phase, surfaceId }) => {
+    reviewSearchHighlights.handlePostRender(surfaceId, host, instance, phase)
+  })
+  const reconcileReviewNavigationFocus = useStableCallback<
+    SourceSurfaceRenderObserver<PierreFileDiff<ReviewThreadAnnotation>>
+  >(({ phase, surfaceId }) => {
+    if (phase !== "unmount") reviewViewportBridge.reconcileRenderedFocus(surfaceId)
+  })
+  const reconcileViewedFile = useStableCallback<
+    SourceSurfaceRenderObserver<PierreFileDiff<ReviewThreadAnnotation>>
+  >(({ phase, surfaceId }) => {
+    handleViewedDiffRendered(surfaceId, phase)
+  })
+  useEffect(() => {
+    // Reset before registration so late-observer replay repopulates every mounted diff.
+    reviewDiffRegistrationsRef.current.clear()
+    const disposers = [
+      Effect.runSync(
+        reviewSurfaceRuntime.registerRenderObserver(
+          SourceSurfaceContributionId.make("diffdash.builtin.review-virtualization"),
+          reconcileReviewDiffRegistration,
+        ),
+      ),
+      Effect.runSync(
+        reviewSurfaceRuntime.registerRenderObserver(
+          SourceSurfaceContributionId.make("diffdash.builtin.review-search"),
+          reconcileReviewSearchHighlights,
+        ),
+      ),
+      Effect.runSync(
+        reviewSurfaceRuntime.registerRenderObserver(
+          SourceSurfaceContributionId.make("diffdash.builtin.review-navigation-focus"),
+          reconcileReviewNavigationFocus,
+        ),
+      ),
+      Effect.runSync(
+        reviewSurfaceRuntime.registerRenderObserver(
+          SourceSurfaceContributionId.make("diffdash.builtin.review-viewed-files"),
+          reconcileViewedFile,
+        ),
+      ),
+    ]
+    return () => disposers.forEach((dispose) => dispose())
+  }, [
+    reconcileReviewDiffRegistration,
+    reconcileReviewNavigationFocus,
+    reconcileReviewSearchHighlights,
+    reconcileViewedFile,
+    reviewBaseSha,
+    reviewHeadSha,
+    reviewIdentity,
+    reviewSurfaceRuntime,
+  ])
   useEffect(() => {
     void loadSnapshotFiles(progressiveInventory.map((file) => file.fileId))
   }, [loadSnapshotFiles, manifest.snapshotId, progressiveInventory])
@@ -1210,8 +1257,6 @@ export const ReviewDetailView = ({
   ])
   useEffect(() => {
     lastPointerPositionRef.current = null
-    reviewDiffRegistrationsRef.current.clear()
-    reviewDiffRegistrationsByHostRef.current = new WeakMap()
     reviewNavigator.cancelActive()
     onSidebarExpandedChange(true)
     setWalkthroughState({ status: "idle" })
@@ -1687,18 +1732,27 @@ export const ReviewDetailView = ({
         revision: manifest.headRevision,
       }),
     local: () =>
-      ProjectRevisionCodeWorkspaceTarget.make({
+      LocalReviewSnapshotCodeWorkspaceTarget.make({
         projectId: manifest.projectId,
-        revision: manifest.headRevision,
+        snapshotId: manifest.snapshotId,
       }),
-    repositoryComparison: () =>
+    repositoryComparison: (comparisonReview) =>
       ProjectRevisionCodeWorkspaceTarget.make({
         projectId: manifest.projectId,
-        revision: manifest.headRevision,
+        revision: comparisonReview.target.headSha,
       }),
   })
   const openRepositoryFile = (path: RepositoryRelativePath) =>
-    onOpenCodeFile(path, codeWorkspaceTarget, changedFiles)
+    onOpenCodeFile(
+      path,
+      codeWorkspaceTarget,
+      changedFiles,
+      HashMap.fromIterable(
+        loadedChangedFiles.map(
+          (file) => [file.path, codeLineChangesFromHunks(file.hunks)] as const,
+        ),
+      ),
+    )
   const approvePullRequest = async () => {
     const decisionOperations = Match.valueTags(sourceOperations.decision, {
       supported: (operations) => operations,
@@ -2186,10 +2240,8 @@ export const ReviewDetailView = ({
                             activeSearchReviewKey === file.reviewKey ||
                             selectedVisiblePath === file.path
                           }
+                          surfaceRuntime={reviewSurfaceRuntime}
                           viewed={viewedFileKeys.has(file.reviewKey)}
-                          onDiffRendered={(node, instance, phase) =>
-                            handleDiffRendered(file.reviewKey, node, instance, phase)
-                          }
                           onFileAnchorChange={(element, focusElement) =>
                             registerFileNavigationAnchor(file.fileId, element, focusElement)
                           }

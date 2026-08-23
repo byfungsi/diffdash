@@ -2,8 +2,9 @@ import type { CodeWorkspaceEntry } from "@diffdash/domain/code-workspace"
 import type { DiffFileStatus } from "@diffdash/domain/diff"
 import { RepositoryRelativePath } from "@diffdash/domain/repository-path"
 import { createFileTreeIconResolver, getBuiltInSpriteSheet } from "@pierre/trees"
-import { Match } from "effect"
+import { HashMap, HashSet, Match, Option } from "effect"
 import { ChevronRight, Folder } from "lucide-react"
+import type { ReactNode } from "react"
 
 import { cn } from "@/shared/utils"
 
@@ -34,22 +35,27 @@ export const CodeWorkspaceTree = ({
   onLoadMore,
   onToggleDirectory,
 }: {
-  readonly entries: ReadonlyMap<string, readonly CodeWorkspaceEntry[]>
-  readonly expandedPaths: ReadonlySet<RepositoryRelativePath>
-  readonly fileStatuses: ReadonlyMap<RepositoryRelativePath, DiffFileStatus>
-  readonly loadingPaths: ReadonlySet<string>
-  readonly nextOffsets: ReadonlyMap<string, number | null>
+  readonly entries: Iterable<readonly [string, readonly CodeWorkspaceEntry[]]>
+  readonly expandedPaths: Iterable<RepositoryRelativePath>
+  readonly fileStatuses: HashMap.HashMap<RepositoryRelativePath, DiffFileStatus>
+  readonly loadingPaths: Iterable<string>
+  readonly nextOffsets: Iterable<readonly [string, number | null]>
   readonly selectedPath: RepositoryRelativePath | null
   readonly onOpenFile: (path: RepositoryRelativePath) => void
   readonly onLoadMore: (path: RepositoryRelativePath | null) => void
   readonly onToggleDirectory: (path: RepositoryRelativePath) => void
 }) => {
-  const visible = flattenEntries(entries, expandedPaths, nextOffsets)
-  const renderVisible = (visibleEntry: VisibleEntry | VisibleLoadMore) =>
-    Match.valueTags(visibleEntry, {
-      loadMore: (visibleEntry: VisibleLoadMore) => {
-        const key = visibleEntry.path ?? ""
-        const loading = loadingPaths.has(key)
+  const entriesByDirectory = HashMap.fromIterable(entries)
+  const expandedPathSet = HashSet.fromIterable(expandedPaths)
+  const loadingPathSet = HashSet.fromIterable(loadingPaths)
+  const offsetMap = HashMap.fromIterable(nextOffsets)
+  const visibleItems = flattenEntries(entriesByDirectory, expandedPathSet, offsetMap)
+  const directoryStatuses = collectDirectoryStatuses(fileStatuses)
+  const renderVisible = (item: VisibleEntry | VisibleLoadMore) =>
+    Match.valueTags(item, {
+      loadMore: (loadMore: VisibleLoadMore) => {
+        const key = loadMore.path ?? ""
+        const loading = HashSet.has(loadingPathSet, key)
         return (
           <button
             key={`load:${key}`}
@@ -57,9 +63,9 @@ export const CodeWorkspaceTree = ({
             aria-busy={loading}
             className="text-muted-foreground hover:text-foreground h-7 w-full text-left text-xs"
             disabled={loading}
-            style={{ paddingLeft: `${22 + visibleEntry.depth * 14}px` }}
+            style={{ paddingLeft: `${22 + loadMore.depth * 14}px` }}
             onClick={() => {
-              if (!loading) onLoadMore(visibleEntry.path)
+              if (!loading) onLoadMore(loadMore.path)
             }}
           >
             {loading ? "Loading..." : "Load more..."}
@@ -68,10 +74,16 @@ export const CodeWorkspaceTree = ({
       },
       entry: (visibleEntry: VisibleEntry) => {
         const { depth, entry } = visibleEntry
-        const expanded = entry.kind === "directory" && expandedPaths.has(entry.path)
-        const loading = loadingPaths.has(entry.path)
+        const expanded = entry.kind === "directory" && HashSet.has(expandedPathSet, entry.path)
+        const loading = HashSet.has(loadingPathSet, entry.path)
         const label = basename(entry.path)
-        const fileStatus = entry.kind === "file" ? fileStatuses.get(entry.path) : undefined
+        const statusByEntryKind = {
+          directory: () => HashMap.get(directoryStatuses, entry.path),
+          file: () => HashMap.get(fileStatuses, entry.path),
+        } satisfies Readonly<
+          Record<CodeWorkspaceEntry["kind"], () => Option.Option<DiffFileStatus>>
+        >
+        const status = statusByEntryKind[entry.kind]()
         return (
           <button
             key={entry.path}
@@ -81,6 +93,7 @@ export const CodeWorkspaceTree = ({
             aria-expanded={entry.kind === "directory" ? expanded : undefined}
             aria-selected={entry.kind === "file" && selectedPath === entry.path}
             data-item-path={entry.path}
+            data-item-status={Option.getOrUndefined(status)}
             className={cn(
               "hover:bg-review-sidebar-control-hover flex h-7 w-full items-center gap-1.5 pr-2 text-left text-xs",
               entry.kind === "file" &&
@@ -109,19 +122,8 @@ export const CodeWorkspaceTree = ({
             ) : (
               <FileTypeIcon path={entry.path} />
             )}
-            <span className="min-w-0 flex-1 truncate">{label}</span>
-            {fileStatus === "added" ? (
-              <span aria-label="Added" className="text-review-success-text shrink-0 font-medium">
-                A
-              </span>
-            ) : fileStatus === undefined || fileStatus === "deleted" ? null : (
-              <span
-                aria-label="Modified"
-                className="text-review-modified-text shrink-0 font-medium"
-              >
-                M
-              </span>
-            )}
+            <span className={cn("min-w-0 flex-1 truncate", statusTextColor(status))}>{label}</span>
+            {statusMarker(entry.kind, status)}
           </button>
         )
       },
@@ -134,7 +136,7 @@ export const CodeWorkspaceTree = ({
         dangerouslySetInnerHTML={{ __html: FILE_ICON_SPRITE }}
       />
       <div role="tree" aria-label="Repository files" className="h-full overflow-auto py-1">
-        {visible.map(renderVisible)}
+        {visibleItems.map(renderVisible)}
       </div>
     </>
   )
@@ -170,18 +172,109 @@ const fileIconColor = (token: string | undefined): string => {
   return "text-theme-sapphire"
 }
 
+const statusTextColor = (status: Option.Option<DiffFileStatus>): string | undefined =>
+  Option.getOrUndefined(Option.flatMap(status, (fileStatus) => STATUS_TEXT_COLORS[fileStatus]))
+
+const statusMarker = (kind: CodeWorkspaceEntry["kind"], status: Option.Option<DiffFileStatus>) => {
+  const markers = {
+    directory: () => null,
+    file: () =>
+      Option.match(status, {
+        onNone: () => null,
+        onSome: (fileStatus) => STATUS_MARKERS[fileStatus](),
+      }),
+  } satisfies Readonly<Record<CodeWorkspaceEntry["kind"], () => ReactNode>>
+  return markers[kind]()
+}
+
+const STATUS_TEXT_COLORS = {
+  added: Option.some("text-review-success-text"),
+  binary: Option.some("text-review-modified-text"),
+  deleted: Option.none(),
+  modified: Option.some("text-review-modified-text"),
+  renamed: Option.some("text-review-modified-text"),
+} satisfies Readonly<Record<DiffFileStatus, Option.Option<string>>>
+
+const STATUS_MARKERS = {
+  added: () => (
+    <span aria-label="Added" className="text-review-success-text shrink-0 font-medium">
+      A
+    </span>
+  ),
+  binary: modifiedStatusMarker,
+  deleted: () => null,
+  modified: modifiedStatusMarker,
+  renamed: modifiedStatusMarker,
+} satisfies Readonly<Record<DiffFileStatus, () => ReactNode>>
+
+const DIRECTORY_STATUS_CONTRIBUTIONS = {
+  added: Option.some<DiffFileStatus>("added"),
+  binary: Option.some<DiffFileStatus>("modified"),
+  deleted: Option.none<DiffFileStatus>(),
+  modified: Option.some<DiffFileStatus>("modified"),
+  renamed: Option.some<DiffFileStatus>("modified"),
+} satisfies Readonly<Record<DiffFileStatus, Option.Option<DiffFileStatus>>>
+
+const MERGE_DIRECTORY_STATUS = {
+  added: (_current: DiffFileStatus, contribution: DiffFileStatus) => contribution,
+  binary: (current: DiffFileStatus) => current,
+  deleted: (current: DiffFileStatus) => current,
+  modified: (current: DiffFileStatus) => current,
+  renamed: (current: DiffFileStatus) => current,
+} satisfies Readonly<
+  Record<DiffFileStatus, (current: DiffFileStatus, contribution: DiffFileStatus) => DiffFileStatus>
+>
+
+function modifiedStatusMarker(): ReactNode {
+  return (
+    <span aria-label="Modified" className="text-review-modified-text shrink-0 font-medium">
+      M
+    </span>
+  )
+}
+
+const collectDirectoryStatuses = (
+  fileStatuses: HashMap.HashMap<RepositoryRelativePath, DiffFileStatus>,
+): HashMap.HashMap<RepositoryRelativePath, DiffFileStatus> => {
+  let directoryStatuses = HashMap.empty<RepositoryRelativePath, DiffFileStatus>()
+  for (const [path, status] of fileStatuses) {
+    Option.match(DIRECTORY_STATUS_CONTRIBUTIONS[status], {
+      onNone: () => undefined,
+      onSome: (contribution) => {
+        let separatorIndex = path.indexOf("/")
+        while (separatorIndex >= 0) {
+          const directoryPath = RepositoryRelativePath.make(path.slice(0, separatorIndex))
+          directoryStatuses = HashMap.modifyAt(directoryStatuses, directoryPath, (current) =>
+            Option.some(
+              Option.match(current, {
+                onNone: () => contribution,
+                onSome: (directoryStatus) =>
+                  MERGE_DIRECTORY_STATUS[directoryStatus](directoryStatus, contribution),
+              }),
+            ),
+          )
+          separatorIndex = path.indexOf("/", separatorIndex + 1)
+        }
+      },
+    })
+  }
+  return directoryStatuses
+}
+
 const flattenEntries = (
-  entries: ReadonlyMap<string, readonly CodeWorkspaceEntry[]>,
-  expandedPaths: ReadonlySet<RepositoryRelativePath>,
-  nextOffsets: ReadonlyMap<string, number | null>,
+  entries: HashMap.HashMap<string, readonly CodeWorkspaceEntry[]>,
+  expandedPaths: HashSet.HashSet<RepositoryRelativePath>,
+  nextOffsets: HashMap.HashMap<string, number | null>,
 ): readonly (VisibleEntry | VisibleLoadMore)[] => {
   const visible: Array<VisibleEntry | VisibleLoadMore> = []
   const visit = (directory: string, depth: number) => {
-    for (const entry of entries.get(directory) ?? []) {
+    for (const entry of Option.getOrElse(HashMap.get(entries, directory), () => [])) {
       visible.push({ _tag: "entry", depth, entry })
-      if (entry.kind === "directory" && expandedPaths.has(entry.path)) visit(entry.path, depth + 1)
+      if (entry.kind === "directory" && HashSet.has(expandedPaths, entry.path)) {
+        visit(entry.path, depth + 1)
+      }
     }
-    if ((nextOffsets.get(directory) ?? null) !== null) {
+    if (Option.exists(HashMap.get(nextOffsets, directory), (offset) => offset !== null)) {
       visible.push({
         _tag: "loadMore",
         depth,

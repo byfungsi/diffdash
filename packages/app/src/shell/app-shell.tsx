@@ -1,6 +1,7 @@
 /* oxlint-disable eslint/no-underscore-dangle -- Domain unions use Effect-compatible _tag discriminants. */
 import { AISettings } from "@diffdash/domain/ai-settings"
 import type { AppState } from "@diffdash/domain/app-state"
+import type { CodeLineChangeRange } from "@diffdash/domain/code-line-change"
 import type { OpenCodeConnectionSelection } from "@diffdash/domain/comment"
 import {
   type CodeWorkspaceTarget,
@@ -37,7 +38,7 @@ import type { AppUpdateState } from "@diffdash/protocol/app-update"
 import type { CliNavigationCommand } from "@diffdash/protocol/cli-navigation"
 import { EMPTY_APP_PREREQUISITES } from "@diffdash/protocol/prerequisites"
 import { useAtomRefresh, useAtomSet, useAtomValue } from "@effect/atom-react"
-import { Match, Option } from "effect"
+import { HashMap, Match, Option } from "effect"
 import { AsyncResult } from "effect/unstable/reactivity"
 import { useDeferredValue, useEffect, useRef, useState } from "react"
 import { HomeScreen, hostedRepositoryLabel } from "@/home/home-screen"
@@ -96,12 +97,13 @@ import { CommentSubmissionProvider } from "@/comments/comment-submission"
 import { formatError } from "@/shared/errors"
 import { Button } from "@/shared/ui/button"
 import { EmptyState } from "@/shared/ui/empty-state"
+import { FloatingPaneWorkspace } from "@/shared/ui/floating-pane"
 import { UpdateBanner } from "@/shared/ui/update-banner"
 import { agentProviderCatalogAtom } from "@/walkthrough/atoms"
 import { CommandPaletteDialog, type CommandPaletteItem } from "./command-palette"
 import { AIConnectionMenu } from "./ai-connection-menu"
-import { isMacPlatform } from "./keyboard-shortcut-platform"
 import { KeyboardShortcutReference } from "./keyboard-shortcut-reference"
+import { useKeyboardShortcut } from "./keyboard-shortcuts"
 import { WorkbenchContextActionsProvider } from "./workbench-context-actions"
 import { WorkbenchTitlebar } from "./workbench-titlebar"
 
@@ -141,6 +143,9 @@ export function AppShell() {
   const [codeFileStatuses, setCodeFileStatuses] = useState<
     ReadonlyMap<RepositoryRelativePath, DiffFileStatus>
   >(new Map())
+  const [codeLineChanges, setCodeLineChanges] = useState<
+    HashMap.HashMap<RepositoryRelativePath, readonly CodeLineChangeRange[]>
+  >(HashMap.empty())
   const [workspaceNotice, setWorkspaceNotice] = useState<string | null>(null)
   const [pendingRemoteSelection, setPendingRemoteSelection] =
     useState<PendingProjectRemoteSelection | null>(null)
@@ -392,6 +397,7 @@ export function AppShell() {
     setSelectedCodeTarget(null)
     setCodeWorkspaceMounted(false)
     setCodeFileStatuses(new Map())
+    setCodeLineChanges(HashMap.empty())
     setSelectedReview(null)
     setSelectedCodePath(Option.none())
     setActiveRibbon("reviews")
@@ -513,38 +519,10 @@ export function AppShell() {
     }
   })
 
-  useEffect(() => {
-    const openShortcutReference = (event: KeyboardEvent) => {
-      if (!isModKey(event) || event.altKey || event.key !== "/") return
-
-      event.preventDefault()
-      event.stopPropagation()
-      setShortcutReferenceOpen(true)
-    }
-
-    window.addEventListener("keydown", openShortcutReference, true)
-    return () => window.removeEventListener("keydown", openShortcutReference, true)
-  }, [])
-
-  useEffect(() => {
-    const toggleProjectSidebar = (event: KeyboardEvent) => {
-      const primaryModifierPressed = isMacPlatform()
-        ? event.metaKey && !event.ctrlKey
-        : event.ctrlKey && !event.metaKey
-      if (
-        appState?.onboardingCompleted !== true ||
-        screen !== "project" ||
-        !primaryModifierPressed ||
-        event.altKey ||
-        event.shiftKey ||
-        event.repeat ||
-        event.key.toLowerCase() !== "b"
-      ) {
-        return
-      }
-
-      event.preventDefault()
-      event.stopPropagation()
+  useKeyboardShortcut("shortcuts.open", () => setShortcutReferenceOpen(true))
+  useKeyboardShortcut(
+    "review.toggleSidebar",
+    () => {
       const activeElement = document.activeElement
       if (
         reviewSidebarExpanded &&
@@ -554,24 +532,14 @@ export function AppShell() {
         document.querySelector<HTMLButtonElement>("[data-workbench-sidebar-toggle]")?.focus()
       }
       setReviewSidebarExpanded((expanded) => !expanded)
-    }
-
-    window.addEventListener("keydown", toggleProjectSidebar, true)
-    return () => window.removeEventListener("keydown", toggleProjectSidebar, true)
-  }, [appState?.onboardingCompleted, reviewSidebarExpanded, screen])
-
-  useEffect(() => {
-    const openGoToPalette = (event: KeyboardEvent) => {
-      if (!isModKey(event) || event.shiftKey || event.key.toLowerCase() !== "k") return
-      if (screen === "project") return
-
-      event.preventDefault()
-      setGoToPaletteOpen(true)
-    }
-
-    window.addEventListener("keydown", openGoToPalette)
-    return () => window.removeEventListener("keydown", openGoToPalette)
-  }, [screen])
+    },
+    {
+      enabled: appState?.onboardingCompleted === true && screen === "project",
+    },
+  )
+  useKeyboardShortcut("navigation.goAnywhere", () => setGoToPaletteOpen(true), {
+    enabled: screen !== "project",
+  })
 
   const applyProjectProjection = (projection: ProjectSessionProjection) => {
     setAIConnection((current) =>
@@ -581,6 +549,7 @@ export function AppShell() {
     setSelectedCodeTarget(ProjectHeadCodeWorkspaceTarget.make({ projectId: projection.repo.id }))
     setCodeWorkspaceMounted(projection.activeRibbon === "code")
     setCodeFileStatuses(new Map())
+    setCodeLineChanges(HashMap.empty())
     setSelectedReview(projection.selectedReview)
     setSelectedCodePath(Option.none())
     setActiveRibbon(projection.activeRibbon)
@@ -637,6 +606,7 @@ export function AppShell() {
       setCodeWorkspaceMounted(true)
       setSelectedCodeTarget(ProjectHeadCodeWorkspaceTarget.make({ projectId: selectedRepo.id }))
       setCodeFileStatuses(new Map())
+      setCodeLineChanges(HashMap.empty())
     }
     if (selectedRepo !== null) {
       observeWorkspacePersistence(
@@ -649,6 +619,10 @@ export function AppShell() {
     path: RepositoryRelativePath,
     target?: CodeWorkspaceTarget,
     files: readonly ReviewSnapshotFileInventory[] = [],
+    lineChanges: HashMap.HashMap<
+      RepositoryRelativePath,
+      readonly CodeLineChangeRange[]
+    > = HashMap.empty(),
   ) => {
     if (selectedRepo === null) return
     updateProjectRibbon("code")
@@ -663,6 +637,7 @@ export function AppShell() {
           .map((file) => [file.path, file.status] as const),
       ),
     )
+    setCodeLineChanges(lineChanges)
     setReviewSidebarExpanded(true)
   }
 
@@ -1118,7 +1093,10 @@ export function AppShell() {
               </Button>
             </output>
           ) : null}
-          <div data-workbench-viewport className="workbench-viewport min-h-0 min-w-0 flex-1">
+          <FloatingPaneWorkspace
+            data-workbench-viewport
+            className="workbench-viewport min-h-0 min-w-0 flex-1"
+          >
             <div
               data-workbench-frame
               data-workbench-frame-mode={showProjectShell ? "project" : "route"}
@@ -1177,6 +1155,7 @@ export function AppShell() {
                         colorScheme={THEME_DEFINITIONS[resolvedTheme].colorScheme}
                         contextWidth={aiSettings.layout.review.contextWidth}
                         fileStatuses={codeFileStatuses}
+                        lineChanges={codeLineChanges}
                         repo={selectedRepo}
                         selectedPath={Option.getOrNull(selectedCodePath)}
                         sidebarExpanded={reviewSidebarExpanded}
@@ -1305,7 +1284,7 @@ export function AppShell() {
               </main>
             </div>
             <div aria-hidden="true" data-workbench-global-rail />
-          </div>
+          </FloatingPaneWorkspace>
           <CommandPaletteDialog
             items={goToPaletteItems({
               projects: repos,
@@ -1364,8 +1343,6 @@ const workbenchCommandLabel = (
   }
   return "DiffDash"
 }
-
-const isModKey = (event: KeyboardEvent) => event.metaKey || event.ctrlKey
 
 const goToPaletteItems = ({
   projects,

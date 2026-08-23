@@ -47,6 +47,41 @@ const source = {
 } as const
 
 describe("desktop host configuration", () => {
+  it.effect("keeps every default development data path out of production", () =>
+    Effect.gen(function* () {
+      const configuration = yield* makeDesktopHostConfiguration(
+        {
+          ...source,
+          environment: {
+            ELECTRON_RENDERER_URL: "http://localhost:5173",
+            HOME: "/home/test",
+            PATH: "/usr/local/bin:/usr/bin",
+          },
+        },
+        productionDesktopStartupConfiguration,
+      )
+
+      expect(configuration.identity).toEqual(source.identity)
+      expect(configuration.paths).toMatchObject({
+        agentWorkingDirectory: "/var/tmp/diffdash-development",
+        configDirectory: "/home/test/.config/diffdash-development",
+        databasePath: "/var/app-data/DiffDash Development/diffdash.sqlite",
+        remoteWorktreePoolPath: "/home/test/.diffdash-development/remote-worktree-pool",
+        settingsPath: "/home/test/.config/diffdash-development/settings.json",
+        statePath: "/home/test/.config/diffdash-development/state.json",
+        worktreePoolPath: "/home/test/.diffdash-development/worktree-pool",
+      })
+      expect(Schema.encodeSync(CoreConfiguration)(configuration.core).paths).toMatchObject({
+        database: "/var/app-data/DiffDash Development/diffdash.sqlite",
+        remoteWorktreePool: "/home/test/.diffdash-development/remote-worktree-pool",
+        settings: "/home/test/.config/diffdash-development/settings.json",
+        state: "/home/test/.config/diffdash-development/state.json",
+        temporaryDirectory: "/var/tmp/diffdash-development",
+        worktreePool: "/home/test/.diffdash-development/worktree-pool",
+      })
+    }),
+  )
+
   it.effect("keeps production behavior independent of E2E environment flags", () =>
     Effect.gen(function* () {
       const configuration = yield* makeDesktopHostConfiguration(

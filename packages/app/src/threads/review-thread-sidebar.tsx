@@ -9,13 +9,12 @@ import { EmptyState } from "@/shared/ui/empty-state"
 import { MiddleTruncatedText } from "@/shared/ui/middle-truncated-text"
 import { UnicodeLoadingText } from "@/shared/ui/unicode-loading-text"
 import { cn } from "@/shared/utils"
+import { ReviewThreadPanel, type ReviewThreadsController } from "./review-threads"
 import {
   fallbackThreadLabel,
-  ReviewThreadPanel,
-  type ReviewThreadsController,
   reviewLineLabel,
   reviewThreadIsPreviousRevision,
-} from "./review-threads"
+} from "./review-thread-presentation"
 
 /** Progressive visibility state for the attached review thread panels. */
 export type ReviewThreadSidebarState =

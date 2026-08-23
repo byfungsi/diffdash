@@ -25,6 +25,10 @@ export const defineRepositoryHandlers = (
   )
   handlers.defineCore(CoreMethod.searchCodeWorkspace, runtime.core.searchCodeWorkspace)
   handlers.defineCore(CoreMethod.readCodeWorkspaceFile, runtime.core.readCodeWorkspaceFile)
+  handlers.defineCore(CoreMethod.codeWorkspaceDefinitions, runtime.core.codeWorkspaceDefinitions)
+  handlers.defineCore(CoreMethod.codeWorkspaceReferences, runtime.core.codeWorkspaceReferences)
+  handlers.defineCore(CoreMethod.codeWorkspaceChanges, runtime.core.codeWorkspaceChanges)
+  handlers.defineCore(CoreMethod.codeWorkspaceLineChanges, runtime.core.codeWorkspaceLineChanges)
   handlers.defineCore(CoreMethod.openProject, runtime.core.openProject)
   handlers.defineCore(
     CoreMethod.repairRepositoryIdentities,

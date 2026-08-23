@@ -3,19 +3,32 @@ import * as NodePath from "@effect/platform-node/NodePath"
 import { describe, expect, it } from "@effect/vitest"
 import { Effect, Layer } from "effect"
 import { createHash } from "node:crypto"
-import { mkdtempSync, realpathSync, renameSync, symlinkSync, writeFileSync } from "node:fs"
+import {
+  mkdirSync,
+  mkdtempSync,
+  realpathSync,
+  renameSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 
 import { revalidateCoreArtifact, verifyCoreArtifact } from "./core-artifact"
 
 const platformLayer = Layer.merge(NodeFileSystem.layer, NodePath.layer)
-const buildId = "desktop-build-1"
 const entrypoint = "export const core = true\n"
 const checksum = createHash("sha256").update(entrypoint).digest("hex")
 const workerEntrypoint = "export const worker = true\n"
 const workerChecksum = createHash("sha256").update(workerEntrypoint).digest("hex")
 const workerBuildId = `review-worker-v1-${workerChecksum.slice(0, 20)}-${workerChecksum.slice(0, 20)}`
+const languageServer = "export const server = true\n"
+const languageTreeChecksum = createHash("sha256")
+  .update("typescript-language-server.mjs")
+  .update("\0")
+  .update(languageServer)
+  .digest("hex")
+const buildId = `core-0.8.1-production-${process.platform}-${process.arch}-${checksum.slice(0, 20)}-${languageTreeChecksum.slice(0, 20)}`
 
 const writeArtifact = (manifest: object, contents = entrypoint) => {
   const directory = mkdtempSync(join(tmpdir(), "dd-core-artifact-"))
@@ -23,6 +36,11 @@ const writeArtifact = (manifest: object, contents = entrypoint) => {
   writeFileSync(join(directory, "core-bun.mjs"), contents)
   writeFileSync(join(directory, "review-worker-node.mjs"), workerEntrypoint)
   writeFileSync(join(directory, "review-worker-bun.mjs"), workerEntrypoint)
+  mkdirSync(join(directory, "language/typescript"), { recursive: true })
+  writeFileSync(
+    join(directory, "language/typescript/typescript-language-server.mjs"),
+    languageServer,
+  )
   writeFileSync(join(directory, "manifest.json"), JSON.stringify(manifest))
   return directory
 }
@@ -42,6 +60,12 @@ const validManifest = {
     buildId: workerBuildId,
     node: { entrypoint: "review-worker-node.mjs", entrypointSha256: workerChecksum },
     bun: { entrypoint: "review-worker-bun.mjs", entrypointSha256: workerChecksum },
+  },
+  language: {
+    typescript: {
+      root: "language/typescript",
+      treeSha256: languageTreeChecksum,
+    },
   },
   runtime: {
     utility: true,
@@ -103,6 +127,52 @@ describe("Core artifact verification", () => {
           Effect.flip,
         ),
       ).toMatchObject({ reason: "entrypoint-checksum-mismatch" })
+    }).pipe(Effect.provide(platformLayer)),
+  )
+
+  it.effect("rejects tampered bundled language assets", () =>
+    Effect.gen(function* () {
+      const directory = writeArtifact(validManifest)
+      writeFileSync(
+        join(directory, "language/typescript/typescript-language-server.mjs"),
+        "tampered",
+      )
+
+      expect(
+        yield* verifyCoreArtifact({ artifactDirectory: directory, expectedBuildId: buildId }).pipe(
+          Effect.flip,
+        ),
+      ).toMatchObject({ reason: "entrypoint-checksum-mismatch" })
+    }).pipe(Effect.provide(platformLayer)),
+  )
+
+  it.effect("rejects a forged language checksum that is not bound to the build identity", () =>
+    Effect.gen(function* () {
+      const tamperedLanguageServer = "tampered"
+      const tamperedTreeChecksum = createHash("sha256")
+        .update("typescript-language-server.mjs")
+        .update("\0")
+        .update(tamperedLanguageServer)
+        .digest("hex")
+      const directory = writeArtifact({
+        ...validManifest,
+        language: {
+          typescript: {
+            root: "language/typescript",
+            treeSha256: tamperedTreeChecksum,
+          },
+        },
+      })
+      writeFileSync(
+        join(directory, "language/typescript/typescript-language-server.mjs"),
+        tamperedLanguageServer,
+      )
+
+      expect(
+        yield* verifyCoreArtifact({ artifactDirectory: directory, expectedBuildId: buildId }).pipe(
+          Effect.flip,
+        ),
+      ).toMatchObject({ reason: "build-identity-mismatch" })
     }).pipe(Effect.provide(platformLayer)),
   )
 

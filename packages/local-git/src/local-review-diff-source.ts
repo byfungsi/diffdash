@@ -3,9 +3,9 @@ import { mkdir, mkdtemp, open, rm, type FileHandle } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { dirname, join } from "node:path"
 
-import { Effect, Exit, Match, Option, Schema, Stream } from "effect"
+import { Effect, Exit, Match, Option, Result, Schema, Stream } from "effect"
 
-import { LocalReviewTarget } from "@diffdash/domain/local-review"
+import { LocalReviewComparison, LocalReviewTarget } from "@diffdash/domain/local-review"
 import { ReviewDiffIdentity, ReviewKey, ReviewRevision } from "@diffdash/domain/review-identity"
 import {
   LocalReviewDiffSourceTarget,
@@ -47,20 +47,27 @@ export interface LocalReviewStagingObserver {
 }
 
 /** Exact staging artifact declared by the local-review producer. */
-export interface LocalReviewStagingCapture {
-  readonly directory: string
-  readonly path: string
-  readonly bytes: number
-  readonly digest: string
-}
+export class LocalReviewStagingCapture extends Schema.Class<LocalReviewStagingCapture>(
+  "LocalReviewStagingCapture",
+)({
+  directory: Schema.String,
+  path: Schema.String,
+  bytes: Schema.Int.pipe(Schema.check(Schema.isGreaterThanOrEqualTo(0))),
+  digest: Schema.String,
+}) {}
 
 type Capture = LocalReviewStagingCapture
 
-interface ExactObjects {
-  readonly base: string
-  readonly head: string
-  readonly repository: string
-}
+const LocalReviewSourceMaterialization = Schema.TaggedUnion({
+  immutableGit: {
+    base: Schema.String,
+    head: Schema.String,
+    repository: Schema.String,
+  },
+  managedCapture: { capture: LocalReviewStagingCapture },
+})
+
+type LocalReviewSourceMaterialization = typeof LocalReviewSourceMaterialization.Type
 
 /** Creates a bounded local Git source, spooling mutable generations and retaining exact objects otherwise. */
 export const makeLocalReviewDiffSource = Effect.fn("makeLocalReviewDiffSource")(function* (
@@ -68,43 +75,48 @@ export const makeLocalReviewDiffSource = Effect.fn("makeLocalReviewDiffSource")(
 ): Effect.fn.Return<ReviewDiffSource, ReviewDiffSourceFailure, ProcessService> {
   const processes = yield* ProcessService
   const target = input.target
-  const immutable =
-    target.comparison._tag === "lastCommit" || target.comparison._tag === "revisionRange"
-  const exactObjects = immutable
-    ? yield* resolveExactObjects(target, processes).pipe(Effect.mapError(sourceCreationFailure))
-    : null
-
-  if (exactObjects !== null) {
-    const digest = yield* digestDiff(target, processes).pipe(Effect.mapError(sourceCreationFailure))
-    const comparison = target.comparison
-    if (comparison._tag !== "lastCommit" && comparison._tag !== "revisionRange") {
-      return yield* Effect.die("Expected immutable local comparison")
-    }
+  const immutableSource = (baseRevision: string, headRevision: ReviewRevision) =>
+    Effect.gen(function* () {
+      const exactObjects = yield* resolveExactObjects(
+        target.rootPath,
+        baseRevision,
+        headRevision,
+        processes,
+      ).pipe(Effect.mapError(sourceCreationFailure))
+      const digest = yield* digestDiff(target, processes).pipe(
+        Effect.mapError(sourceCreationFailure),
+      )
+      return makeSource({
+        input,
+        processes,
+        semanticIdentity: ReviewDiffIdentity.make(digest.digest),
+        revision: headRevision,
+        totalBytes: digest.bytes,
+        materialization: exactObjects,
+      })
+    })
+  const mutableSource = Effect.gen(function* () {
+    const capture = yield* captureVerified(
+      target,
+      processes,
+      input.stagingObserver,
+      input.stagingDirectory,
+    )
     return makeSource({
       input,
       processes,
-      semanticIdentity: ReviewDiffIdentity.make(digest.digest),
-      revision: comparison.headSha,
-      totalBytes: digest.bytes,
-      exactObjects,
-      capture: null,
+      semanticIdentity: ReviewDiffIdentity.make(capture.digest),
+      revision: ReviewRevision.make(capture.digest),
+      totalBytes: capture.bytes,
+      materialization: LocalReviewSourceMaterialization.cases.managedCapture.make({ capture }),
     })
-  }
-
-  const capture = yield* captureVerified(
-    target,
-    processes,
-    input.stagingObserver,
-    input.stagingDirectory,
-  )
-  return makeSource({
-    input,
-    processes,
-    semanticIdentity: ReviewDiffIdentity.make(capture.digest),
-    revision: ReviewRevision.make(capture.digest),
-    totalBytes: capture.bytes,
-    exactObjects: null,
-    capture,
+  })
+  return yield* LocalReviewComparison.match(target.comparison, {
+    branch: () => mutableSource,
+    revision: () => mutableSource,
+    workingTree: () => mutableSource,
+    lastCommit: ({ baseSha, headSha }) => immutableSource(baseSha, headSha),
+    revisionRange: ({ mergeBaseSha, headSha }) => immutableSource(mergeBaseSha, headSha),
   })
 })
 
@@ -130,12 +142,12 @@ const captureVerified = Effect.fn("LocalReviewDiffSource.captureVerified")(funct
       Effect.onInterrupt(() => removePath(directory)),
       Effect.result,
     )
-    if (
-      verified._tag === "Success" &&
-      verified.success.digest === capture.digest &&
-      verified.success.bytes === capture.bytes
-    ) {
-      const published = { ...capture, directory }
+    const matches = Result.match(verified, {
+      onFailure: () => false,
+      onSuccess: (success) => success.digest === capture.digest && success.bytes === capture.bytes,
+    })
+    if (matches) {
+      const published = LocalReviewStagingCapture.make({ ...capture, directory })
       if (observer !== undefined) {
         yield* observer.publish(published).pipe(Effect.onError(() => removePath(directory)))
       }
@@ -161,7 +173,11 @@ const writeCapture = Effect.fn("LocalReviewDiffSource.writeCapture")(function* (
   yield* diffBytes(target, processes).pipe(
     Stream.runForEach((chunk) =>
       Effect.gen(function* () {
-        yield* tryPromise("unifiedBytes", () => handle.write(chunk))
+        yield* writeAllLocalReviewCaptureChunk(
+          (chunkBytes, offset, length) =>
+            tryPromise("unifiedBytes", () => handle.write(chunkBytes, offset, length)),
+          chunk,
+        )
         hash.update(chunk)
         bytes += chunk.byteLength
       }),
@@ -169,7 +185,39 @@ const writeCapture = Effect.fn("LocalReviewDiffSource.writeCapture")(function* (
     Effect.mapError(sourceCreationFailure),
     Effect.ensuring(closeHandle(handle)),
   )
-  return { directory: dirname(path), path, bytes, digest: hash.digest("hex") }
+  return LocalReviewStagingCapture.make({
+    directory: dirname(path),
+    path,
+    bytes,
+    digest: hash.digest("hex"),
+  })
+})
+
+/** Writes one capture chunk completely, retrying short filesystem writes. */
+export const writeAllLocalReviewCaptureChunk = Effect.fn(
+  "LocalReviewDiffSource.writeAllCaptureChunk",
+)(function* (
+  write: (
+    bytes: Uint8Array,
+    offset: number,
+    length: number,
+  ) => Effect.Effect<{ readonly bytesWritten: number }, ReviewDiffSourceFailure>,
+  chunk: Uint8Array,
+) {
+  const writeFrom = (offset: number): Effect.Effect<void, ReviewDiffSourceFailure> => {
+    if (offset >= chunk.byteLength) return Effect.void
+    return write(chunk, offset, chunk.byteLength - offset).pipe(
+      Effect.flatMap(({ bytesWritten }) => {
+        if (bytesWritten <= 0 || bytesWritten > chunk.byteLength - offset) {
+          return Effect.fail(
+            sourceFailure("unifiedBytes", "Local review staging write ended before completion"),
+          )
+        }
+        return writeFrom(offset + bytesWritten)
+      }),
+    )
+  }
+  yield* writeFrom(0)
 })
 
 const digestDiff = Effect.fn("LocalReviewDiffSource.digestDiff")(function* (
@@ -194,24 +242,22 @@ const digestDiff = Effect.fn("LocalReviewDiffSource.digestDiff")(function* (
 
 const comparisonHash = (target: LocalReviewTarget) => {
   const hash = createHash("sha256")
-  return Match.value(target.comparison).pipe(
-    Match.tag("branch", (comparison) =>
+  return LocalReviewComparison.match(target.comparison, {
+    branch: (comparison) =>
       hash
         .update("branch\0")
         .update(comparison.baseRef)
         .update("\0")
         .update(comparison.baseSha)
         .update("\0"),
-    ),
-    Match.tag("revision", (comparison) =>
+    revision: (comparison) =>
       hash
         .update("revision\0")
         .update(comparison.revision)
         .update("\0")
         .update(comparison.baseSha)
         .update("\0"),
-    ),
-    Match.tag("revisionRange", (comparison) =>
+    revisionRange: (comparison) =>
       hash
         .update("revisionRange\0")
         .update(comparison.baseSha)
@@ -220,70 +266,86 @@ const comparisonHash = (target: LocalReviewTarget) => {
         .update("\0")
         .update(comparison.mergeBaseSha)
         .update("\0"),
-    ),
-    Match.tag("workingTree", () => hash),
-    Match.tag("lastCommit", (comparison) =>
+    workingTree: () => hash,
+    lastCommit: (comparison) =>
       hash
         .update("lastCommit\0")
         .update(comparison.baseSha)
         .update("\0")
         .update(comparison.headSha)
         .update("\0"),
-    ),
-    Match.exhaustive,
-  )
+  })
 }
 
 const diffBytes = (
   target: LocalReviewTarget,
   processes: ProcessService["Service"],
-): Stream.Stream<Uint8Array, ProcessExecutionError | ReviewDiffSourceFailure> =>
-  target.comparison._tag === "lastCommit" || target.comparison._tag === "revisionRange"
-    ? processStdout(
+): Stream.Stream<Uint8Array, ProcessExecutionError | ReviewDiffSourceFailure> => {
+  const immutable = (baseRevision: string, headRevision: string) =>
+    processStdout(
+      processes,
+      [
+        "-C",
+        target.rootPath,
+        "diff",
+        "--binary",
+        "--full-index",
+        "--no-ext-diff",
+        "--no-color",
+        baseRevision,
+        headRevision,
+        "--",
+      ],
+      target.rootPath,
+    )
+  const mutable = (baseRevision: string) =>
+    Stream.concat(
+      processStdout(
         processes,
         [
           "-C",
           target.rootPath,
           "diff",
+          "--binary",
+          "--full-index",
           "--no-ext-diff",
           "--no-color",
-          target.comparison._tag === "lastCommit"
-            ? target.comparison.baseSha
-            : target.comparison.mergeBaseSha,
-          target.comparison.headSha,
+          baseRevision,
           "--",
         ],
         target.rootPath,
-      )
-    : Stream.concat(
-        processStdout(
-          processes,
-          [
-            "-C",
-            target.rootPath,
-            "diff",
-            "--no-ext-diff",
-            "--no-color",
-            ...(target.comparison._tag === "branch" || target.comparison._tag === "revision"
-              ? [target.comparison.baseSha]
-              : ["HEAD"]),
-            "--",
-          ],
-          target.rootPath,
+      ),
+      untrackedPaths(target.rootPath, processes).pipe(
+        Stream.flatMap(
+          (path) =>
+            processStdout(
+              processes,
+              [
+                "diff",
+                "--binary",
+                "--full-index",
+                "--no-ext-diff",
+                "--no-color",
+                "--no-index",
+                "--",
+                "/dev/null",
+                path,
+              ],
+              target.rootPath,
+              true,
+            ),
+          { concurrency: 1 },
         ),
-        untrackedPaths(target.rootPath, processes).pipe(
-          Stream.flatMap(
-            (path) =>
-              processStdout(
-                processes,
-                ["diff", "--no-ext-diff", "--no-color", "--no-index", "--", "/dev/null", path],
-                target.rootPath,
-                true,
-              ),
-            { concurrency: 1 },
-          ),
-        ),
-      )
+      ),
+    )
+  return LocalReviewComparison.match(target.comparison, {
+    branch: ({ baseSha }) => mutable(baseSha),
+    revision: ({ baseSha }) => mutable(baseSha),
+    workingTree: () => mutable("HEAD"),
+    lastCommit: ({ baseSha, headSha }) => immutable(baseSha, headSha),
+    revisionRange: ({ mergeBaseSha, headSha }) => immutable(mergeBaseSha, headSha),
+  })
+}
 
 const processStdout = (
   processes: ProcessService["Service"],
@@ -305,7 +367,10 @@ const processStdout = (
     )
     .pipe(
       Stream.flatMap((event) =>
-        event._tag === "ProcessByteChunk" ? Stream.make(event.bytes) : Stream.empty,
+        Match.valueTags(event, {
+          ProcessByteChunk: ({ bytes }) => Stream.make(bytes),
+          ProcessExit: () => Stream.empty,
+        }),
       ),
       Stream.catchTag("ProcessExitError", (error) =>
         acceptDifferenceExit && error.exitCode === 1 ? Stream.empty : Stream.fail(error),
@@ -349,24 +414,19 @@ const untrackedPaths = (
   })
 
 const resolveExactObjects = Effect.fn("LocalReviewDiffSource.resolveExactObjects")(function* (
-  target: LocalReviewTarget,
+  rootPath: string,
+  baseRevision: string,
+  headRevision: string,
   processes: ProcessService["Service"],
-): Effect.fn.Return<ExactObjects, ProcessExecutionError> {
-  if (target.comparison._tag !== "lastCommit" && target.comparison._tag !== "revisionRange") {
-    return yield* Effect.die("Expected immutable local comparison")
-  }
-  const baseRevision =
-    target.comparison._tag === "lastCommit"
-      ? target.comparison.baseSha
-      : target.comparison.mergeBaseSha
+): Effect.fn.Return<LocalReviewSourceMaterialization, ProcessExecutionError> {
   const [base, head, commonDirectory] = yield* Effect.all(
     [
-      resolveObject(target.rootPath, baseRevision, processes),
-      resolveObject(target.rootPath, target.comparison.headSha, processes),
+      resolveObject(rootPath, baseRevision, processes),
+      resolveObject(rootPath, headRevision, processes),
       processes.run(
         gitProcessRequest([
           "-C",
-          target.rootPath,
+          rootPath,
           "rev-parse",
           "--path-format=absolute",
           "--git-common-dir",
@@ -375,11 +435,11 @@ const resolveExactObjects = Effect.fn("LocalReviewDiffSource.resolveExactObjects
     ],
     { concurrency: 1 },
   )
-  return {
+  return LocalReviewSourceMaterialization.cases.immutableGit.make({
     base,
     head,
     repository: createHash("sha256").update(commonDirectory.stdout.trim()).digest("hex"),
-  }
+  })
 })
 
 const resolveObject = Effect.fn("LocalReviewDiffSource.resolveObject")(function* (
@@ -400,19 +460,21 @@ const makeSource = (state: {
   readonly semanticIdentity: ReviewDiffIdentity
   readonly revision: ReviewRevision
   readonly totalBytes: number
-  readonly exactObjects: ExactObjects | null
-  readonly capture: Capture | null
+  readonly materialization: LocalReviewSourceMaterialization
 }): ReviewDiffSource => {
   const tracker = new ReviewDiffGenerationTracker()
   let closed = false
   const close = Effect.fn("LocalReviewDiffSource.close")(function* () {
     if (closed) return
     closed = true
-    if (state.capture !== null) {
-      yield* state.input.stagingObserver === undefined
-        ? removePath(state.capture.directory)
-        : state.input.stagingObserver.remove(state.capture)
-    }
+    yield* LocalReviewSourceMaterialization.match(state.materialization, {
+      immutableGit: () => Effect.void,
+      managedCapture: ({ capture }) =>
+        Option.match(Option.fromNullishOr(state.input.stagingObserver), {
+          onNone: () => removePath(capture.directory),
+          onSome: (observer) => observer.remove(capture),
+        }),
+    })
   })().pipe(
     Effect.mapError(() => sourceFailure("unifiedBytes", "Could not release review staging")),
   )
@@ -426,8 +488,14 @@ const makeSource = (state: {
     methods: [UnifiedBytesMethod.make({ maxChunkBytes: REVIEW_DIFF_MAX_CHUNK_BYTES })],
     facts: ReviewDiffSourceFacts.make({
       origin: "local",
-      revisionKind: state.exactObjects === null ? "mutable" : "immutableGit",
-      reproducible: state.exactObjects !== null,
+      revisionKind: LocalReviewSourceMaterialization.match(state.materialization, {
+        immutableGit: () => "immutableGit" as const,
+        managedCapture: () => "mutable" as const,
+      }),
+      reproducible: LocalReviewSourceMaterialization.match(state.materialization, {
+        immutableGit: () => true,
+        managedCapture: () => false,
+      }),
       complete: true,
       declaredBytes: state.totalBytes,
     }),
@@ -443,15 +511,17 @@ const makeSource = (state: {
             Exit.hasInterrupts(exit) ? close.pipe(Effect.ignore) : Effect.void,
           )
           const byteStream: Stream.Stream<Uint8Array, ReviewDiffSourceError> =
-            state.capture === null
-              ? diffBytes(state.input.target, state.processes).pipe(
+            LocalReviewSourceMaterialization.match(state.materialization, {
+              immutableGit: () =>
+                diffBytes(state.input.target, state.processes).pipe(
                   Stream.mapError((error) =>
                     Schema.is(ReviewDiffSourceFailure)(error)
                       ? error
                       : sourceCreationFailure(error),
                   ),
-                )
-              : spoolBytes(state.capture.path)
+                ),
+              managedCapture: ({ capture }) => spoolBytes(capture.path),
+            })
           return byteStream.pipe(
             Stream.map((bytes) => ({ bytes })),
             Stream.concat(

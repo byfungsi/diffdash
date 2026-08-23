@@ -1,5 +1,6 @@
 import { registerDiffDashSyntax } from "./diffdash-syntax"
 import {
+  type File as PierreFile,
   FileDiff as PierreRangeFileDiff,
   type FileDiff as PierreFileDiff,
   VirtualizedFileDiff,
@@ -17,11 +18,13 @@ export {
   type PostRenderPhase,
   type RenderRange,
   type SelectionSide,
+  type VirtualizedFile,
   Virtualizer as DiffVirtualizer,
   type VirtualFileMetrics,
 } from "@pierre/diffs"
 export { VirtualizedFileDiff }
 export { PierreRangeFileDiff }
+export type { PierreFile, PierreFileDiff }
 export {
   CodeView,
   type CodeViewFileItem,

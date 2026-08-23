@@ -1,9 +1,13 @@
+import assert from "node:assert/strict"
 import { createHash, randomUUID } from "node:crypto"
-import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises"
-import { dirname, resolve } from "node:path"
+import { cp, mkdir, readFile, readdir, rename, rm, writeFile } from "node:fs/promises"
+import { createRequire } from "node:module"
+import { dirname, relative, resolve, sep } from "node:path"
 import { fileURLToPath } from "node:url"
 
 import { build } from "esbuild"
+import { Array as EffectArray, Order, Schema } from "effect"
+import { CoreArtifactManifest } from "../electron/main/core-artifact-manifest.ts"
 
 const desktopDirectory = resolve(dirname(fileURLToPath(import.meta.url)), "..")
 const workspaceDirectory = resolve(desktopDirectory, "../..")
@@ -55,6 +59,84 @@ export const buildCoreArtifact = async ({
     const nodeWorkerPath = resolve(stagingDirectory, "review-worker-node.mjs")
     const bunWorkerPath = resolve(stagingDirectory, "review-worker-bun.mjs")
     const bunEntrypointPath = resolve(stagingDirectory, "core-bun.mjs")
+    const languageDirectory = resolve(stagingDirectory, "language/typescript")
+    const languageProviderRequire = createRequire(
+      resolve(workspaceDirectory, "packages/language-provider-typescript/package.json"),
+    )
+    const languageServerSource = languageProviderRequire.resolve(
+      "typescript-language-server/lib/cli.mjs",
+    )
+    const tsserverSource = languageProviderRequire.resolve("typescript/lib/tsserver.js")
+    const treeSitterSource = languageProviderRequire.resolve("@vscode/tree-sitter-wasm")
+    await mkdir(languageDirectory, { recursive: true })
+    const languageServerBuild = await build({
+      absWorkingDir: workspaceDirectory,
+      bundle: true,
+      entryPoints: [languageServerSource],
+      format: "esm",
+      legalComments: "none",
+      logLevel: "silent",
+      metafile: true,
+      outfile: resolve(languageDirectory, "lib/cli.mjs"),
+      platform: "node",
+      sourcemap: false,
+      target: "node22",
+      treeShaking: true,
+    })
+    await cp(
+      resolve(dirname(dirname(languageServerSource)), "package.json"),
+      resolve(languageDirectory, "package.json"),
+    )
+    await cp(
+      resolve(dirname(dirname(tsserverSource)), "lib"),
+      resolve(languageDirectory, "typescript/lib"),
+      {
+        recursive: true,
+      },
+    )
+    await cp(
+      resolve(dirname(dirname(tsserverSource)), "package.json"),
+      resolve(languageDirectory, "typescript/package.json"),
+    )
+    await Promise.all(
+      [
+        "tree-sitter.wasm",
+        "tree-sitter-javascript.wasm",
+        "tree-sitter-typescript.wasm",
+        "tree-sitter-tsx.wasm",
+      ].map((asset) =>
+        cp(resolve(dirname(treeSitterSource), asset), resolve(languageDirectory, asset)),
+      ),
+    )
+    const languageTreeHash = createHash("sha256")
+    const languageEntries = await readdir(languageDirectory, {
+      withFileTypes: true,
+      recursive: true,
+    })
+    assert(
+      EffectArray.every(languageEntries, (entry) => entry.isDirectory() || entry.isFile()),
+      "Core artifact assets must contain only files",
+    )
+    const languageFiles = EffectArray.map(
+      EffectArray.filter(languageEntries, (entry) => entry.isFile()),
+      (entry) =>
+        relative(languageDirectory, resolve(entry.parentPath, entry.name)).split(sep).join("/"),
+    )
+    const languageFileContents = await Promise.all(
+      EffectArray.map(
+        EffectArray.sortWith(languageFiles, (path) => path, Order.String),
+        async (relativePath) => ({
+          relativePath,
+          bytes: await readFile(resolve(languageDirectory, relativePath)),
+        }),
+      ),
+    )
+    for (const { relativePath, bytes } of languageFileContents) {
+      languageTreeHash.update(relativePath)
+      languageTreeHash.update("\0")
+      languageTreeHash.update(bytes)
+    }
+    const languageTreeSha256 = languageTreeHash.digest("hex")
     const nodeWorkerBuild = await workerBuild(
       resolve(workspaceDirectory, "packages/review-data-worker/src/node-worker-entrypoint.ts"),
       nodeWorkerPath,
@@ -85,6 +167,8 @@ export const buildCoreArtifact = async ({
           DIFFDASH_REVIEW_WORKER_BUILD_ID: JSON.stringify(reviewWorkerBuildId),
           DIFFDASH_REVIEW_WORKER_NODE_SHA256: JSON.stringify(nodeWorkerSha256),
           DIFFDASH_REVIEW_WORKER_BUN_SHA256: JSON.stringify(bunWorkerSha256),
+          "process.env.DIFFDASH_TYPESCRIPT_LANGUAGE_TREE_SHA256":
+            JSON.stringify(languageTreeSha256),
         },
         format: "esm",
         legalComments: "none",
@@ -114,7 +198,7 @@ export const buildCoreArtifact = async ({
       .digest("hex")
     const manifest = {
       schemaVersion: 1,
-      buildId: `core-${desktopPackage.version}-${normalizedMode}-${process.platform}-${process.arch}-${entrypointSha256.slice(0, 40)}`,
+      buildId: `core-${desktopPackage.version}-${normalizedMode}-${process.platform}-${process.arch}-${entrypointSha256.slice(0, 20)}-${languageTreeSha256.slice(0, 20)}`,
       desktop: {
         version: desktopPackage.version,
         mode: normalizedMode,
@@ -128,6 +212,12 @@ export const buildCoreArtifact = async ({
         node: { entrypoint: "review-worker-node.mjs", entrypointSha256: nodeWorkerSha256 },
         bun: { entrypoint: "review-worker-bun.mjs", entrypointSha256: bunWorkerSha256 },
       },
+      language: {
+        typescript: {
+          root: "language/typescript",
+          treeSha256: languageTreeSha256,
+        },
+      },
       runtime: {
         utility: true,
         bun: {
@@ -138,11 +228,11 @@ export const buildCoreArtifact = async ({
         },
       },
     }
-    await writeFile(
-      resolve(stagingDirectory, "manifest.json"),
-      `${JSON.stringify(manifest, null, 2)}\n`,
-      { encoding: "utf8", mode: 0o600 },
-    )
+    const manifestText = Schema.encodeSync(Schema.fromJsonString(CoreArtifactManifest))(manifest)
+    await writeFile(resolve(stagingDirectory, "manifest.json"), `${manifestText}\n`, {
+      encoding: "utf8",
+      mode: 0o600,
+    })
 
     try {
       await rename(outputDirectory, previousDirectory)
@@ -160,6 +250,7 @@ export const buildCoreArtifact = async ({
           ...bunBuildResult.metafile.inputs,
           ...nodeWorkerBuild.metafile.inputs,
           ...bunWorkerBuild.metafile.inputs,
+          ...languageServerBuild.metafile.inputs,
         },
       },
       outputDirectory,

@@ -1,20 +1,43 @@
 import { AgentProviderId } from "@diffdash/domain/agent-provider"
 import { AISettings, DEFAULT_AI_SETTINGS } from "@diffdash/domain/ai-settings"
 import { DiagnosticOperation } from "@diffdash/domain/diagnostic-operation"
+import { CodeWorkspaceLease, CodeWorkspaceLeaseId } from "@diffdash/domain/code-workspace"
+import { DiffFileVisibility } from "@diffdash/domain/diff"
 import { LocalRepositorySource } from "@diffdash/domain/git-provider"
+import {
+  LanguagePosition,
+  LanguageRange,
+  RepositoryLanguageLocation,
+  RepositoryLanguageLocationLink,
+  RepositoryLanguageLocationResult,
+} from "@diffdash/domain/language"
 import { AgentProviderFailure } from "@diffdash/domain/provider-failure"
 import { LinkedCheckout, Repo, RepositoryCheckoutPath } from "@diffdash/domain/repository"
+import { GitCommitSha } from "@diffdash/domain/repository-comparison"
+import { RepositoryRelativePath } from "@diffdash/domain/repository-path"
 import { ReviewAgentProviderId } from "@diffdash/domain/review-agent-provider-id"
 import { WebUrl } from "@diffdash/domain/web-url"
 import { ReviewProjectId } from "@diffdash/domain/review-identity"
-import { ReviewKey, ReviewSnapshotId } from "@diffdash/domain/review-identity"
+import {
+  ReviewFileId,
+  ReviewFilePatchHash,
+  ReviewKey,
+  ReviewRevision,
+  ReviewSnapshotId,
+} from "@diffdash/domain/review-identity"
 import { ApplicationInstanceId, CoreProcessEpoch, HostRequestId } from "@diffdash/core-rpc/identity"
 import { CoreReviewSessionFailure } from "@diffdash/core-rpc/review-session"
 import { ListOpenCodeSessionsRequest } from "@diffdash/protocol/ai-connection"
-import type { AppUpdateState } from "@diffdash/protocol/app-update"
 import { AppUpdateFailed, AppUpdateIdle } from "@diffdash/protocol/app-update"
 import { EventChannel, InvokeChannel } from "@diffdash/protocol/channels"
 import { OpenWorkingTreeCommand } from "@diffdash/protocol/cli-navigation"
+import {
+  ReviewSessionId,
+  ReviewSessionIdentity,
+  ReviewSessionProcessId,
+  ReviewSessionRange,
+  ReviewSessionStateVersion,
+} from "@diffdash/protocol/review-session"
 import type { InvokeRequest } from "@diffdash/protocol/ipc"
 import {
   encodeFailureEnvelopeWithinBudget,
@@ -23,7 +46,7 @@ import {
   invokeResponseSchema,
   successEnvelope,
 } from "@diffdash/protocol/ipc"
-import type { BridgeResult } from "@diffdash/protocol/ipc"
+import type { EncodedBridgeResult } from "@diffdash/protocol/ipc"
 import { jsonSafeUtf8ByteLength } from "@diffdash/protocol/payload-budget"
 import { WalkthroughStartBridgeResult } from "@diffdash/protocol/walkthrough-operation"
 import {
@@ -39,7 +62,7 @@ import {
   transportError,
   UNKNOWN_TRANSPORT_ERROR_MESSAGE,
 } from "@diffdash/protocol/transport-error"
-import { Effect, Schema } from "effect"
+import { Effect, Match, Option, Schema } from "effect"
 import type { IpcMain, IpcMainInvokeEvent } from "electron"
 import { describe, expect, it, vi } from "vitest"
 import { CoreMethod, CoreMethodChannel, RepositoryLinkError } from "@diffdash/core"
@@ -348,6 +371,83 @@ describe("IPC contract", () => {
     })
   })
 
+  it("keeps transformed host responses encoded across contextBridge", async () => {
+    const lease = CodeWorkspaceLease.make({
+      id: CodeWorkspaceLeaseId.make("lease:encoded-response"),
+      revision: ReviewRevision.make("workspace-revision"),
+      gitRevision: Option.some(GitCommitSha.make("a".repeat(40))),
+      expiresAtMs: 1,
+    })
+    const encodedLease = Schema.encodeSync(CodeWorkspaceLease)(lease)
+    const transport = createRendererTransport(
+      rendererIpc({ _tag: "Success", value: encodedLease }).api,
+    )
+
+    const result = await transport.invoke(InvokeChannel.openCodeWorkspace, {
+      target: { _tag: "projectHead", projectId: ReviewProjectId.make("project") },
+    })
+
+    expect(result).toEqual({ _tag: "Success", value: encodedLease })
+    expect(
+      Match.valueTags(result, {
+        Failure: () => false,
+        Success: ({ value }) => Schema.is(CodeWorkspaceLease)(value),
+      }),
+    ).toBe(false)
+  })
+
+  it("preserves structured-clone binary leaves in encoded host responses", async () => {
+    const identity = ReviewSessionIdentity.make({
+      projectId: ReviewProjectId.make("project"),
+      reviewKey: ReviewKey.make("review"),
+      snapshotId: ReviewSnapshotId.make(`snapshot:v1:${"0".repeat(32)}`),
+      processId: ReviewSessionProcessId.make("process"),
+      sessionId: ReviewSessionId.make("session"),
+      stateVersion: ReviewSessionStateVersion.make(1),
+    })
+    const fileId = ReviewFileId.make("file")
+    const bytes = new TextEncoder().encode("diff")
+    const range = ReviewSessionRange.make({
+      identity,
+      file: {
+        ordinal: 0,
+        fileId,
+        path: RepositoryRelativePath.make("source.ts"),
+        oldPath: null,
+        additions: 1,
+        deletions: 0,
+        status: "modified",
+        visibility: DiffFileVisibility.cases.Visible.make({}),
+        patchHash: ReviewFilePatchHash.make("patch"),
+        hunkCount: 1,
+      },
+      blocks: [
+        {
+          id: "block",
+          hunkId: null,
+          ordinal: 0,
+          firstLine: 0,
+          lineCount: 1,
+          bytes,
+        },
+      ],
+      byteCount: bytes.byteLength,
+      complete: true,
+    })
+    const encodedRange = Schema.encodeSync(ReviewSessionRange)(range)
+    const transport = createRendererTransport(
+      rendererIpc({ _tag: "Success", value: encodedRange }).api,
+    )
+
+    const result = await transport.invoke(InvokeChannel.readProgressiveReviewRange, {
+      identity,
+      fileId,
+      startLine: 0,
+    })
+
+    expect(result).toEqual({ _tag: "Success", value: encodedRange })
+  })
+
   it("rejects oversized encoded renderer requests before invoking Electron", async () => {
     const ipc = rendererIpc()
     const transport = createRendererTransport(ipc.api)
@@ -369,6 +469,8 @@ describe("IPC contract", () => {
     await expectTransportError(transport.invoke(InvokeChannel.updatesGetState, {}), {
       _tag: "TransportError",
       code: "INVALID_RESPONSE",
+      message: `${InvokeChannel.updatesGetState} failed: Encoded response did not satisfy the preload schema for ${InvokeChannel.updatesGetState}`,
+      operation: InvokeChannel.updatesGetState,
     })
   })
 
@@ -486,7 +588,7 @@ describe("IPC contract", () => {
   it("decodes events, reports malformed and oversized payloads, and removes the exact listener", () => {
     const ipc = rendererIpc()
     const transport = createRendererTransport(ipc.api)
-    const listener = vi.fn<(result: BridgeResult<AppUpdateState>) => void>()
+    const listener = vi.fn<(result: EncodedBridgeResult) => void>()
     const cleanup = transport.subscribe(EventChannel.updateStateChanged, listener)
     const wrapped = ipc.listeners.get(EventChannel.updateStateChanged)
 
@@ -850,7 +952,7 @@ describe("IPC contract", () => {
     expect(envelope.value).toEqual(AppUpdateIdle.make({ currentVersion: "0.3.1" }))
   })
 
-  it("normalizes class responses decoded by the external Core bundle", async () => {
+  it("rejects response values that are not owned by the main-process schema runtime", async () => {
     const host = hostIpc()
     const registry = new IpcControllerRegistry(testRendererSecurityPolicy(), host.api, [
       InvokeChannel.updatesGetState,
@@ -862,9 +964,69 @@ describe("IPC contract", () => {
 
     const response = await host.handler?.(trustedEvent(), {})
 
+    expect(response).toMatchObject({
+      _tag: "Failure",
+      error: {
+        code: "INVALID_RESPONSE",
+        message: `Main-process response did not satisfy the IPC schema for ${InvokeChannel.updatesGetState}`,
+        operation: InvokeChannel.updatesGetState,
+      },
+    })
+  })
+
+  it("encodes Core language locations with absent source ranges", async () => {
+    const host = hostIpc()
+    const registry = new IpcControllerRegistry(testRendererSecurityPolicy(), host.api, [
+      InvokeChannel.codeWorkspaceReferences,
+    ])
+    const range = LanguageRange.make({
+      start: LanguagePosition.make({ line: 0, character: 0 }),
+      end: LanguagePosition.make({ line: 0, character: 6 }),
+    })
+    registry.define(InvokeChannel.codeWorkspaceReferences, async () =>
+      RepositoryLanguageLocationResult.make({
+        locations: [
+          RepositoryLanguageLocationLink.make({
+            originSelectionRange: Option.none(),
+            target: RepositoryLanguageLocation.make({
+              path: RepositoryRelativePath.make("source.ts"),
+              range,
+            }),
+            targetSelectionRange: range,
+          }),
+        ],
+        truncated: false,
+      }),
+    )
+    registry.install()
+
+    const response = await host.handler?.(trustedEvent(), {
+      leaseId: "lease:references",
+      path: "source.ts",
+      position: { line: 0, character: 1 },
+    })
+
     expect(response).toEqual({
       _tag: "Success",
-      value: { _tag: "idle", currentVersion: "0.3.1" },
+      value: {
+        locations: [
+          {
+            originSelectionRange: null,
+            target: {
+              path: "source.ts",
+              range: {
+                start: { line: 0, character: 0 },
+                end: { line: 0, character: 6 },
+              },
+            },
+            targetSelectionRange: {
+              start: { line: 0, character: 0 },
+              end: { line: 0, character: 6 },
+            },
+          },
+        ],
+        truncated: false,
+      },
     })
   })
 
@@ -912,10 +1074,7 @@ describe("IPC contract", () => {
   })
 })
 
-const expectTransportError = async <Value>(
-  promise: Promise<BridgeResult<Value>>,
-  expected: object,
-) => {
+const expectTransportError = async (promise: Promise<EncodedBridgeResult>, expected: object) => {
   const result = await promise
   expect(result).toMatchObject({ _tag: "Failure", error: expected })
 }
@@ -1063,6 +1222,10 @@ const testRuntime = (message: string): ApplicationRuntime => {
       listCodeWorkspaceDirectory: reject,
       searchCodeWorkspace: reject,
       readCodeWorkspaceFile: reject,
+      codeWorkspaceDefinitions: reject,
+      codeWorkspaceReferences: reject,
+      codeWorkspaceChanges: reject,
+      codeWorkspaceLineChanges: reject,
       listRepositories: reject,
       openProject: reject,
       repairRepositoryIdentities: reject,

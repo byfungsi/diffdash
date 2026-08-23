@@ -4,16 +4,16 @@ import {
   transportError,
   UNKNOWN_TRANSPORT_ERROR_MESSAGE,
 } from "@diffdash/protocol/transport-error"
-import { Cause, Effect, Match, Queue, Result, Schema, Stream } from "effect"
+import { Cause, Effect, Queue, Result, Schema, Stream } from "effect"
 
 import type { EventChannel, InvokeChannel } from "@diffdash/protocol/channels"
 import {
-  FailureEnvelope,
+  bridgeResultSchema,
   eventPayloadSchema,
   invokeResponseSchema,
-  type BridgeResult,
   type EventPayload,
   type InvokeResponse,
+  type RendererBridgeResult,
 } from "@diffdash/protocol/ipc"
 import { rendererFailureInput } from "@/shared/errors"
 
@@ -29,40 +29,29 @@ export const invokePreload = <Channel extends InvokeChannel, Value>(
     try: invoke,
     catch: (error) => rendererApiError(channel, error),
   }).pipe(
-    Effect.flatMap((response) => {
-      const decodedResult = Schema.decodeUnknownResult(boundaryBridgeResultSchema)(response)
-      const decodedFailure = Schema.decodeUnknownResult(FailureEnvelope)(response)
-      if (Result.isFailure(decodedResult) && Result.isSuccess(decodedFailure)) {
-        return Effect.fail(
-          transportError("INVALID_RESPONSE", `Invalid response for ${channel}`, channel),
-        )
-      }
-      const result = Result.isSuccess(decodedResult)
-        ? decodedResult.success
-        : { _tag: "Success" as const, value: response }
-      return Match.valueTags(result, {
+    Effect.flatMap((response) =>
+      Schema.decodeUnknownEffect(boundaryBridgeResultSchema)(response).pipe(
+        Effect.mapError(() => invalidRendererResponse(channel)),
+      ),
+    ),
+    Effect.flatMap((result) =>
+      boundaryBridgeResultSchema.match(result, {
         Failure: (failure) => {
           const error = decodeTransportError(rendererFailureInput(failure.error))
-          return Effect.fail(
-            error ?? transportError("INVALID_RESPONSE", `Invalid response for ${channel}`, channel),
-          )
+          return Effect.fail(error ?? invalidRendererResponse(channel))
         },
         Success: (success) =>
-          Schema.decodeUnknownEffect(typedInvokeResponseSchema(channel))(
-            success.value === undefined ? null : success.value,
-          ).pipe(
-            Effect.mapError(() =>
-              transportError("INVALID_RESPONSE", `Invalid response for ${channel}`, channel),
-            ),
+          Schema.decodeUnknownEffect(typedInvokeResponseSchema(channel))(success.value).pipe(
+            Effect.mapError(() => invalidRendererResponse(channel)),
           ),
-      })
-    }),
+      }),
+    ),
   )
 
 /** Invokes a preload-owned aggregate operation whose internal IPC response is not renderer-visible. */
 export const invokePreloadVoid = (
   operation: string,
-  invoke: () => Promise<BridgeResult<void>>,
+  invoke: () => Promise<RendererBridgeResult<void>>,
 ): Effect.Effect<void, RendererApiError> =>
   Effect.tryPromise({
     try: invoke,
@@ -75,13 +64,23 @@ export const invokePreloadVoid = (
           transportError("INVALID_RESPONSE", `Invalid response for ${operation}`, operation),
         )
       }
-      return Match.valueTags(decoded.success, {
+      return boundaryBridgeResultSchema.match(decoded.success, {
         Failure: (failure) =>
           Effect.fail(
             decodeTransportError(rendererFailureInput(failure.error)) ??
               transportError("INVALID_RESPONSE", `Invalid response for ${operation}`, operation),
           ),
-        Success: () => Effect.void,
+        Success: (success) =>
+          Schema.decodeUnknownEffect(Schema.Null)(success.value).pipe(
+            Effect.asVoid,
+            Effect.mapError(() =>
+              transportError(
+                "INVALID_RESPONSE",
+                `Preload aggregate response did not satisfy the renderer schema for ${operation}`,
+                operation,
+              ),
+            ),
+          ),
       })
     }),
   )
@@ -89,7 +88,9 @@ export const invokePreloadVoid = (
 /** Restores and scopes one callback-based preload event as a renderer-local stream. */
 export const preloadEventStream = <Channel extends EventChannel>(
   channel: Channel,
-  subscribe: (listener: (result: BridgeResult<EventPayload<Channel>>) => void) => () => void,
+  subscribe: (
+    listener: (result: RendererBridgeResult<EventPayload<Channel>>) => void,
+  ) => () => void,
   initial?: Effect.Effect<EventPayload<Channel>, RendererApiError>,
 ): Stream.Stream<EventPayload<Channel>, RendererApiError> =>
   Stream.callback((queue) => {
@@ -98,30 +99,11 @@ export const preloadEventStream = <Channel extends EventChannel>(
     const subscription = Effect.acquireRelease(
       Effect.sync(() => {
         const unsubscribe = subscribe((result) => {
-          Match.valueTags(result, {
-            Failure: (failure) =>
-              Queue.failCauseUnsafe(
-                queue,
-                Cause.fail(
-                  decodeTransportError(failure.error) ??
-                    transportError("INVALID_EVENT", `Invalid event for ${channel}`, channel),
-                ),
-              ),
-            Success: (success) => {
-              const decoded = Schema.decodeUnknownResult(typedEventPayloadSchema(channel))(
-                success.value,
-              )
-              if (Result.isFailure(decoded)) {
-                Queue.failCauseUnsafe(
-                  queue,
-                  Cause.fail(
-                    transportError("INVALID_EVENT", `Invalid event for ${channel}`, channel),
-                  ),
-                )
-                return
-              }
-              if (initialized) Queue.offerUnsafe(queue, decoded.success)
-              else pending.push(decoded.success)
+          Result.match(decodePreloadEventResult(channel, result), {
+            onFailure: (error) => Queue.failCauseUnsafe(queue, Cause.fail(error)),
+            onSuccess: (value) => {
+              if (initialized) Queue.offerUnsafe(queue, value)
+              else pending.push(value)
             },
           })
         })
@@ -146,6 +128,21 @@ export const preloadEventStream = <Channel extends EventChannel>(
     )
   })
 
+/** Subscribes to one preload event after decoding its complete renderer boundary envelope. */
+export const subscribePreloadEvent = <Channel extends EventChannel>(
+  channel: Channel,
+  subscribe: (
+    listener: (result: RendererBridgeResult<EventPayload<Channel>>) => void,
+  ) => () => void,
+  listener: (event: EventPayload<Channel>) => void,
+): (() => void) =>
+  subscribe((result) => {
+    Result.match(decodePreloadEventResult(channel, result), {
+      onFailure: () => undefined,
+      onSuccess: listener,
+    })
+  })
+
 /** Converts an unknown rejected preload Promise into a stable renderer failure. */
 export const rendererApiError = <Value>(operation: string, error: Value): RendererApiError => {
   const transport = decodeTransportError(rendererFailureInput(error))
@@ -159,7 +156,34 @@ const typedInvokeResponseSchema = <Channel extends InvokeChannel>(channel: Chann
 const typedEventPayloadSchema = <Channel extends EventChannel>(channel: Channel) =>
   eventPayloadSchema(channel)
 
-const boundaryBridgeResultSchema = Schema.Union([
-  Schema.Struct({ _tag: Schema.Literal("Success"), value: Schema.Any }),
-  FailureEnvelope,
-])
+const decodePreloadEventResult = <Channel extends EventChannel>(
+  channel: Channel,
+  result: RendererBridgeResult<EventPayload<Channel>>,
+): Result.Result<EventPayload<Channel>, RendererApiError> => {
+  const decodedEnvelope = Schema.decodeUnknownResult(boundaryBridgeResultSchema)(result)
+  if (Result.isFailure(decodedEnvelope)) {
+    return Result.fail(transportError("INVALID_EVENT", `Invalid event for ${channel}`, channel))
+  }
+  return boundaryBridgeResultSchema.match(decodedEnvelope.success, {
+    Failure: (failure) =>
+      Result.fail(
+        decodeTransportError(failure.error) ??
+          transportError("INVALID_EVENT", `Invalid event for ${channel}`, channel),
+      ),
+    Success: (success) =>
+      Schema.decodeUnknownResult(typedEventPayloadSchema(channel))(success.value).pipe(
+        Result.mapError(() =>
+          transportError("INVALID_EVENT", `Invalid event for ${channel}`, channel),
+        ),
+      ),
+  })
+}
+
+const invalidRendererResponse = (channel: InvokeChannel): RendererApiError =>
+  transportError(
+    "INVALID_RESPONSE",
+    `Preload response did not satisfy the renderer schema for ${channel}`,
+    channel,
+  )
+
+const boundaryBridgeResultSchema = bridgeResultSchema(Schema.Any)

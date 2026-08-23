@@ -34,7 +34,9 @@ export class ProjectRemoteSelectionRequired extends Schema.TaggedClass<ProjectRe
 ) {}
 
 /** Canonical result of opening a local project in the main process. */
-export const ProjectOpenResult = Schema.Union([ProjectOpened, ProjectRemoteSelectionRequired])
+export const ProjectOpenResult = Schema.Union([ProjectOpened, ProjectRemoteSelectionRequired]).pipe(
+  Schema.toTaggedUnion("_tag"),
+)
 
 /** Canonical result of opening a local project in the main process. */
 export type ProjectOpenResult = typeof ProjectOpenResult.Type

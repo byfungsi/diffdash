@@ -47,8 +47,8 @@ import {
   type ReviewThreadOrchestration,
   ReviewThreadPanel,
   type ReviewThreadsController,
-  reviewLineLabel,
 } from "./review-threads"
+import { reviewLineLabel } from "./review-thread-presentation"
 
 let root: Root | null = null
 

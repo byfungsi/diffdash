@@ -143,25 +143,21 @@ export class IpcControllerRegistry {
 
       try {
         const envelope = successEnvelope(InvokeContract[channel].response)
-        let encoded
-        try {
-          encoded = Schema.encodeUnknownSync(envelope)({
-            _tag: "Success",
-            value: prepared.response,
-          })
-        } catch {
-          const response = Schema.decodeUnknownSync(InvokeContract[channel].response)(
-            prepared.response,
-          )
-          encoded = Schema.encodeUnknownSync(envelope)({ _tag: "Success", value: response })
-        }
+        const encoded = Schema.encodeUnknownSync(envelope)({
+          _tag: "Success",
+          value: prepared.response,
+        })
         assertJsonPayloadWithinBudget(encoded, InvokeContract[channel].maxResponseBytes, channel)
         prepared.commit?.()
         return encoded
       } catch (error) {
         if (Schema.is(TransportError)(error)) return encodeFailure(error)
         return encodeFailure(
-          transportError("INVALID_RESPONSE", `Invalid response for ${channel}`, channel),
+          transportError(
+            "INVALID_RESPONSE",
+            `Main-process response did not satisfy the IPC schema for ${channel}`,
+            channel,
+          ),
         )
       }
     })

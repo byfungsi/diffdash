@@ -6,8 +6,12 @@ import {
   type CoreApplicationFailure,
 } from "@diffdash/core-rpc/application-rpc"
 import { CORE_RPC_INCOMPLETE_BUFFER_BYTES } from "@diffdash/core-rpc/transport"
+import {
+  CodeWorkspaceError,
+  type CodeWorkspaceFailureReason,
+} from "@diffdash/domain/code-workspace"
 import { getCoreRpcMethodPolicy, type CoreRpcMethodPolicy } from "@diffdash/core-rpc/method-policy"
-import { Cause, Effect, Fiber, FiberSet, Option, Predicate } from "effect"
+import { Cause, Effect, Fiber, FiberSet, Option, Predicate, Schema } from "effect"
 import * as RpcSerialization from "effect/unstable/rpc/RpcSerialization"
 
 import type { HostRequestContext } from "@diffdash/core-rpc/identity"
@@ -40,6 +44,75 @@ const encodedBytes = (value: Parameters<ReturnType<typeof makeMethodPolicyParser
       Predicate.isString(encoded) ? Buffer.byteLength(encoded) : encoded.byteLength,
     ),
   )
+
+const codeWorkspaceFailureDetails = {
+  invalidPath: {
+    code: "CODE_WORKSPACE_INVALID_PATH",
+    safeMessage: "The requested repository path is invalid.",
+  },
+  leaseExpired: {
+    code: "CODE_WORKSPACE_LEASE_EXPIRED",
+    safeMessage: "The Code workspace lease expired.",
+  },
+  leaseNotFound: {
+    code: "CODE_WORKSPACE_LEASE_NOT_FOUND",
+    safeMessage: "The Code workspace lease is no longer available.",
+  },
+  repositoryNotFound: {
+    code: "CODE_WORKSPACE_REPOSITORY_NOT_FOUND",
+    safeMessage: "The repository is no longer available.",
+  },
+  repositoryUnavailable: {
+    code: "CODE_WORKSPACE_REPOSITORY_UNAVAILABLE",
+    safeMessage: "The linked repository checkout is unavailable.",
+  },
+  revisionUnavailable: {
+    code: "CODE_WORKSPACE_REVISION_UNAVAILABLE",
+    safeMessage: "Git could not resolve the repository's current revision.",
+  },
+  snapshotUnavailable: {
+    code: "CODE_WORKSPACE_SNAPSHOT_UNAVAILABLE",
+    safeMessage: "The review snapshot is no longer available.",
+  },
+  workspaceUnavailable: {
+    code: "CODE_WORKSPACE_UNAVAILABLE",
+    safeMessage: "The Code workspace could not be prepared.",
+  },
+} as const satisfies Record<
+  CodeWorkspaceFailureReason,
+  { readonly code: CoreApplicationFailure["code"]; readonly safeMessage: string }
+>
+
+/** Converts an operation failure into bounded method-scoped RPC diagnostics. */
+export const makeCoreApplicationOperationFailure = <Method extends CoreMethodType>(
+  method: Method,
+  request: HostRequestContext,
+  error: CoreOperationFailure<Method>,
+): CoreApplicationFailure<Method> => {
+  if (Schema.is(CodeWorkspaceError)(error)) {
+    const details = codeWorkspaceFailureDetails[error.reason]
+    return {
+      _tag: "CoreApplicationFailure",
+      applicationInstanceId: request.applicationInstanceId,
+      processEpoch: request.processEpoch,
+      requestId: request.requestId,
+      method,
+      code: CoreApplicationFailureCode.make(details.code),
+      retryClass: "userAction",
+      safeMessage: details.safeMessage,
+    }
+  }
+  return {
+    _tag: "CoreApplicationFailure",
+    applicationInstanceId: request.applicationInstanceId,
+    processEpoch: request.processEpoch,
+    requestId: request.requestId,
+    method,
+    code: CoreApplicationFailureCode.make("APPLICATION_OPERATION_FAILED"),
+    retryClass: "userAction",
+    safeMessage: "DiffDash Core could not complete this application operation.",
+  }
+}
 
 /** Native per-method handlers backed by the installed Core operation authority. */
 export const coreApplicationRpcHandlersLayer = CoreApplicationRpcs.toLayer(
@@ -150,19 +223,12 @@ export const coreApplicationRpcHandlersLayer = CoreApplicationRpcs.toLayer(
         request,
         runtime.operations.pipe(
           Effect.flatMap((operations) => invoke(operations.methods)),
-          Effect.mapError(() => ({
-            _tag: "CoreApplicationFailure" as const,
-            applicationInstanceId: request.applicationInstanceId,
-            processEpoch: request.processEpoch,
-            requestId: request.requestId,
-            method,
-            code: CoreApplicationFailureCode.make("APPLICATION_OPERATION_FAILED"),
-            retryClass:
-              Option.isSome(methodPolicy) && methodPolicy.value.idempotency === "nonIdempotent"
-                ? ("notRetryable" as const)
-                : ("userAction" as const),
-            safeMessage: "DiffDash Core could not complete this application operation.",
-          })),
+          Effect.mapError((error) => {
+            const failure = makeCoreApplicationOperationFailure(method, request, error)
+            return Option.isSome(methodPolicy) && methodPolicy.value.idempotency === "nonIdempotent"
+              ? { ...failure, retryClass: "notRetryable" as const }
+              : failure
+          }),
         ),
       )
     }
@@ -321,6 +387,22 @@ export const coreApplicationRpcHandlersLayer = CoreApplicationRpcs.toLayer(
       "CodeWorkspace.readFile": (request: ApplicationRpcRequest<"CodeWorkspace.readFile">) =>
         handle("CodeWorkspace.readFile", request, (methods) =>
           methods["CodeWorkspace.readFile"](request, request),
+        ),
+      "CodeWorkspace.definitions": (request: ApplicationRpcRequest<"CodeWorkspace.definitions">) =>
+        handle("CodeWorkspace.definitions", request, (methods) =>
+          methods["CodeWorkspace.definitions"](request, request),
+        ),
+      "CodeWorkspace.references": (request: ApplicationRpcRequest<"CodeWorkspace.references">) =>
+        handle("CodeWorkspace.references", request, (methods) =>
+          methods["CodeWorkspace.references"](request, request),
+        ),
+      "CodeWorkspace.changes": (request: ApplicationRpcRequest<"CodeWorkspace.changes">) =>
+        handle("CodeWorkspace.changes", request, (methods) =>
+          methods["CodeWorkspace.changes"](request, request),
+        ),
+      "CodeWorkspace.lineChanges": (request: ApplicationRpcRequest<"CodeWorkspace.lineChanges">) =>
+        handle("CodeWorkspace.lineChanges", request, (methods) =>
+          methods["CodeWorkspace.lineChanges"](request, request),
         ),
       "Repositories.list": (request: ApplicationRpcRequest<"Repositories.list">) =>
         handle("Repositories.list", request, (methods) =>

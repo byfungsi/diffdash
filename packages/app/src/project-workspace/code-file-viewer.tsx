@@ -1,10 +1,18 @@
 import type { CodeThemePreferences } from "@diffdash/domain/ai-settings"
+import type { CodeLineChangeRange } from "@diffdash/domain/code-line-change"
+import {
+  LanguagePosition,
+  type LanguageRange,
+  type RepositoryLanguageLocationLink,
+  type RepositoryLanguageLocationResult,
+} from "@diffdash/domain/language"
 import type { RepositoryRelativePath } from "@diffdash/domain/repository-path"
 import { CommentDestination, CommentSubmission, CommentSubject } from "@diffdash/domain/comment"
 import type { GitCommitSha } from "@diffdash/domain/repository-comparison"
+import type { ReviewRevision } from "@diffdash/domain/review-identity"
 import type { ReviewProjectId } from "@diffdash/domain/review-identity"
 import { MarkdownBody } from "@diffdash/domain/review-thread"
-import { Option } from "effect"
+import { Effect, Option } from "effect"
 import { ChevronDown, ChevronUp, Search, X } from "lucide-react"
 import { type KeyboardEvent, useEffect, useEffectEvent, useMemo, useRef, useState } from "react"
 
@@ -12,20 +20,39 @@ import {
   CodeView,
   type CodeViewFileItem,
   type CodeViewHandle,
-  type CodeViewReactOptions,
   createDiffsWorker,
   type LineAnnotation,
+  type PierreFile,
+  type PierreFileDiff,
   useStableCallback,
   WorkerPoolContextProvider,
   type WorkerPoolOptions,
   useWorkerPool,
 } from "@/review/pierre"
-import { isTextNode } from "@/shared/dom"
+import { isHTMLElement } from "@/shared/dom"
 import { Button } from "@/shared/ui/button"
 import { Input } from "@/shared/ui/input"
 import type { ColorScheme } from "@/settings/theme"
-import { useCommentSubmission } from "@/comments/comment-submission"
+import { useCommentSubmission } from "@/comments/comment-submission-context"
 import { ReviewThreadComposer } from "@/threads/review-threads"
+import { useLineChangeCapability } from "@/source-surface/line-change-capability"
+import {
+  type CodeSearchHighlightMatch,
+  useCodeSearchHighlightCapability,
+} from "@/source-surface/code-search-highlight-capability"
+import {
+  isLanguageNavigationInteraction,
+  useLanguageNavigationCapability,
+} from "@/source-surface/language-navigation-capability"
+import {
+  SourceSurfaceContributionId,
+  type SourceSurfaceInteractionRoute,
+  useSourceSurfaceHost,
+  useSourceSurfaceRuntime,
+} from "@/source-surface/source-surface-runtime"
+import { useSourceSurfaceSelection } from "@/source-surface/source-surface-selection"
+
+import { CodeDefinitionPeek } from "./code-definition-peek"
 
 const CODE_VIEW_WORKER_POOL_OPTIONS = {
   poolSize: 1,
@@ -33,38 +60,80 @@ const CODE_VIEW_WORKER_POOL_OPTIONS = {
   workerFactory: createDiffsWorker,
 } satisfies WorkerPoolOptions
 
-const CODE_SEARCH_MATCH_HIGHLIGHT = "diffdash-code-search-match"
-const CODE_SEARCH_ACTIVE_HIGHLIGHT = "diffdash-code-search-active"
-
-type CodeSearchMatch = {
-  readonly end: number
-  readonly lineNumber: number
-  readonly start: number
-}
+const CODE_COMMENTS_CAPABILITY_ID = SourceSurfaceContributionId.make(
+  "diffdash.builtin.code-comments",
+)
 
 type CodeCommentAnnotation = {
   readonly lineNumber: number
 }
+
+type CodeSurfaceInstance = PierreFile<CodeCommentAnnotation> | PierreFileDiff<CodeCommentAnnotation>
 
 /** Read-only Pierre CodeView for one file from the active checkout. */
 export const CodeFileViewer = ({
   codeThemes,
   colorScheme,
   contents,
+  gitRevision = Option.none(),
   path,
   projectId,
-  revision,
+  onLoadDefinitionSource,
+  onNavigateToDefinition,
+  onRequestDefinitions,
+  onRequestReferences,
+  definitionNavigation = Option.none(),
+  lineChanges = EMPTY_LINE_CHANGES,
+  onDefinitionNavigationHandled,
 }: {
   readonly codeThemes: CodeThemePreferences
   readonly colorScheme: ColorScheme
   readonly contents: string
+  readonly gitRevision?: Option.Option<GitCommitSha>
   readonly path: RepositoryRelativePath
   readonly projectId: ReviewProjectId
-  readonly revision: GitCommitSha
+  readonly revision: ReviewRevision
+  readonly onLoadDefinitionSource?: (
+    path: RepositoryRelativePath,
+    signal: AbortSignal,
+  ) => Promise<Option.Option<string>>
+  readonly onNavigateToDefinition?: (location: RepositoryLanguageLocationLink) => void
+  readonly onRequestDefinitions?: (
+    position: LanguagePosition,
+    signal: AbortSignal,
+  ) => Promise<RepositoryLanguageLocationResult>
+  readonly onRequestReferences?: (
+    position: LanguagePosition,
+    signal: AbortSignal,
+  ) => Promise<RepositoryLanguageLocationResult>
+  readonly definitionNavigation?: Option.Option<{
+    readonly id: number
+    readonly range: LanguageRange
+  }>
+  readonly lineChanges?: readonly CodeLineChangeRange[]
+  readonly onDefinitionNavigationHandled?: (id: number) => void
 }) => {
   const commentSubmission = useCommentSubmission()
   const codeViewRef = useRef<CodeViewHandle<CodeCommentAnnotation>>(null)
   const scrollRootRef = useRef<HTMLDivElement>(null)
+  const surfaceRuntime = useSourceSurfaceRuntime<CodeSurfaceInstance>()
+  const publishSurfaceRender = useMemo(
+    () => surfaceRuntime.createRenderPublisher(path),
+    [path, surfaceRuntime],
+  )
+  useSourceSurfaceHost(surfaceRuntime, scrollRootRef)
+  useLineChangeCapability(surfaceRuntime, lineChanges)
+  const surfaceSelection = useSourceSurfaceSelection(surfaceRuntime, codeViewRef)
+  const languageNavigation = useLanguageNavigationCapability({
+    navigate: Option.fromNullishOr(onNavigateToDefinition),
+    providers: {
+      definitions: Option.fromNullishOr(onRequestDefinitions),
+      references: Option.fromNullishOr(onRequestReferences),
+    },
+    rootRef: scrollRootRef,
+    runtime: surfaceRuntime,
+    surfaceId: path,
+  })
   const searchInputRef = useRef<HTMLInputElement>(null)
   const [searchOpen, setSearchOpen] = useState(false)
   const [searchQuery, setSearchQuery] = useState("")
@@ -110,7 +179,8 @@ export const CodeFileViewer = ({
     activeMatchIndex,
     Math.max(0, searchMatches.length - 1),
   )
-  const activeMatch = searchMatches[normalizedActiveMatchIndex]
+  const activeMatch = Option.fromNullishOr(searchMatches[normalizedActiveMatchIndex])
+  useCodeSearchHighlightCapability(surfaceRuntime, searchMatches, activeMatch)
   const focusSearch = () => {
     window.requestAnimationFrame(() => {
       searchInputRef.current?.focus()
@@ -123,7 +193,7 @@ export const CodeFileViewer = ({
   }
   const closeSearch = () => {
     setSearchOpen(false)
-    codeViewRef.current?.clearSelectedLines()
+    surfaceSelection.release("diffdash.builtin.code-search")
   }
   const moveSearch = (direction: -1 | 1) => {
     if (searchMatches.length === 0) return
@@ -136,19 +206,37 @@ export const CodeFileViewer = ({
   const moveSearchFromEffect = useEffectEvent(moveSearch)
   const toggleLine = (lineNumber: number) => {
     setDraftLineNumber((current) =>
-      Option.contains(current, lineNumber) ? Option.none() : Option.some(lineNumber),
+      Option.match(current, {
+        onNone: () => Option.some(lineNumber),
+        onSome: (selectedLine) => {
+          if (selectedLine === lineNumber) return Option.none()
+          return Option.some(lineNumber)
+        },
+      }),
     )
   }
   const toggleLineFromEffect = useEffectEvent(toggleLine)
-  const onLineClick = useStableCallback<
-    NonNullable<CodeViewReactOptions<CodeCommentAnnotation>["onLineClick"]>
-  >(({ lineNumber }) => {
-    toggleLine(lineNumber)
-  })
+  const handleCommentLineClick = useStableCallback<SourceSurfaceInteractionRoute["handle"]>(
+    ({ event, lineNumber }) => {
+      if (isLanguageNavigationInteraction(event) || isInteractiveSurfaceControl(event)) return false
+      toggleLine(lineNumber)
+      return true
+    },
+  )
+
+  useEffect(() => {
+    return Effect.runSync(
+      surfaceRuntime.registerInteractionRoute({
+        id: CODE_COMMENTS_CAPABILITY_ID,
+        phase: "lineAction",
+        handle: handleCommentLineClick,
+      }),
+    )
+  }, [handleCommentLineClick, surfaceRuntime])
 
   useEffect(() => {
     const scrollRoot = scrollRootRef.current
-    if (scrollRoot === null) return
+    if (scrollRoot === null) return undefined
     scrollRoot.dataset.codeFileScroll = ""
     scrollRoot.tabIndex = 0
     scrollRoot.setAttribute("role", "region")
@@ -169,14 +257,14 @@ export const CodeFileViewer = ({
         return
       }
       event.preventDefault()
-      const lineNumber = Math.min(
-        lineCount,
-        Math.max(1, currentLine + (event.key === "ArrowDown" ? 1 : -1)),
+      let direction = -1
+      if (event.key === "ArrowDown") direction = 1
+      const lineNumber = Math.min(lineCount, Math.max(1, currentLine + direction))
+      surfaceSelection.publish(
+        "diffdash.builtin.keyboard-navigation",
+        { id: path, range: { start: lineNumber, end: lineNumber } },
+        "passiveSelection",
       )
-      codeViewRef.current?.setSelectedLines({
-        id: path,
-        range: { start: lineNumber, end: lineNumber },
-      })
       codeViewRef.current?.scrollTo({
         type: "line",
         id: path,
@@ -186,8 +274,11 @@ export const CodeFileViewer = ({
       })
     }
     scrollRoot.addEventListener("keydown", onKeyDown)
-    return () => scrollRoot.removeEventListener("keydown", onKeyDown)
-  }, [contents, path])
+    return () => {
+      scrollRoot.removeEventListener("keydown", onKeyDown)
+      surfaceSelection.release("diffdash.builtin.keyboard-navigation")
+    }
+  }, [contents, path, surfaceSelection])
 
   useEffect(() => {
     const handleSearchShortcut = (event: globalThis.KeyboardEvent) => {
@@ -201,7 +292,8 @@ export const CodeFileViewer = ({
       if (searchOpen && (event.metaKey || event.ctrlKey) && !event.altKey && key === "g") {
         event.preventDefault()
         event.stopPropagation()
-        moveSearchFromEffect(event.shiftKey ? -1 : 1)
+        if (event.shiftKey) moveSearchFromEffect(-1)
+        else moveSearchFromEffect(1)
         return
       }
       if (searchOpen && key === "escape") {
@@ -215,85 +307,55 @@ export const CodeFileViewer = ({
   }, [searchOpen])
 
   useEffect(() => {
-    if (activeMatch === undefined) {
-      codeViewRef.current?.clearSelectedLines()
-      return
-    }
-    codeViewRef.current?.setSelectedLines({
-      id: path,
-      range: { start: activeMatch.lineNumber, end: activeMatch.lineNumber },
+    return Option.match(activeMatch, {
+      onNone: () => {
+        surfaceSelection.release("diffdash.builtin.code-search")
+        return undefined
+      },
+      onSome: (match) => {
+        surfaceSelection.publish(
+          "diffdash.builtin.code-search",
+          { id: path, range: { start: match.lineNumber, end: match.lineNumber } },
+          "searchResult",
+        )
+        codeViewRef.current?.scrollTo({
+          type: "line",
+          id: path,
+          lineNumber: match.lineNumber,
+          align: "center",
+          behavior: "instant",
+        })
+        return () => surfaceSelection.release("diffdash.builtin.code-search")
+      },
     })
-    codeViewRef.current?.scrollTo({
-      type: "line",
-      id: path,
-      lineNumber: activeMatch.lineNumber,
-      align: "center",
-      behavior: "instant",
-    })
-  }, [activeMatch, path])
+  }, [activeMatch, path, surfaceSelection])
 
   useEffect(() => {
-    const root = scrollRootRef.current
-    if (root === null || searchMatches.length === 0 || !supportsCustomHighlights()) return undefined
-    let frame: number | null = null
-    let observer: MutationObserver | null = null
-    let matchHighlight: Highlight | null = null
-    let activeHighlight: Highlight | null = null
-    let retries = 8
-
-    const clearHighlights = () => {
-      if (CSS.highlights.get(CODE_SEARCH_MATCH_HIGHLIGHT) === matchHighlight) {
-        CSS.highlights.delete(CODE_SEARCH_MATCH_HIGHLIGHT)
-      }
-      if (CSS.highlights.get(CODE_SEARCH_ACTIVE_HIGHLIGHT) === activeHighlight) {
-        CSS.highlights.delete(CODE_SEARCH_ACTIVE_HIGHLIGHT)
-      }
-    }
-    const rebuild = () => {
-      frame = null
-      const host = root.querySelector("diffs-container")
-      const shadowRoot = host?.shadowRoot
-      if (shadowRoot === null || shadowRoot === undefined) {
-        if (retries > 0) {
-          retries -= 1
-          frame = window.requestAnimationFrame(rebuild)
-        }
-        return
-      }
-      if (observer === null) {
-        observer = new MutationObserver(rebuild)
-        observer.observe(shadowRoot, { characterData: true, childList: true, subtree: true })
-      }
-      clearHighlights()
-      const matches: StaticRange[] = []
-      const active: StaticRange[] = []
-      searchMatches.forEach((match, index) => {
-        const row = shadowRoot.querySelector<HTMLElement>(
-          `[data-content] > [data-line][data-line-index="${match.lineNumber - 1}"]`,
+    return Option.match(definitionNavigation, {
+      onNone: () => {
+        surfaceSelection.release("diffdash.builtin.definition-navigation")
+        return undefined
+      },
+      onSome: (navigation) => {
+        const start = navigation.range.start.line + 1
+        const end = navigation.range.end.line + 1
+        surfaceSelection.publish(
+          "diffdash.builtin.definition-navigation",
+          { id: path, range: { start, end } },
+          "navigationTarget",
         )
-        if (row === null) return
-        const range = createStaticTextRange(row, match.start, match.end)
-        if (range === null) return
-        if (index === normalizedActiveMatchIndex) active.push(range)
-        else matches.push(range)
-      })
-      matchHighlight = matches.length === 0 ? null : new Highlight(...matches)
-      activeHighlight = active.length === 0 ? null : new Highlight(...active)
-      if (matchHighlight !== null) {
-        CSS.highlights.set(CODE_SEARCH_MATCH_HIGHLIGHT, matchHighlight)
-      }
-      if (activeHighlight !== null) {
-        activeHighlight.priority = 1
-        CSS.highlights.set(CODE_SEARCH_ACTIVE_HIGHLIGHT, activeHighlight)
-      }
-    }
-    frame = window.requestAnimationFrame(rebuild)
-    return () => {
-      if (frame !== null) window.cancelAnimationFrame(frame)
-      observer?.disconnect()
-      clearHighlights()
-    }
-  }, [normalizedActiveMatchIndex, searchMatches])
+        codeViewRef.current?.scrollTo({
+          type: "line",
+          id: path,
+          lineNumber: start,
+          align: "center",
+          behavior: "instant",
+        })
+        onDefinitionNavigationHandled?.(navigation.id)
+        return () => surfaceSelection.release("diffdash.builtin.definition-navigation")
+      },
+    })
+  }, [definitionNavigation, onDefinitionNavigationHandled, path, surfaceSelection])
 
   return (
     <WorkerPoolContextProvider
@@ -302,11 +364,12 @@ export const CodeFileViewer = ({
         maxLineDiffLength: 1_000,
         theme: codeThemes,
         tokenizeMaxLineLength: 2_000,
+        useTokenTransformer: true,
       }}
       poolOptions={CODE_VIEW_WORKER_POOL_OPTIONS}
     >
       <CodeViewThemeSync codeThemes={codeThemes} />
-      <div className="flex h-full min-h-0 flex-col bg-diff-canvas">
+      <div className="relative flex h-full min-h-0 flex-col bg-diff-canvas">
         {searchOpen ? (
           <CodeSearchToolbar
             activeIndex={normalizedActiveMatchIndex}
@@ -329,7 +392,8 @@ export const CodeFileViewer = ({
           items={items}
           options={{
             disableFileHeader: false,
-            onLineClick,
+            onTokenEnter: languageNavigation.onTokenEnter,
+            onTokenLeave: languageNavigation.onTokenLeave,
             lineHoverHighlight: "line",
             overflow: "scroll",
             stickyHeaders: true,
@@ -358,7 +422,39 @@ export const CodeFileViewer = ({
               background-color: var(--review-search-active);
               color: var(--review-search-active-foreground);
             }
+            [data-diffdash-definition-link] {
+              color: var(--link) !important;
+              cursor: pointer;
+              text-decoration: underline;
+            }
+            [data-column-number][data-code-line-change="added"] {
+              background-image: linear-gradient(var(--review-success-text), var(--review-success-text));
+              background-position: right top;
+              background-repeat: no-repeat;
+              background-size: 3px 100%;
+            }
+            [data-column-number][data-code-line-change="modified"] {
+              background-image: repeating-linear-gradient(
+                -45deg,
+                var(--review-modified-text) 0 1px,
+                transparent 1px 3px
+              );
+              background-position: right top;
+              background-repeat: no-repeat;
+              background-size: 3px 100%;
+            }
+            [data-column-number][data-code-line-change="deleted"] {
+              background-image: linear-gradient(
+                to bottom right,
+                transparent 48%,
+                var(--review-danger-text) 50%
+              );
+              background-position: right top;
+              background-repeat: no-repeat;
+              background-size: 5px 5px;
+            }
           `,
+            onPostRender: publishSurfaceRender,
           }}
           renderAnnotation={(annotation) => {
             const lineNumber = annotation.metadata.lineNumber
@@ -371,39 +467,82 @@ export const CodeFileViewer = ({
                   </div>
                 </div>
               ),
-              OpenCode: () => (
-                <div className="bg-diff-canvas px-3 py-1.5">
-                  <section className="bg-card rounded-lg border p-3 shadow-xs">
-                    <ReviewThreadComposer
-                      label={`Comment on ${path} line ${String(lineNumber)}`}
-                      onCancel={() => setDraftLineNumber(Option.none())}
-                      onSubmit={async (bodyMarkdown) => {
-                        const lineContent = contents.split("\n")[lineNumber - 1] ?? ""
-                        await commentSubmission.submit(
-                          CommentSubmission.cases.Start.make({
-                            subject: CommentSubject.cases.CodeLine.make({
-                              projectId,
-                              revision,
-                              path,
-                              lineNumber,
-                              lineContent,
-                            }),
-                            body: MarkdownBody.make(bodyMarkdown),
-                          }),
-                        )
-                        setDraftLineNumber(Option.none())
-                      }}
-                    />
-                  </section>
-                </div>
-              ),
+              OpenCode: () =>
+                Option.match(gitRevision, {
+                  onNone: () => (
+                    <div className="bg-diff-canvas px-3 py-1.5">
+                      <div className="bg-card text-muted-foreground rounded-lg border px-3 py-2 text-xs shadow-xs">
+                        OpenCode comments require a committed Git revision.
+                      </div>
+                    </div>
+                  ),
+                  onSome: (commentRevision) => (
+                    <div className="bg-diff-canvas px-3 py-1.5">
+                      <section className="bg-card rounded-lg border p-3 shadow-xs">
+                        <ReviewThreadComposer
+                          label={`Comment on ${path} line ${String(lineNumber)}`}
+                          onCancel={() => setDraftLineNumber(Option.none())}
+                          onSubmit={async (bodyMarkdown) => {
+                            const lineContent = contents.split("\n")[lineNumber - 1] ?? ""
+                            await commentSubmission.submit(
+                              CommentSubmission.cases.Start.make({
+                                subject: CommentSubject.cases.CodeLine.make({
+                                  projectId,
+                                  revision: commentRevision,
+                                  path,
+                                  lineNumber,
+                                  lineContent,
+                                }),
+                                body: MarkdownBody.make(bodyMarkdown),
+                              }),
+                            )
+                            setDraftLineNumber(Option.none())
+                          }}
+                        />
+                      </section>
+                    </div>
+                  ),
+                }),
             })
           }}
         />
+        {Option.match(
+          Option.product(Option.fromNullishOr(onLoadDefinitionSource), languageNavigation.peek),
+          {
+            onNone: () => null,
+            onSome: ([loadSource, peek]) => (
+              <CodeDefinitionPeek
+                key={peek.id}
+                codeThemes={codeThemes}
+                colorScheme={colorScheme}
+                state={peek}
+                onClose={languageNavigation.closePeek}
+                onLoadSource={loadSource}
+                onNavigate={(location) => {
+                  languageNavigation.closePeek()
+                  Option.map(Option.fromNullishOr(onNavigateToDefinition), (navigate) =>
+                    navigate(location),
+                  )
+                }}
+              />
+            ),
+          },
+        )}
       </div>
     </WorkerPoolContextProvider>
   )
 }
+
+const EMPTY_LINE_CHANGES: readonly CodeLineChangeRange[] = []
+
+const isInteractiveSurfaceControl = (event: MouseEvent): boolean =>
+  event
+    .composedPath()
+    .some(
+      (candidate) =>
+        isHTMLElement(candidate) &&
+        candidate.matches("a, button, input, select, textarea, [role=button]"),
+    )
 
 const CodeSearchToolbar = ({
   activeIndex,
@@ -465,10 +604,13 @@ const CodeSearchToolbar = ({
   )
 }
 
-const findCodeSearchMatches = (contents: string, query: string): readonly CodeSearchMatch[] => {
+const findCodeSearchMatches = (
+  contents: string,
+  query: string,
+): readonly CodeSearchHighlightMatch[] => {
   if (query.length === 0) return []
   const needle = query.toLocaleLowerCase()
-  const matches: CodeSearchMatch[] = []
+  const matches: CodeSearchHighlightMatch[] = []
   contents.split("\n").forEach((line, lineIndex) => {
     const haystack = line.toLocaleLowerCase()
     let start = haystack.indexOf(needle)
@@ -479,42 +621,6 @@ const findCodeSearchMatches = (contents: string, query: string): readonly CodeSe
   })
   return matches
 }
-
-const createStaticTextRange = (
-  row: HTMLElement,
-  startOffset: number,
-  endOffset: number,
-): StaticRange | null => {
-  const walker = document.createTreeWalker(row, NodeFilter.SHOW_TEXT)
-  let node = walker.nextNode()
-  let offset = 0
-  let start: { readonly node: Text; readonly offset: number } | null = null
-  while (node !== null) {
-    if (isTextNode(node)) {
-      const nextOffset = offset + node.data.length
-      if (start === null && startOffset <= nextOffset) {
-        start = { node, offset: startOffset - offset }
-      }
-      if (start !== null && endOffset <= nextOffset) {
-        return new StaticRange({
-          startContainer: start.node,
-          startOffset: start.offset,
-          endContainer: node,
-          endOffset: endOffset - offset,
-        })
-      }
-      offset = nextOffset
-    }
-    node = walker.nextNode()
-  }
-  return null
-}
-
-const supportsCustomHighlights = () =>
-  globalThis.CSS !== undefined &&
-  "highlights" in globalThis.CSS &&
-  globalThis.Highlight !== undefined &&
-  globalThis.StaticRange !== undefined
 
 const CodeViewThemeSync = ({ codeThemes }: { readonly codeThemes: CodeThemePreferences }) => {
   const workerPool = useWorkerPool()

@@ -2,68 +2,7 @@ import { Keyboard, X } from "lucide-react"
 import { useEffect, useRef } from "react"
 import { Button } from "@/shared/ui/button"
 import { isHTMLElement } from "@/shared/dom"
-import { keyboardShortcutModifierLabel } from "./keyboard-shortcut-platform"
-
-type ShortcutToken = "mod" | "shift" | "enter" | "escape" | "slash" | "b" | "f" | "g" | "k" | "v"
-
-type ShortcutEntry = {
-  readonly label: string
-  readonly keys: readonly (readonly ShortcutToken[])[]
-}
-
-type ShortcutSection = {
-  readonly label: string
-  readonly shortcuts: readonly ShortcutEntry[]
-}
-
-const SHORTCUT_SECTIONS: readonly ShortcutSection[] = [
-  {
-    label: "General",
-    shortcuts: [
-      { label: "Keyboard shortcuts", keys: [["mod", "slash"]] },
-      { label: "Go anywhere", keys: [["mod", "k"]] },
-    ],
-  },
-  {
-    label: "Review",
-    shortcuts: [
-      { label: "Toggle sidebar", keys: [["mod", "b"]] },
-      { label: "Review actions", keys: [["mod", "shift", "k"]] },
-      { label: "Toggle viewed file", keys: [["v"]] },
-    ],
-  },
-  {
-    label: "Review Search",
-    shortcuts: [
-      { label: "Search review", keys: [["mod", "f"]] },
-      { label: "Next match", keys: [["mod", "g"], ["enter"]] },
-      {
-        label: "Previous match",
-        keys: [
-          ["mod", "shift", "g"],
-          ["shift", "enter"],
-        ],
-      },
-      { label: "Close search", keys: [["escape"]] },
-    ],
-  },
-  {
-    label: "Comments",
-    shortcuts: [{ label: "Submit comment", keys: [["mod", "enter"]] }],
-  },
-]
-
-const TOKEN_LABELS: Readonly<Record<Exclude<ShortcutToken, "mod">, string>> = {
-  b: "B",
-  enter: "Enter",
-  escape: "Esc",
-  f: "F",
-  g: "G",
-  k: "K",
-  shift: "Shift",
-  slash: "/",
-  v: "V",
-}
+import { KEYBOARD_SHORTCUT_SECTIONS, keyboardShortcutTokenLabel } from "./keyboard-shortcuts"
 
 /** Displays the application-wide catalog of supported keyboard shortcuts. */
 export function KeyboardShortcutReference({
@@ -76,7 +15,6 @@ export function KeyboardShortcutReference({
   const closeButtonRef = useRef<HTMLButtonElement>(null)
   const previousFocusRef = useRef<HTMLElement | null>(null)
   const wasOpenRef = useRef(false)
-  const modifierLabel = keyboardShortcutModifierLabel()
 
   useEffect(() => {
     if (open) {
@@ -142,7 +80,7 @@ export function KeyboardShortcutReference({
           </Button>
         </header>
         <div className="grid min-h-0 overflow-y-auto sm:grid-cols-2">
-          {SHORTCUT_SECTIONS.map((section) => (
+          {KEYBOARD_SHORTCUT_SECTIONS.map((section) => (
             <section
               key={section.label}
               className="border-b p-4 last:border-b-0 sm:p-6 sm:odd:border-r"
@@ -165,7 +103,7 @@ export function KeyboardShortcutReference({
                               key={key}
                               className="bg-muted text-muted-foreground min-w-6 rounded-md border px-1.5 py-1 text-center font-mono text-caption font-medium shadow-xs"
                             >
-                              {key === "mod" ? modifierLabel : TOKEN_LABELS[key]}
+                              {keyboardShortcutTokenLabel(key)}
                             </kbd>
                           ))}
                         </span>

@@ -39,6 +39,7 @@ test("builds deterministic runtime-neutral production and E2E Core artifacts", a
   assert.deepEqual(await readdir(production.outputDirectory), [
     "core-bun.mjs",
     "core.mjs",
+    "language",
     "manifest.json",
     "review-worker-bun.mjs",
     "review-worker-node.mjs",
@@ -50,7 +51,7 @@ test("builds deterministic runtime-neutral production and E2E Core artifacts", a
   )
   assert.equal(
     manifest.buildId,
-    `core-${desktopVersion}-production-${process.platform}-${process.arch}-${manifest.entrypointSha256.slice(0, 40)}`,
+    `core-${desktopVersion}-production-${process.platform}-${process.arch}-${manifest.entrypointSha256.slice(0, 20)}-${manifest.language.typescript.treeSha256.slice(0, 20)}`,
   )
   assert.deepEqual(manifest.desktop, {
     version: desktopVersion,
@@ -68,6 +69,27 @@ test("builds deterministic runtime-neutral production and E2E Core artifacts", a
     },
   })
   assert.match(manifest.reviewWorker.buildId, /^review-worker-v1-[a-f0-9]{20}-[a-f0-9]{20}$/u)
+  assert.deepEqual(manifest.language.typescript.root, "language/typescript")
+  assert.match(manifest.language.typescript.treeSha256, /^[a-f0-9]{64}$/u)
+  assert.match(
+    productionEntrypoint.toString("utf8"),
+    new RegExp(manifest.language.typescript.treeSha256, "u"),
+  )
+  const languageDirectory = resolve(production.outputDirectory, manifest.language.typescript.root)
+  assert.deepEqual(await readdir(languageDirectory), [
+    "lib",
+    "package.json",
+    "tree-sitter-javascript.wasm",
+    "tree-sitter-tsx.wasm",
+    "tree-sitter-typescript.wasm",
+    "tree-sitter.wasm",
+    "typescript",
+  ])
+  const { stdout: languageServerVersion } = await execFilePromise(process.execPath, [
+    resolve(languageDirectory, "lib/cli.mjs"),
+    "--version",
+  ])
+  assert.match(languageServerVersion, /5\.3\.0/u)
   await Promise.all(
     ["node", "bun"].map(async (host) => {
       const worker = await readFile(
@@ -82,7 +104,7 @@ test("builds deterministic runtime-neutral production and E2E Core artifacts", a
   )
   assert.equal(
     e2eManifest.buildId,
-    `core-${desktopVersion}-e2e-${process.platform}-${process.arch}-${e2eManifest.entrypointSha256.slice(0, 40)}`,
+    `core-${desktopVersion}-e2e-${process.platform}-${process.arch}-${e2eManifest.entrypointSha256.slice(0, 20)}-${e2eManifest.language.typescript.treeSha256.slice(0, 20)}`,
   )
   assert.match(
     manifestText,

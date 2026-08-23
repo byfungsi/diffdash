@@ -9,6 +9,7 @@ import { findRenderedDiffLine } from "./review-rendered-line"
 import type { ReviewThreadAnnotation } from "./thread-annotations"
 import { isTextNode } from "@/shared/dom"
 import type { ReviewSnapshotSearchMatch } from "@diffdash/protocol/review-snapshot"
+import { Effect, Ref } from "effect"
 
 /** CSS Custom Highlight registry key for non-active review search matches. */
 export const REVIEW_SEARCH_MATCH_HIGHLIGHT = "diffdash-review-search-match"
@@ -17,7 +18,19 @@ export const REVIEW_SEARCH_MATCH_HIGHLIGHT = "diffdash-review-search-match"
 export const REVIEW_SEARCH_ACTIVE_HIGHLIGHT = "diffdash-review-search-active"
 
 const ACTIVE_REBUILD_RETRY_FRAMES = 8
-let highlightOwner: object | null = null
+
+interface ReviewSearchOwnedHighlights {
+  readonly active: readonly StaticRange[]
+  readonly matches: readonly StaticRange[]
+}
+
+interface ReviewSearchHighlightOwner {
+  readonly owner: string
+  readonly read: () => ReviewSearchOwnedHighlights
+}
+
+const reviewSearchHighlightOwners = Ref.makeUnsafe<readonly ReviewSearchHighlightOwner[]>([])
+const reviewSearchHighlightOwnerSequence = Ref.makeUnsafe(0)
 
 /** A virtualized line target relative to its Pierre host. */
 type ReviewSearchScrollTarget = {
@@ -38,17 +51,18 @@ type PierrePostRenderInstance = Parameters<
 
 /** Bridges parsed review occurrences to Pierre's virtualized shadow-DOM lines. */
 export class ReviewSearchHighlightManager {
-  private readonly highlightOwner = {}
+  private readonly highlightOwner = `review-search-highlight-${String(
+    Effect.runSync(
+      Ref.updateAndGet(reviewSearchHighlightOwnerSequence, (sequence) => sequence + 1),
+    ),
+  )}`
   private activeElement: HTMLElement | null = null
   private activeRange: StaticRange | null = null
-  private activeHighlight: Highlight | null = null
   private activeOccurrenceId: string | null = null
   private readonly registrations = new Map<string, SearchDiffRegistration>()
   private occurrencesByFile = new Map<string, readonly ReviewSnapshotSearchMatch[]>()
   private rebuildFrame: number | null = null
   private activeRebuildRetries = 0
-  private highlightsRegistered = false
-  private matchHighlight: Highlight | null = null
 
   /** Updates the ranges painted in every currently mounted diff. */
   setSearch(occurrences: readonly ReviewSnapshotSearchMatch[], activeOccurrenceId: string | null) {
@@ -71,12 +85,10 @@ export class ReviewSearchHighlightManager {
     this.activeRange = null
     this.activeRebuildRetries = 0
     if (occurrencesByFile.size === 0) {
-      if (highlightOwner === this.highlightOwner) highlightOwner = null
       this.cancelScheduledRebuild()
       this.clearHighlights()
       return
     }
-    highlightOwner = this.highlightOwner
     this.scheduleRebuild()
   }
 
@@ -118,13 +130,9 @@ export class ReviewSearchHighlightManager {
     })
     // Pierre can publish token DOM after its range render callback has completed.
     const observer = new MutationObserver(() => {
-      if (highlightOwner !== this.highlightOwner) return
       if (
         this.activeOccurrenceId !== null &&
-        (this.activeRange === null ||
-          !this.activeRange.startContainer.isConnected ||
-          this.activeHighlight === null ||
-          CSS.highlights.get(REVIEW_SEARCH_ACTIVE_HIGHLIGHT) !== this.activeHighlight)
+        (this.activeRange === null || !this.activeRange.startContainer.isConnected)
       ) {
         this.rebuildHighlights()
       }
@@ -179,7 +187,6 @@ export class ReviewSearchHighlightManager {
   /** Removes all registered hosts and document-level highlight ranges. */
   dispose() {
     this.cancelScheduledRebuild()
-    if (highlightOwner === this.highlightOwner) highlightOwner = null
     this.registrations.forEach(({ observer }) => observer.disconnect())
     this.registrations.clear()
     this.occurrencesByFile.clear()
@@ -214,16 +221,12 @@ export class ReviewSearchHighlightManager {
   }
 
   private clearHighlights() {
-    if (!this.highlightsRegistered) return
-    if (CSS.highlights.get(REVIEW_SEARCH_MATCH_HIGHLIGHT) === this.matchHighlight) {
-      CSS.highlights.delete(REVIEW_SEARCH_MATCH_HIGHLIGHT)
-    }
-    if (CSS.highlights.get(REVIEW_SEARCH_ACTIVE_HIGHLIGHT) === this.activeHighlight) {
-      CSS.highlights.delete(REVIEW_SEARCH_ACTIVE_HIGHLIGHT)
-    }
-    this.matchHighlight = null
-    this.activeHighlight = null
-    this.highlightsRegistered = false
+    Effect.runSync(
+      Ref.update(reviewSearchHighlightOwners, (owners) =>
+        owners.filter((entry) => entry.owner !== this.highlightOwner),
+      ),
+    )
+    reconcileReviewSearchHighlights()
   }
 
   private observeRegistration(registration: SearchDiffRegistration) {
@@ -237,11 +240,7 @@ export class ReviewSearchHighlightManager {
   }
 
   private rebuildHighlights() {
-    if (
-      highlightOwner !== this.highlightOwner ||
-      !supportsCustomHighlights() ||
-      this.occurrencesByFile.size === 0
-    ) {
+    if (!supportsCustomHighlights() || this.occurrencesByFile.size === 0) {
       return
     }
 
@@ -284,30 +283,37 @@ export class ReviewSearchHighlightManager {
       })
     })
 
-    if (CSS.highlights.get(REVIEW_SEARCH_MATCH_HIGHLIGHT) === this.matchHighlight) {
-      CSS.highlights.delete(REVIEW_SEARCH_MATCH_HIGHLIGHT)
+    const ownedHighlights: ReviewSearchOwnedHighlights = {
+      active: activeRanges,
+      matches: matchRanges,
     }
-    this.matchHighlight = null
-    if (matchRanges.length > 0) {
-      this.matchHighlight = new Highlight(...matchRanges)
-      CSS.highlights.set(REVIEW_SEARCH_MATCH_HIGHLIGHT, this.matchHighlight)
-    }
-    if (activeRanges.length > 0) {
-      if (CSS.highlights.get(REVIEW_SEARCH_ACTIVE_HIGHLIGHT) === this.activeHighlight) {
-        CSS.highlights.delete(REVIEW_SEARCH_ACTIVE_HIGHLIGHT)
-      }
-      const activeHighlight = new Highlight(...activeRanges)
-      activeHighlight.priority = 1
-      this.activeHighlight = activeHighlight
-      CSS.highlights.set(REVIEW_SEARCH_ACTIVE_HIGHLIGHT, activeHighlight)
-    } else if (
-      this.activeOccurrenceId === null &&
-      CSS.highlights.get(REVIEW_SEARCH_ACTIVE_HIGHLIGHT) === this.activeHighlight
-    ) {
-      CSS.highlights.delete(REVIEW_SEARCH_ACTIVE_HIGHLIGHT)
-      this.activeHighlight = null
-    }
-    this.highlightsRegistered = this.matchHighlight !== null || this.activeHighlight !== null
+    Effect.runSync(
+      Ref.update(reviewSearchHighlightOwners, (owners) => [
+        ...owners.filter((entry) => entry.owner !== this.highlightOwner),
+        { owner: this.highlightOwner, read: () => ownedHighlights },
+      ]),
+    )
+    reconcileReviewSearchHighlights()
+  }
+}
+
+const reconcileReviewSearchHighlights = (): void => {
+  if (!supportsCustomHighlights()) return
+  const matchRanges: StaticRange[] = []
+  const activeRanges: StaticRange[] = []
+  for (const { read } of Ref.getUnsafe(reviewSearchHighlightOwners)) {
+    const { active, matches } = read()
+    matchRanges.push(...matches)
+    activeRanges.push(...active)
+  }
+  if (matchRanges.length === 0) CSS.highlights.delete(REVIEW_SEARCH_MATCH_HIGHLIGHT)
+  else CSS.highlights.set(REVIEW_SEARCH_MATCH_HIGHLIGHT, new Highlight(...matchRanges))
+  if (activeRanges.length === 0) {
+    CSS.highlights.delete(REVIEW_SEARCH_ACTIVE_HIGHLIGHT)
+  } else {
+    const activeHighlight = new Highlight(...activeRanges)
+    activeHighlight.priority = 1
+    CSS.highlights.set(REVIEW_SEARCH_ACTIVE_HIGHLIGHT, activeHighlight)
   }
 }
 

@@ -61,7 +61,7 @@ export const ReviewDescriptor = Schema.Union([
   HostedReviewDescriptor,
   LocalReviewDescriptor,
   RepositoryComparisonReviewDescriptor,
-])
+]).pipe(Schema.toTaggedUnion("_tag"))
 
 /** Bounded metadata and target facts persisted with an immutable review snapshot. */
 export type ReviewDescriptor = typeof ReviewDescriptor.Type

@@ -8,6 +8,8 @@ import { makeCodexProvider } from "@diffdash/agent-provider-codex"
 import { makeOpenCodeProvider } from "@diffdash/agent-provider-opencode"
 import type { GitProviderRegistration } from "@diffdash/git-provider"
 import { createGitHubProvider } from "@diffdash/git-provider-github"
+import type { LanguageAdapterRegistration } from "@diffdash/language-provider"
+import { typescriptLanguageAdapterRegistration } from "@diffdash/language-provider-typescript"
 import type { ProcessRunner } from "@diffdash/process"
 import type { TempResourceOperations } from "@diffdash/process/temp-resource"
 import type { CoreAbsolutePath, CoreConfiguration } from "./core-configuration"
@@ -35,6 +37,7 @@ export interface CoreProviderComposition {
     processes: ProcessRunner,
     configuration: CoreConfiguration,
   ) => readonly GitProviderRegistration[]
+  readonly createLanguageAdapters: () => readonly LanguageAdapterRegistration[]
 }
 
 /** Creates the production agent provider set. */
@@ -59,8 +62,13 @@ export const createProductionGitProviderComposition = (
   processes: ProcessRunner,
 ): readonly GitProviderRegistration[] => [createGitHubProvider({}, processes)]
 
+/** Creates bundled language adapters without starting their server processes. */
+export const createProductionLanguageAdapterComposition =
+  (): readonly LanguageAdapterRegistration[] => [typescriptLanguageAdapterRegistration]
+
 /** Production provider composition containing only real built-in providers. */
 export const productionProviderComposition: CoreProviderComposition = {
   createAgentProviders: createProductionAgentProviderComposition,
   createGitProviders: createProductionGitProviderComposition,
+  createLanguageAdapters: createProductionLanguageAdapterComposition,
 }

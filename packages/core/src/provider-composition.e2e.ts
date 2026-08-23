@@ -15,6 +15,7 @@ import {
   type CoreProviderComposition,
   createProductionAgentProviderComposition,
   createProductionGitProviderComposition,
+  createProductionLanguageAdapterComposition,
 } from "./provider-composition"
 
 /** Creates real and fixture agent providers for the E2E runtime. */
@@ -80,4 +81,5 @@ export const e2eProviderComposition: CoreProviderComposition = {
     }),
   createGitProviders: (processes, configuration) =>
     createGitProviderComposition(processes, configuration.fixtures.gitProviderOption),
+  createLanguageAdapters: createProductionLanguageAdapterComposition,
 }

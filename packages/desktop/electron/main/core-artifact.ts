@@ -1,51 +1,11 @@
 import { createHash } from "node:crypto"
-import { Effect, FileSystem, Option, Path, Schema } from "effect"
+import { Array as EffectArray, Effect, FileSystem, Option, Order, Path, Schema } from "effect"
+import type { PlatformError } from "effect"
+import { CoreArtifactManifest } from "./core-artifact-manifest"
+
+export { CoreArtifactManifest } from "./core-artifact-manifest"
 
 const EMBEDDED_CORE_BUILD_ID = process.env.DIFFDASH_CORE_BUILD_ID ?? ""
-
-const CoreBuildId = Schema.String.pipe(
-  Schema.check(Schema.isMinLength(1)),
-  Schema.check(Schema.isMaxLength(100)),
-  Schema.check(Schema.isPattern(/^[A-Za-z0-9][A-Za-z0-9._-]*$/u)),
-)
-
-const Sha256 = Schema.String.pipe(Schema.check(Schema.isPattern(/^[a-f0-9]{64}$/u)))
-
-/** Build-authored description of the exact Core artifact shipped with Desktop. */
-export const CoreArtifactManifest = Schema.Struct({
-  schemaVersion: Schema.Literal(1),
-  buildId: CoreBuildId,
-  desktop: Schema.Struct({
-    version: Schema.String,
-    mode: Schema.Literals(["production", "e2e"]),
-    platform: Schema.String,
-    architecture: Schema.String,
-  }),
-  entrypoint: Schema.Literal("core.mjs"),
-  entrypointSha256: Sha256,
-  reviewWorker: Schema.Struct({
-    buildId: CoreBuildId,
-    node: Schema.Struct({
-      entrypoint: Schema.Literal("review-worker-node.mjs"),
-      entrypointSha256: Sha256,
-    }),
-    bun: Schema.Struct({
-      entrypoint: Schema.Literal("review-worker-bun.mjs"),
-      entrypointSha256: Sha256,
-    }),
-  }),
-  runtime: Schema.Struct({
-    utility: Schema.Literal(true),
-    bun: Schema.Struct({
-      minimumVersion: Schema.String.pipe(
-        Schema.check(Schema.isPattern(/^\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?$/u)),
-      ),
-      architecture: Schema.String,
-      entrypoint: Schema.Literal("core-bun.mjs"),
-      entrypointSha256: Sha256,
-    }),
-  }),
-}).annotate({ identifier: "CoreArtifactManifest" })
 
 /** Build-authored description of the exact Core artifact shipped with Desktop. */
 export type CoreArtifactManifest = typeof CoreArtifactManifest.Type
@@ -70,14 +30,14 @@ export class CoreArtifactVerificationError extends Schema.TaggedError<CoreArtifa
 export class VerifiedCoreArtifact extends Schema.Class<VerifiedCoreArtifact>(
   "@diffdash/desktop/VerifiedCoreArtifact",
 )({
-  buildId: CoreBuildId,
+  buildId: CoreArtifactManifest.fields.buildId,
   entrypointPath: Schema.String,
-  entrypointSha256: Sha256,
+  entrypointSha256: CoreArtifactManifest.fields.entrypointSha256,
   device: Schema.Number,
   inode: Schema.Option(Schema.Number),
   size: Schema.BigInt,
   bunEntrypointPath: Schema.String,
-  bunEntrypointSha256: Sha256,
+  bunEntrypointSha256: CoreArtifactManifest.fields.entrypointSha256,
   bunDevice: Schema.Number,
   bunInode: Schema.Option(Schema.Number),
   bunSize: Schema.BigInt,
@@ -100,13 +60,19 @@ const verificationFailure = (reason: CoreArtifactVerificationError["reason"]) =>
 
 const MANIFEST_MAX_BYTES = 16 * 1_024
 const ENTRYPOINT_MAX_BYTES = 64 * 1_024 * 1_024
+const LANGUAGE_TREE_MAX_BYTES = 64 * 1_024 * 1_024
+const LANGUAGE_TREE_MAX_FILES = 512
 const JsonManifest = Schema.fromJsonString(CoreArtifactManifest)
-const sameInode = (left: Option.Option<number>, right: Option.Option<number>): boolean =>
-  Option.match(left, {
-    onNone: () => Option.isNone(right),
-    onSome: (inode) => Option.contains(right, inode),
-  })
-
+const ArtifactTreeEntryInfo = Schema.Union([
+  Schema.Struct({ type: Schema.Literal("Directory") }),
+  Schema.Struct({ type: Schema.Literal("File"), size: Schema.BigInt }),
+  Schema.Struct({ type: Schema.Literal("SymbolicLink") }),
+  Schema.Struct({ type: Schema.Literal("BlockDevice") }),
+  Schema.Struct({ type: Schema.Literal("CharacterDevice") }),
+  Schema.Struct({ type: Schema.Literal("FIFO") }),
+  Schema.Struct({ type: Schema.Literal("Socket") }),
+  Schema.Struct({ type: Schema.Literal("Unknown") }),
+]).pipe(Schema.toTaggedUnion("type"))
 /** Verifies a canonical outside-ASAR Core manifest and entrypoint before any launch. */
 export const verifyCoreArtifact = (
   options: VerifyCoreArtifactOptions,
@@ -160,6 +126,13 @@ export const verifyCoreArtifact = (
     const manifest = yield* Schema.decodeUnknownEffect(JsonManifest)(manifestText).pipe(
       Effect.mapError(() => verificationFailure("manifest-invalid")),
     )
+    const authoredBuildId = `core-${manifest.desktop.version}-${manifest.desktop.mode}-${manifest.desktop.platform}-${manifest.desktop.architecture}-${manifest.entrypointSha256.slice(0, 20)}-${manifest.language.typescript.treeSha256.slice(0, 20)}`
+    yield* Effect.succeed(manifest.buildId).pipe(
+      Effect.filterOrFail(
+        (buildId) => buildId === authoredBuildId,
+        () => verificationFailure("build-identity-mismatch"),
+      ),
+    )
     yield* Effect.succeed(manifest.buildId).pipe(
       Effect.filterOrFail(
         (buildId) => buildId === options.expectedBuildId,
@@ -205,7 +178,10 @@ export const verifyCoreArtifact = (
         (info) =>
           info.type === "File" &&
           info.dev === before.dev &&
-          sameInode(info.ino, before.ino) &&
+          Option.match(info.ino, {
+            onNone: () => Option.isNone(before.ino),
+            onSome: (inode) => Option.contains(before.ino, inode),
+          }) &&
           info.size === before.size,
         () => verificationFailure("entrypoint-invalid"),
       ),
@@ -244,6 +220,90 @@ export const verifyCoreArtifact = (
     yield* verifyWorker(
       manifest.reviewWorker.bun.entrypoint,
       manifest.reviewWorker.bun.entrypointSha256,
+    )
+    const languageTreeSha256 = yield* Effect.gen(function* () {
+      const root = path.join(artifactDirectory, manifest.language.typescript.root)
+      const canonicalRoot = yield* fileSystem.realPath(root)
+      yield* Effect.succeed(canonicalRoot).pipe(
+        Effect.filterOrFail(
+          (canonical) => canonical === root,
+          () => verificationFailure("entrypoint-invalid"),
+        ),
+      )
+
+      const collectFiles = (
+        directory: string,
+        relativeDirectory: string,
+      ): Effect.Effect<
+        readonly { readonly absolute: string; readonly relative: string; readonly size: bigint }[],
+        CoreArtifactVerificationError | PlatformError.PlatformError
+      > =>
+        Effect.gen(function* () {
+          const entries = yield* fileSystem.readDirectory(directory)
+          const nested = yield* Effect.forEach(entries, (name) => {
+            const absolute = path.join(directory, name)
+            const relative = relativeDirectory.length === 0 ? name : `${relativeDirectory}/${name}`
+            return Effect.gen(function* () {
+              const canonical = yield* fileSystem.realPath(absolute)
+              const info = yield* fileSystem.stat(absolute).pipe(
+                Effect.flatMap(Schema.decodeUnknownEffect(ArtifactTreeEntryInfo)),
+                Effect.mapError(() => verificationFailure("entrypoint-invalid")),
+              )
+              yield* Effect.succeed(canonical).pipe(
+                Effect.filterOrFail(
+                  (resolved) => resolved === absolute,
+                  () => verificationFailure("entrypoint-invalid"),
+                ),
+              )
+              return yield* ArtifactTreeEntryInfo.match(info, {
+                Directory: () => collectFiles(absolute, relative),
+                File: ({ size }) => Effect.succeed([{ absolute, relative, size }]),
+                SymbolicLink: () => verificationFailure("entrypoint-invalid"),
+                BlockDevice: () => verificationFailure("entrypoint-invalid"),
+                CharacterDevice: () => verificationFailure("entrypoint-invalid"),
+                FIFO: () => verificationFailure("entrypoint-invalid"),
+                Socket: () => verificationFailure("entrypoint-invalid"),
+                Unknown: () => verificationFailure("entrypoint-invalid"),
+              })
+            })
+          })
+          return EffectArray.flatten(nested)
+        })
+      const files = yield* collectFiles(root, "")
+      const totalBytes = EffectArray.reduce(files, 0n, (total, file) => total + file.size)
+      yield* Effect.succeed(files).pipe(
+        Effect.filterOrFail(
+          (entries) =>
+            entries.length <= LANGUAGE_TREE_MAX_FILES &&
+            totalBytes <= BigInt(LANGUAGE_TREE_MAX_BYTES),
+          () => verificationFailure("entrypoint-invalid"),
+        ),
+      )
+
+      const hash = createHash("sha256")
+      for (const file of EffectArray.sortWith(files, (entry) => entry.relative, Order.String)) {
+        const bytes = yield* fileSystem.readFile(file.absolute)
+        yield* Effect.succeed(BigInt(bytes.byteLength)).pipe(
+          Effect.filterOrFail(
+            (size) => size === file.size,
+            () => verificationFailure("entrypoint-invalid"),
+          ),
+        )
+        hash.update(file.relative)
+        hash.update("\0")
+        hash.update(bytes)
+      }
+      return hash.digest("hex")
+    }).pipe(
+      Effect.catchTag("PlatformError", () =>
+        Effect.fail(verificationFailure("entrypoint-invalid")),
+      ),
+    )
+    yield* Effect.succeed(languageTreeSha256).pipe(
+      Effect.filterOrFail(
+        (checksum) => checksum === manifest.language.typescript.treeSha256,
+        () => verificationFailure("entrypoint-checksum-mismatch"),
+      ),
     )
     const bunEntrypointPath = path.join(artifactDirectory, manifest.runtime.bun.entrypoint)
     const bunInfo = yield* verifyWorker(
@@ -307,7 +367,10 @@ export const revalidateCoreArtifact = (
         (value) =>
           value.type === "File" &&
           value.dev === entrypoint.device &&
-          sameInode(value.ino, entrypoint.inode) &&
+          Option.match(value.ino, {
+            onNone: () => Option.isNone(entrypoint.inode),
+            onSome: (inode) => Option.contains(entrypoint.inode, inode),
+          }) &&
           value.size === entrypoint.size,
         () => verificationFailure("entrypoint-invalid"),
       ),
@@ -325,7 +388,10 @@ export const revalidateCoreArtifact = (
         (value) =>
           value.type === "File" &&
           value.dev === info.dev &&
-          sameInode(value.ino, info.ino) &&
+          Option.match(value.ino, {
+            onNone: () => Option.isNone(info.ino),
+            onSome: (inode) => Option.contains(info.ino, inode),
+          }) &&
           value.size === info.size,
         () => verificationFailure("entrypoint-invalid"),
       ),

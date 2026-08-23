@@ -1,10 +1,10 @@
-import { afterAll, beforeAll, describe, expect, it } from "@effect/vitest"
+import { afterAll, assert, beforeAll, describe, expect, it } from "@effect/vitest"
 import { execFileSync } from "node:child_process"
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs"
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 
-import { Deferred, Effect, Fiber, Layer, Result, Stream } from "effect"
+import { Deferred, Effect, Fiber, Layer, Match, Ref, Result, Schema, Stream } from "effect"
 
 import {
   BranchComparison,
@@ -23,7 +23,10 @@ import {
 } from "@diffdash/git-provider"
 import { reviewDiffSourceConformance } from "@diffdash/git-provider/testing"
 import { ProcessExit, ProcessResult, ProcessService, type ProcessRequest } from "@diffdash/process"
-import { makeLocalReviewDiffSource } from "./local-review-diff-source"
+import {
+  makeLocalReviewDiffSource,
+  writeAllLocalReviewCaptureChunk,
+} from "./local-review-diff-source"
 import { sanitizedGitTestEnvironment } from "./test-support/git-environment"
 
 const reviewKey = ReviewKey.make("local:stream-fixture")
@@ -37,19 +40,29 @@ writeFileSync(join(fixtureRoot, "file.txt"), "new\n")
 commitAll(fixtureRoot, "head")
 const fixtureHead = git(fixtureRoot, "rev-parse", "HEAD")
 const expectedImmutableBytes = new Uint8Array(
-  gitBytes(fixtureRoot, "diff", "--no-ext-diff", "--no-color", fixtureBase, fixtureHead, "--"),
+  gitBytes(
+    fixtureRoot,
+    "diff",
+    "--binary",
+    "--full-index",
+    "--no-ext-diff",
+    "--no-color",
+    fixtureBase,
+    fixtureHead,
+    "--",
+  ),
 )
 let exactSources: ReviewDiffSource[] = []
 
 beforeAll(async () => {
   const target = lastCommitTarget(fixtureRoot, fixtureBase, fixtureHead)
-  for (let index = 0; index < 6; index += 1) {
-    exactSources.push(
-      await Effect.runPromise(
+  exactSources = await Promise.all(
+    Array.from({ length: 6 }, () =>
+      Effect.runPromise(
         makeLocalReviewDiffSource({ reviewKey, target }).pipe(Effect.provide(ProcessService.layer)),
       ),
-    )
-  }
+    ),
+  )
 })
 
 afterAll(() => {
@@ -58,7 +71,7 @@ afterAll(() => {
 
 const takeExactSource = (): ReviewDiffSource => {
   const source = exactSources.shift()
-  if (source === undefined) throw new Error("Local source conformance exhausted its fixtures")
+  assert(source !== undefined, "Local source conformance exhausted its fixtures")
   return source
 }
 
@@ -85,6 +98,21 @@ reviewDiffSourceConformance("local exact Git", {
 })
 
 describe("local review diff source", () => {
+  it.effect("retries short staging writes until the complete chunk is persisted", () =>
+    Effect.gen(function* () {
+      const offsets = yield* Ref.make<readonly number[]>([])
+      const bytes = Uint8Array.from([1, 2, 3, 4, 5])
+      yield* writeAllLocalReviewCaptureChunk(
+        (_chunk, offset, length) =>
+          Ref.update(offsets, (current) => [...current, offset]).pipe(
+            Effect.as({ bytesWritten: Math.min(2, length) }),
+          ),
+        bytes,
+      )
+      expect(yield* Ref.get(offsets)).toEqual([0, 2, 4])
+    }),
+  )
+
   it.effect("spools aggregate tracked and untracked bytes for deterministic backward reads", () =>
     Effect.gen(function* () {
       const root = yield* Effect.acquireRelease(
@@ -100,7 +128,16 @@ describe("local review diff source", () => {
       writeFileSync(join(root, "untracked-b.txt"), "beta\n")
       const target = branchTarget(root, base)
       const expected = concat([
-        gitBytes(root, "diff", "--no-ext-diff", "--no-color", base, "--"),
+        gitBytes(
+          root,
+          "diff",
+          "--binary",
+          "--full-index",
+          "--no-ext-diff",
+          "--no-color",
+          base,
+          "--",
+        ),
         acceptedDiffBytes(root, "untracked-a.txt"),
         acceptedDiffBytes(root, "untracked-b.txt"),
       ])
@@ -115,7 +152,11 @@ describe("local review diff source", () => {
         complete: true,
         declaredBytes: expected.byteLength,
       })
-      expect(source.offer.methods.map((method) => method._tag)).toEqual(["unifiedBytes"])
+      expect(
+        source.offer.methods.map((method) =>
+          Match.valueTags(method, { unifiedBytes: () => "unifiedBytes" }),
+        ),
+      ).toEqual(["unifiedBytes"])
 
       for (const suffix of ["forward", "backward"]) {
         const actual = yield* collectBytes(source, ReviewDiffGeneration.make(`mutable-${suffix}`))
@@ -123,6 +164,47 @@ describe("local review diff source", () => {
       }
       yield* source.close
     }).pipe(Effect.provide(ProcessService.layer)),
+  )
+
+  it.effect(
+    "captures complete binary patches that reproduce tracked and nested untracked files",
+    () =>
+      Effect.gen(function* () {
+        const root = yield* Effect.acquireRelease(
+          Effect.sync(() => mkdtempSync(join(tmpdir(), "diffdash-local-binary-source-"))),
+          (path) => Effect.sync(() => rmSync(path, { force: true, recursive: true })),
+        )
+        git(root, "init", "-b", "main")
+        writeFileSync(join(root, "tracked.bin"), Uint8Array.from([0, 1, 2, 3]))
+        commitAll(root, "base")
+        const base = git(root, "rev-parse", "HEAD")
+        writeFileSync(join(root, "tracked.bin"), Uint8Array.from([0, 4, 5, 6]))
+        mkdirSync(join(root, "nested"), { recursive: true })
+        writeFileSync(join(root, "nested/untracked.bin"), Uint8Array.from([0, 7, 8, 9]))
+        const source = yield* makeLocalReviewDiffSource({
+          reviewKey,
+          target: branchTarget(root, base),
+        })
+        const patch = yield* collectBytes(
+          source,
+          ReviewDiffGeneration.make("binary-materialization"),
+        )
+        expect(new TextDecoder().decode(patch)).toContain("GIT binary patch")
+
+        const materialized = join(root, "materialized")
+        mkdirSync(materialized)
+        git(materialized, "init", "-b", "main")
+        writeFileSync(join(materialized, "tracked.bin"), Uint8Array.from([0, 1, 2, 3]))
+        const patchPath = join(root, "snapshot.patch")
+        writeFileSync(patchPath, patch)
+        git(materialized, "apply", "--binary", "--whitespace=nowarn", "--", patchPath)
+
+        expect(readFileSync(join(materialized, "tracked.bin"))).toEqual(Buffer.from([0, 4, 5, 6]))
+        expect(readFileSync(join(materialized, "nested/untracked.bin"))).toEqual(
+          Buffer.from([0, 7, 8, 9]),
+        )
+        yield* source.close
+      }).pipe(Effect.provide(ProcessService.layer)),
   )
 
   it.effect("bounds mutable verification to two fresh capture attempts", () =>
@@ -149,7 +231,12 @@ describe("local review diff source", () => {
       }).pipe(Effect.provide(processLayer), Effect.result)
 
       expect(diffRuns).toBe(4)
-      expect(Result.isFailure(result) && result.failure).toBeInstanceOf(ReviewDiffSourceFailure)
+      expect(
+        Result.match(result, {
+          onFailure: Schema.is(ReviewDiffSourceFailure),
+          onSuccess: () => false,
+        }),
+      ).toBe(true)
     }),
   )
 
@@ -192,8 +279,7 @@ const collectBytes = Effect.fn("collectBytes")(function* (
     )
     .pipe(Stream.runCollect)
   for (const event of events) {
-    if (event instanceof ReviewDiffByteCompletion) continue
-    chunks.push(event.bytes)
+    if (!Schema.is(ReviewDiffByteCompletion)(event)) chunks.push(event.bytes)
   }
   return concat(chunks)
 })
@@ -240,6 +326,8 @@ const acceptedDiffBytes = (root: string, path: string): Uint8Array => {
     return gitBytes(
       root,
       "diff",
+      "--binary",
+      "--full-index",
       "--no-ext-diff",
       "--no-color",
       "--no-index",

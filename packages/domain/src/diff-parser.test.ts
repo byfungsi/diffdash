@@ -120,6 +120,22 @@ describe("parseUnifiedDiff", () => {
     })
   })
 
+  it("classifies complete Git binary patches as binary", () => {
+    const parsed = parseUnifiedDiff(`diff --git a/assets/logo.png b/assets/logo.png
+index 1111111111111111111111111111111111111111..2222222222222222222222222222222222222222 100644
+GIT binary patch
+literal 3
+KcmZQzU|?Vb000000
+`)
+
+    expect(parsed.files[0]).toMatchObject({
+      hunks: [],
+      path: "assets/logo.png",
+      status: "binary",
+      visibility: { _tag: "Hidden", reason: "binary" },
+    })
+  })
+
   it("derives default visibility while parsing each file", () => {
     const parsed =
       parseUnifiedDiff(`diff --git a/vendor/generated/pnpm-lock.yaml b/vendor/generated/pnpm-lock.yaml

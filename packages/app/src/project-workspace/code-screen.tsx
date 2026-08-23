@@ -1,6 +1,8 @@
 import type { CodeThemePreferences } from "@diffdash/domain/ai-settings"
+import type { CodeLineChangeRange } from "@diffdash/domain/code-line-change"
 import {
   type CodeWorkspaceEntry,
+  CodeWorkspaceFileReadResult,
   type CodeWorkspaceFileReadRejectionReason,
   type CodeWorkspaceLease,
   CodeWorkspaceTarget,
@@ -8,9 +10,14 @@ import {
 } from "@diffdash/domain/code-workspace"
 import type { DiffFileStatus } from "@diffdash/domain/diff"
 import type { ProjectWorkspaceRibbon } from "@diffdash/domain/project-workspace"
+import {
+  LanguagePosition,
+  LanguageRange,
+  type RepositoryLanguageLocationLink,
+} from "@diffdash/domain/language"
 import type { Repo } from "@diffdash/domain/repository"
 import { RepositoryRelativePath } from "@diffdash/domain/repository-path"
-import { Match, Schema } from "effect"
+import { HashMap, Match, Option, Schema } from "effect"
 import { useEffect, useEffectEvent, useRef, useState } from "react"
 
 import { runRendererPromise, useCodeWorkspace } from "@/platform/renderer-runtime"
@@ -20,6 +27,7 @@ import { EmptyState } from "@/shared/ui/empty-state"
 import { ProjectWorkspaceStatePanel } from "@/shared/ui/project-workspace-state-panel"
 import type { ColorScheme } from "@/settings/theme"
 import { CommandPaletteDialog, type CommandPaletteItem } from "@/shell/command-palette"
+import { useKeyboardShortcut } from "@/shell/keyboard-shortcuts"
 
 import { CodeFileViewer } from "./code-file-viewer"
 import { CodeWorkspaceTree } from "./code-workspace-tree"
@@ -36,9 +44,18 @@ type FileState =
   | { readonly _tag: "ready"; readonly path: RepositoryRelativePath; readonly content: string }
   | { readonly _tag: "failure"; readonly path: RepositoryRelativePath; readonly message: string }
 
+const DefinitionNavigation = Schema.Struct({
+  id: Schema.Int,
+  path: RepositoryRelativePath,
+  range: LanguageRange,
+})
+
+type DefinitionNavigation = typeof DefinitionNavigation.Type
+
 const DIRECTORY_PAGE_SIZE = 500
 const SEARCH_LIMIT = 100
 const HEARTBEAT_INTERVAL_MS = 20 * 60 * 1_000
+const EMPTY_LINE_CHANGES = HashMap.empty<RepositoryRelativePath, readonly CodeLineChangeRange[]>()
 
 /** Managed exact-revision Code browser with lazy directory and filename loading. */
 export const CodeScreen = ({
@@ -47,6 +64,7 @@ export const CodeScreen = ({
   colorScheme,
   contextWidth,
   fileStatuses,
+  lineChanges = EMPTY_LINE_CHANGES,
   repo,
   selectedPath,
   sidebarExpanded,
@@ -63,7 +81,8 @@ export const CodeScreen = ({
   readonly codeThemes: CodeThemePreferences
   readonly colorScheme: ColorScheme
   readonly contextWidth: number
-  readonly fileStatuses: ReadonlyMap<RepositoryRelativePath, DiffFileStatus>
+  readonly fileStatuses: Iterable<readonly [RepositoryRelativePath, DiffFileStatus]>
+  readonly lineChanges?: HashMap.HashMap<RepositoryRelativePath, readonly CodeLineChangeRange[]>
   readonly repo: Repo
   readonly selectedPath: RepositoryRelativePath | null
   readonly sidebarExpanded: boolean
@@ -87,10 +106,20 @@ export const CodeScreen = ({
   const [directoryOffsets, setDirectoryOffsets] = useState<ReadonlyMap<string, number | null>>(
     new Map(),
   )
+  const [workspaceFileStatuses, setWorkspaceFileStatuses] = useState<
+    HashMap.HashMap<RepositoryRelativePath, DiffFileStatus>
+  >(HashMap.empty())
+  const [workspaceLineChanges, setWorkspaceLineChanges] = useState<
+    HashMap.HashMap<RepositoryRelativePath, readonly CodeLineChangeRange[]>
+  >(HashMap.empty())
   const [paletteOpen, setPaletteOpen] = useState(false)
   const [paletteItems, setPaletteItems] = useState<readonly CommandPaletteItem[]>([])
   const [paletteLoading, setPaletteLoading] = useState(false)
   const [reloadVersion, setReloadVersion] = useState(0)
+  const [definitionNavigation, setDefinitionNavigation] = useState<
+    Option.Option<DefinitionNavigation>
+  >(Option.none())
+  const definitionNavigationSequence = useRef(0)
   const activeLease = useRef<CodeWorkspaceLease | null>(null)
   const directoryRequests = useRef(new WeakMap<CodeWorkspaceLease, Set<string>>())
   const searchSequence = useRef(0)
@@ -101,6 +130,10 @@ export const CodeScreen = ({
     failure: () => null,
     ready: (state) => state,
   })
+  const visibleFileStatuses = HashMap.union(
+    workspaceFileStatuses,
+    HashMap.fromIterable(fileStatuses),
+  )
 
   const requestDirectory = async (
     lease: CodeWorkspaceLease,
@@ -144,7 +177,7 @@ export const CodeScreen = ({
     offset = 0,
   ) =>
     requestDirectory(lease, path, offset).catch((error) => {
-      if (activeLease.current === lease) {
+      if (path === null && activeLease.current === lease) {
         activeLease.current = null
         void runRendererPromise(workspaces.release(lease.id)).catch(() => undefined)
         setWorkspace({
@@ -164,6 +197,8 @@ export const CodeScreen = ({
     setExpandedPaths(new Set())
     setLoadingPaths(new Set())
     setDirectoryOffsets(new Map())
+    setWorkspaceFileStatuses(HashMap.empty())
+    setWorkspaceLineChanges(HashMap.empty())
     setFile({ _tag: "idle" })
     if (requiresLocalCheckout && repo.localPath === null) {
       setWorkspace({
@@ -181,6 +216,22 @@ export const CodeScreen = ({
         }
         activeLease.current = lease
         setWorkspace({ _tag: "ready", lease })
+        if (requiresLocalCheckout) {
+          void runRendererPromise(workspaces.changes(lease.id))
+            .then((result) => {
+              if (activeLease.current === lease) {
+                setWorkspaceFileStatuses(
+                  HashMap.fromIterable(
+                    result.changes
+                      .filter((change) => change.status !== "deleted")
+                      .map((change) => [change.path, change.status] as const),
+                  ),
+                )
+              }
+              return undefined
+            })
+            .catch(() => undefined)
+        }
         await loadDirectoryFromEffect(lease, null)
       } catch (error) {
         if (requestActive)
@@ -224,17 +275,18 @@ export const CodeScreen = ({
     }
     let requestActive = true
     setFile({ _tag: "loading", path: selectedPath })
+    setWorkspaceLineChanges(HashMap.empty())
     void runRendererPromise(workspaces.readFile(readyWorkspace.lease.id, selectedPath))
       .then((result) => {
         if (requestActive) {
           setFile(
-            Match.valueTags(result, {
-              content: (content) => ({
+            CodeWorkspaceFileReadResult.match(result, {
+              content: (content): FileState => ({
                 _tag: "ready" as const,
                 path: content.path,
                 content: content.content,
               }),
-              rejected: (rejected) => ({
+              rejected: (rejected): FileState => ({
                 _tag: "failure" as const,
                 path: rejected.path,
                 message: readRejectionMessage(rejected.reason),
@@ -252,10 +304,20 @@ export const CodeScreen = ({
             message: formatError(error, "DiffDash could not read this file."),
           })
       })
+    if (requiresLocalCheckout) {
+      void runRendererPromise(workspaces.lineChanges(readyWorkspace.lease.id, selectedPath))
+        .then((result) => {
+          if (requestActive) {
+            setWorkspaceLineChanges(HashMap.make([selectedPath, result.changes]))
+          }
+          return undefined
+        })
+        .catch(() => undefined)
+    }
     return () => {
       requestActive = false
     }
-  }, [readyWorkspace, selectedPath, workspaces])
+  }, [readyWorkspace, requiresLocalCheckout, selectedPath, workspaces])
 
   useEffect(() => {
     if (readyWorkspace === null || selectedPath === null) return
@@ -273,16 +335,14 @@ export const CodeScreen = ({
   useEffect(() => {
     if (!active) {
       setPaletteOpen(false)
-      return
+      return undefined
     }
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (!(event.metaKey || event.ctrlKey) || event.key.toLowerCase() !== "k") return
-      event.preventDefault()
-      setPaletteOpen(true)
-    }
-    window.addEventListener("keydown", onKeyDown)
-    return () => window.removeEventListener("keydown", onKeyDown)
+    return undefined
   }, [active])
+  useKeyboardShortcut("navigation.goAnywhere", () => setPaletteOpen(true), {
+    enabled: active,
+    priority: 10,
+  })
 
   const searchPage = (query: string, offset: number, append: boolean) => {
     if (readyWorkspace === null) return
@@ -300,6 +360,7 @@ export const CodeScreen = ({
           subtitle: path,
           keywords: path,
           onSelect: () => {
+            setDefinitionNavigation(Option.none())
             onSelectedPathChange(path)
             setPaletteOpen(false)
           },
@@ -326,6 +387,47 @@ export const CodeScreen = ({
   }
 
   const search = (query: string) => searchPage(query, 0, false)
+
+  const requestDefinitions = (
+    lease: CodeWorkspaceLease,
+    path: RepositoryRelativePath,
+    position: LanguagePosition,
+    signal: AbortSignal,
+  ) => runRendererPromise(workspaces.definitions(lease.id, path, position), signal)
+
+  const requestReferences = (
+    lease: CodeWorkspaceLease,
+    path: RepositoryRelativePath,
+    position: LanguagePosition,
+    signal: AbortSignal,
+  ) => runRendererPromise(workspaces.references(lease.id, path, position), signal)
+
+  const loadDefinitionSource = async (
+    lease: CodeWorkspaceLease,
+    path: RepositoryRelativePath,
+    signal: AbortSignal,
+  ): Promise<Option.Option<string>> => {
+    if (signal.aborted) return Option.none()
+    const result = await runRendererPromise(workspaces.readFile(lease.id, path), signal)
+    if (signal.aborted || activeLease.current !== lease) return Option.none()
+    return CodeWorkspaceFileReadResult.match(result, {
+      content: ({ content }) => Option.some(content),
+      rejected: () => Option.none(),
+    })
+  }
+
+  const navigateToDefinition = (location: RepositoryLanguageLocationLink) => {
+    const id = definitionNavigationSequence.current + 1
+    definitionNavigationSequence.current = id
+    setDefinitionNavigation(
+      Option.some({
+        id,
+        path: location.target.path,
+        range: location.targetSelectionRange,
+      }),
+    )
+    onSelectedPathChange(location.target.path)
+  }
 
   const toggleDirectory = (path: RepositoryRelativePath) => {
     if (readyWorkspace === null) return
@@ -356,11 +458,14 @@ export const CodeScreen = ({
           <CodeWorkspaceTree
             entries={directories}
             expandedPaths={expandedPaths}
-            fileStatuses={fileStatuses}
+            fileStatuses={visibleFileStatuses}
             loadingPaths={loadingPaths}
             nextOffsets={directoryOffsets}
             selectedPath={selectedPath}
-            onOpenFile={onSelectedPathChange}
+            onOpenFile={(path) => {
+              setDefinitionNavigation(Option.none())
+              onSelectedPathChange(path)
+            }}
             onLoadMore={(path) => {
               const offset = directoryOffsets.get(path ?? "")
               if (offset !== undefined && offset !== null) {
@@ -411,9 +516,35 @@ export const CodeScreen = ({
             codeThemes={codeThemes}
             colorScheme={colorScheme}
             contents={ready.content}
+            lineChanges={Option.getOrElse(
+              Option.orElse(HashMap.get(lineChanges, ready.path), () =>
+                HashMap.get(workspaceLineChanges, ready.path),
+              ),
+              () => [],
+            )}
             path={ready.path}
             projectId={repo.id}
             revision={workspaceState.lease.revision}
+            gitRevision={workspaceState.lease.gitRevision}
+            definitionNavigation={Option.filter(
+              definitionNavigation,
+              (navigation) => navigation.path === ready.path,
+            ).pipe(Option.map(({ id, range }) => ({ id, range })))}
+            onDefinitionNavigationHandled={(id) => {
+              setDefinitionNavigation((current) =>
+                Option.filter(current, (navigation) => navigation.id !== id),
+              )
+            }}
+            onLoadDefinitionSource={(path, signal) =>
+              loadDefinitionSource(workspaceState.lease, path, signal)
+            }
+            onNavigateToDefinition={navigateToDefinition}
+            onRequestDefinitions={(position, signal) =>
+              requestDefinitions(workspaceState.lease, ready.path, position, signal)
+            }
+            onRequestReferences={(position, signal) =>
+              requestReferences(workspaceState.lease, ready.path, position, signal)
+            }
           />
         ),
         loading: (loading) => (

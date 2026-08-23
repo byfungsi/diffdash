@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto"
+import { createReadStream } from "node:fs"
 import { mkdir, open, readFile, rename, rm, stat } from "node:fs/promises"
 import { isAbsolute, relative, resolve, sep } from "node:path"
 import { Context, Effect, Layer, Match, Option, Predicate, Schema } from "effect"
@@ -25,6 +26,15 @@ const BoundedId = Schema.String.pipe(
 const NonNegativeInt = Schema.Int.pipe(Schema.check(Schema.isGreaterThanOrEqualTo(0)))
 const PositiveInt = Schema.Int.pipe(Schema.check(Schema.isGreaterThan(0)))
 const MAX_REVIEW_DESCRIPTOR_BYTES = 64 * 1024
+
+class ManagedFileVerificationError extends Schema.TaggedError<ManagedFileVerificationError>()(
+  "ManagedFileVerificationError",
+  {
+    path: Schema.String,
+    reason: Schema.Literals(["checksumMismatch", "sizeMismatch"]),
+    message: Schema.String,
+  },
+) {}
 
 /** Stable identity of an immutable review snapshot manifest. */
 export const StoredSnapshotId = BoundedId.pipe(Schema.brand("StoredSnapshotId"))
@@ -76,15 +86,19 @@ export const makeFileDeltaId = (identity: FileDeltaIdentity): FileDeltaId => {
 }
 
 /** Source facts retained by an immutable snapshot. */
-export type SnapshotStorageSource =
-  | { readonly kind: "managedSpool"; readonly resourceId: CatalogResourceId }
-  | {
-      readonly kind: "exactGit"
-      readonly repositoryIdentity: string
-      readonly baseObject: string
-      readonly headObject: string
-      readonly diffPolicyIdentity: string
-    }
+export const SnapshotStorageSource = Schema.Union([
+  Schema.Struct({ kind: Schema.Literal("managedSpool"), resourceId: CatalogResourceId }),
+  Schema.Struct({
+    kind: Schema.Literal("exactGit"),
+    repositoryIdentity: Schema.String,
+    baseObject: Schema.String,
+    headObject: Schema.String,
+    diffPolicyIdentity: Schema.String,
+  }),
+]).pipe(Schema.toTaggedUnion("kind"))
+
+/** Source facts retained by an immutable snapshot. */
+export type SnapshotStorageSource = typeof SnapshotStorageSource.Type
 
 /** One snapshot-owned file ordering placement. */
 export interface SnapshotFilePlacement {
@@ -248,6 +262,7 @@ const SnapshotBlockStoreOperation = Schema.Literals([
   "listFileHunks",
   "visibleBlocks",
   "readManagedRange",
+  "readSnapshotSpool",
   "deleteSnapshot",
   "beginCollection",
   "quarantineCollection",
@@ -325,6 +340,9 @@ export class SnapshotBlockStore extends Context.Service<
       offset: number,
       length: number,
     ) => Effect.Effect<ManagedRangeRead, SnapshotBlockStoreError>
+    readonly readSnapshotSpool: (
+      resourceId: CatalogResourceId,
+    ) => Effect.Effect<Uint8Array, SnapshotBlockStoreError>
     readonly deleteSnapshot: (
       id: StoredSnapshotId,
     ) => Effect.Effect<DeleteSnapshotResult, SnapshotBlockStoreError>
@@ -636,35 +654,37 @@ export class SnapshotBlockStore extends Context.Service<
                 new Error("Block bytes do not match reserved size and checksum"),
               )
             const temporary = paths.resolve(block.temporary_path)
-            yield* attemptFile("stageBlock", async () => {
-              await mkdir(resolve(temporary, ".."), { recursive: true, mode: 0o700 })
-              if (await fileExists(temporary)) {
-                await verifyFilePromise(temporary, block.byte_count, block.checksum)
-                return
-              }
-              const descriptor = await open(temporary, "wx", 0o600)
-              try {
-                await descriptor.writeFile(bytes)
-                await descriptor.sync()
-              } finally {
-                await descriptor.close()
-              }
-            })
-            return undefined
+            yield* attemptFile("stageBlock", () =>
+              mkdir(resolve(temporary, ".."), { recursive: true, mode: 0o700 }),
+            )
+            if (yield* awaitFileExists(temporary)) {
+              yield* verifyFile(temporary, block.byte_count, block.checksum)
+            } else {
+              yield* attemptFile("stageBlock", async () => {
+                const descriptor = await open(temporary, "wx", 0o600)
+                try {
+                  await descriptor.writeFile(bytes)
+                  await descriptor.sync()
+                } finally {
+                  await descriptor.close()
+                }
+              })
+            }
+            return yield* Effect.void
           }, mapError("stageBlock")),
 
           promoteBlock: Effect.fn("SnapshotBlockStore.promoteBlock")(function* (id) {
             const block = yield* loadPendingBlock(database, id)
             const temporary = paths.resolve(block.temporary_path)
             const final = paths.resolve(block.final_path)
-            yield* attemptFile("promoteBlock", async () => {
-              await mkdir(resolve(final, ".."), { recursive: true, mode: 0o700 })
-              if (await fileExists(final)) {
-                await verifyFilePromise(final, block.byte_count, block.checksum)
-                return
-              }
-              await rename(temporary, final)
-            })
+            yield* attemptFile("promoteBlock", () =>
+              mkdir(resolve(final, ".."), { recursive: true, mode: 0o700 }),
+            )
+            if (yield* awaitFileExists(final)) {
+              yield* verifyFile(final, block.byte_count, block.checksum)
+            } else {
+              yield* attemptFile("promoteBlock", () => rename(temporary, final))
+            }
           }, mapError("promoteBlock")),
 
           finalizeBlock,
@@ -681,11 +701,11 @@ export class SnapshotBlockStore extends Context.Service<
               if (yield* awaitFileExists(final)) {
                 yield* finalizeBlock(block.id)
               } else if (yield* awaitFileExists(temporary)) {
-                yield* attemptFile("recoverWrites", async () => {
-                  await mkdir(resolve(final, ".."), { recursive: true, mode: 0o700 })
-                  await verifyFilePromise(temporary, block.byte_count, block.checksum)
-                  await rename(temporary, final)
-                })
+                yield* attemptFile("recoverWrites", () =>
+                  mkdir(resolve(final, ".."), { recursive: true, mode: 0o700 }),
+                )
+                yield* verifyFile(temporary, block.byte_count, block.checksum)
+                yield* attemptFile("recoverWrites", () => rename(temporary, final))
                 yield* finalizeBlock(block.id)
               } else {
                 yield* database.transaction(
@@ -973,6 +993,30 @@ export class SnapshotBlockStore extends Context.Service<
             return { resourceId, bytes, offset, totalBytes: resource.bytes }
           }, mapError("readManagedRange")),
 
+          readSnapshotSpool: Effect.fn("SnapshotBlockStore.readSnapshotSpool")(function* (
+            resourceId,
+          ) {
+            const row = yield* database.get(
+              `SELECT resource.id, resource.bytes, resource.location_value, resource.root_id,
+                        resource.kind, resource.validation, resource.checksum
+                 FROM resources AS resource
+                 WHERE resource.id = ? AND resource.state = 'ready'
+                   AND resource.location_kind = 'filesystem'`,
+              [resourceId],
+            )
+            const resource = yield* Effect.fromOption(
+              row,
+              () => new Error(`Missing ready snapshot spool ${resourceId}`),
+            ).pipe(Effect.flatMap(Schema.decodeUnknownEffect(SnapshotSpoolResourceRow)))
+            if (resource.root_id !== options.rootId)
+              return yield* Effect.fail(new Error("Snapshot spool belongs to another root"))
+            const path = paths.resolve(resource.location_value)
+            yield* verifyFile(path, resource.bytes, resource.checksum)
+            return yield* attemptFile("readSnapshotSpool", () => readFile(path)).pipe(
+              Effect.map((bytes) => new Uint8Array(bytes)),
+            )
+          }, mapError("readSnapshotSpool")),
+
           deleteSnapshot: Effect.fn("SnapshotBlockStore.deleteSnapshot")(function* (id) {
             return yield* database.transaction(
               Effect.gen(function* () {
@@ -1144,6 +1188,13 @@ const ManagedResourceRow = Schema.Struct({
   root_id: Schema.NullOr(ResourceRootId),
 })
 
+const SnapshotSpoolResourceRow = Schema.Struct({
+  ...ManagedResourceRow.fields,
+  kind: Schema.Literal("snapshot-spool"),
+  validation: Schema.Literal("complete-unified-diff:v1"),
+  checksum: Schema.String.pipe(Schema.check(Schema.isPattern(/^sha256:[0-9a-f]{64}$/u))),
+})
+
 const ProvisionalBlockBindingRow = Schema.Struct({ hunk_id: Schema.NullOr(Schema.String) })
 
 const BlockPlacementRow = Schema.Struct({ block_id: DiffBlockId })
@@ -1224,28 +1275,32 @@ const resourceIsReachable = Effect.fn("SnapshotBlockStore.resourceIsReachable")(
 })
 
 const sourceColumns = (source: SnapshotStorageSource) =>
-  source.kind === "managedSpool"
-    ? {
-        kind: source.kind,
-        spoolResourceId: source.resourceId,
-        repositoryIdentity: null,
-        baseObject: null,
-        headObject: null,
-        diffPolicyIdentity: null,
-      }
-    : {
-        kind: source.kind,
-        spoolResourceId: null,
-        repositoryIdentity: source.repositoryIdentity,
-        baseObject: source.baseObject,
-        headObject: source.headObject,
-        diffPolicyIdentity: source.diffPolicyIdentity,
-      }
+  SnapshotStorageSource.match(source, {
+    managedSpool: ({ kind, resourceId }) => ({
+      kind,
+      spoolResourceId: resourceId,
+      repositoryIdentity: null,
+      baseObject: null,
+      headObject: null,
+      diffPolicyIdentity: null,
+    }),
+    exactGit: ({ kind, repositoryIdentity, baseObject, headObject, diffPolicyIdentity }) => ({
+      kind,
+      spoolResourceId: null,
+      repositoryIdentity,
+      baseObject,
+      headObject,
+      diffPolicyIdentity,
+    }),
+  })
 
 const decodeSource = (row: typeof SnapshotManifestRow.Type): SnapshotStorageSource => {
   if (row.source_kind === "managedSpool") {
     if (row.spool_resource_id === null) throw new Error("Managed-spool manifest lost its resource")
-    return { kind: "managedSpool", resourceId: row.spool_resource_id }
+    return SnapshotStorageSource.cases.managedSpool.make({
+      kind: "managedSpool",
+      resourceId: row.spool_resource_id,
+    })
   }
   if (
     row.repository_identity === null ||
@@ -1254,13 +1309,13 @@ const decodeSource = (row: typeof SnapshotManifestRow.Type): SnapshotStorageSour
     row.diff_policy_identity === null
   )
     throw new Error("Exact-Git manifest lost materialization metadata")
-  return {
+  return SnapshotStorageSource.cases.exactGit.make({
     kind: "exactGit",
     repositoryIdentity: row.repository_identity,
     baseObject: row.base_object,
     headObject: row.head_object,
     diffPolicyIdentity: row.diff_policy_identity,
-  }
+  })
 }
 
 const blockResourceId = (id: DiffBlockId): CatalogResourceId =>
@@ -1287,18 +1342,32 @@ const sha256 = (bytes: Uint8Array): string =>
   `sha256:${createHash("sha256").update(bytes).digest("hex")}`
 
 const verifyFile = (path: string, bytes: number, checksum: string) =>
-  Effect.tryPromise({
-    try: () => verifyFilePromise(path, bytes, checksum),
-    catch: toError,
+  Effect.gen(function* () {
+    const info = yield* Effect.tryPromise({ try: () => stat(path), catch: toError })
+    if (!info.isFile() || info.size !== bytes) {
+      return yield* ManagedFileVerificationError.make({
+        path,
+        reason: "sizeMismatch",
+        message: "Managed block size does not match metadata",
+      })
+    }
+    const actualChecksum = yield* Effect.tryPromise({
+      try: async () => {
+        const hash = createHash("sha256")
+        for await (const chunk of createReadStream(path)) hash.update(chunk)
+        return `sha256:${hash.digest("hex")}`
+      },
+      catch: toError,
+    })
+    if (actualChecksum !== checksum) {
+      return yield* ManagedFileVerificationError.make({
+        path,
+        reason: "checksumMismatch",
+        message: "Managed block checksum does not match metadata",
+      })
+    }
+    return yield* Effect.void
   })
-
-const verifyFilePromise = async (path: string, bytes: number, checksum: string): Promise<void> => {
-  const info = await stat(path)
-  if (!info.isFile() || info.size !== bytes)
-    throw new Error("Managed block size does not match metadata")
-  if (sha256(await readFile(path)) !== checksum)
-    throw new Error("Managed block checksum does not match metadata")
-}
 
 const fileExists = async (path: string): Promise<boolean> => {
   try {

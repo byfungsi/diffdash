@@ -2,13 +2,16 @@ import { AgentModelId, AgentProviderId } from "@diffdash/domain/agent-provider"
 import { AgentCapability, AgentModelQuality, AISettings } from "@diffdash/domain/ai-settings"
 import {
   CodeWorkspaceDirectoryPage,
+  CodeWorkspaceChangesResult,
   CodeWorkspaceFileReadResult,
   CodeWorkspaceLease,
   CodeWorkspaceLeaseId,
+  CodeWorkspaceLineChangesResult,
   CodeWorkspaceSearchResult,
   CodeWorkspaceTarget,
 } from "@diffdash/domain/code-workspace"
 import { ExecutablePath } from "@diffdash/domain/executable-path"
+import { LanguagePosition, RepositoryLanguageLocationResult } from "@diffdash/domain/language"
 import {
   CommentDestination,
   CommentSubmission,
@@ -663,6 +666,38 @@ export const CodeWorkspaceReadFileRpc = applicationRpc(
   CodeWorkspaceFileReadResult,
   read(10_000, 640 * KIB),
 )
+export const CodeWorkspaceDefinitionsRpc = applicationRpc(
+  "CodeWorkspace.definitions",
+  withContext({
+    leaseId: CodeWorkspaceLeaseId,
+    path: RepositoryRelativePath,
+    position: LanguagePosition,
+  }),
+  RepositoryLanguageLocationResult,
+  read(30_000, 128 * KIB),
+)
+export const CodeWorkspaceReferencesRpc = applicationRpc(
+  "CodeWorkspace.references",
+  withContext({
+    leaseId: CodeWorkspaceLeaseId,
+    path: RepositoryRelativePath,
+    position: LanguagePosition,
+  }),
+  RepositoryLanguageLocationResult,
+  read(30_000, 128 * KIB),
+)
+export const CodeWorkspaceChangesRpc = applicationRpc(
+  "CodeWorkspace.changes",
+  withContext({ leaseId: CodeWorkspaceLeaseId }),
+  CodeWorkspaceChangesResult,
+  read(30_000, 384 * KIB),
+)
+export const CodeWorkspaceLineChangesRpc = applicationRpc(
+  "CodeWorkspace.lineChanges",
+  withContext({ leaseId: CodeWorkspaceLeaseId, path: RepositoryRelativePath }),
+  CodeWorkspaceLineChangesResult,
+  read(30_000, 256 * KIB),
+)
 export const ProjectWorkspaceGetRpc = applicationRpc(
   "ProjectWorkspace.get",
   withContext({ projectId: ReviewProjectId }),
@@ -861,6 +896,10 @@ export const CoreApplicationRpcs = RpcGroup.make(
   CodeWorkspaceListDirectoryRpc,
   CodeWorkspaceSearchRpc,
   CodeWorkspaceReadFileRpc,
+  CodeWorkspaceDefinitionsRpc,
+  CodeWorkspaceReferencesRpc,
+  CodeWorkspaceChangesRpc,
+  CodeWorkspaceLineChangesRpc,
   ProjectWorkspaceGetRpc,
   ProjectWorkspaceSaveRpc,
   OpenCodeListSessionsRpc,

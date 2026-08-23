@@ -78,6 +78,16 @@ interface ApplicationCoreRuntime {
   >
   readonly searchCodeWorkspace: ApplicationCoreOperation<typeof CoreMethod.searchCodeWorkspace>
   readonly readCodeWorkspaceFile: ApplicationCoreOperation<typeof CoreMethod.readCodeWorkspaceFile>
+  readonly codeWorkspaceDefinitions: ApplicationCoreOperation<
+    typeof CoreMethod.codeWorkspaceDefinitions
+  >
+  readonly codeWorkspaceReferences: ApplicationCoreOperation<
+    typeof CoreMethod.codeWorkspaceReferences
+  >
+  readonly codeWorkspaceChanges: ApplicationCoreOperation<typeof CoreMethod.codeWorkspaceChanges>
+  readonly codeWorkspaceLineChanges: ApplicationCoreOperation<
+    typeof CoreMethod.codeWorkspaceLineChanges
+  >
   readonly listRepositories: ApplicationCoreOperation<typeof CoreMethod.listRepositories>
   readonly openProject: ApplicationCoreOperation<typeof CoreMethod.openProject>
   readonly repairRepositoryIdentities: ApplicationCoreOperation<
