@@ -10,11 +10,13 @@ import { LinkedCheckout, Repo, RepositoryCheckoutPath } from "@diffdash/domain/r
 import { RepositoryRelativePath } from "@diffdash/domain/repository-path"
 import { HashMap } from "effect"
 import { ReviewProjectId } from "@diffdash/domain/review-identity"
+import { PROJECT_WORKSPACE_CODE_ACTIVITY_ID } from "@diffdash/domain/project-workspace"
 import { Suspense } from "react"
 import { createRoot, type Root } from "react-dom/client"
 import { afterEach, describe, expect, it, vi } from "vitest"
 
 import { installDiffDashApi } from "@/test/app-browser-support"
+import { CORE_PROJECT_ACTIVITIES } from "@/extensions/core-workspace/core-workspace-extension"
 
 import { CodeScreen } from "./code-screen"
 
@@ -67,6 +69,8 @@ describe("CodeScreen working-tree status", () => {
       <Suspense fallback={runtimeFallback}>
         <CodeScreen
           active
+          activeActivity={PROJECT_WORKSPACE_CODE_ACTIVITY_ID}
+          activities={CORE_PROJECT_ACTIVITIES}
           codeThemes={DEFAULT_CODE_THEME_PREFERENCES}
           colorScheme="light"
           contextWidth={280}
@@ -76,7 +80,7 @@ describe("CodeScreen working-tree status", () => {
           sidebarExpanded
           target={ProjectHeadCodeWorkspaceTarget.make({ projectId: repo.id })}
           threadDetailWidth={320}
-          onActiveRibbonChange={() => undefined}
+          onActiveActivityChange={() => undefined}
           onLinkRepository={() => undefined}
           onSelectedPathChange={() => undefined}
           onSidebarExpandedChange={() => undefined}

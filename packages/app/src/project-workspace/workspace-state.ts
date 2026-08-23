@@ -1,13 +1,9 @@
 import { makeHostedRepositoryLocator } from "@diffdash/domain/git-provider"
 import {
-  PROJECT_WORKSPACE_CODE_ACTIVITY_ID,
-  PROJECT_WORKSPACE_FILES_ACTIVITY_ID,
   PROJECT_WORKSPACE_REVIEWS_ACTIVITY_ID,
-  PROJECT_WORKSPACE_WALKTHROUGH_ACTIVITY_ID,
   type ProjectWorkspaceActivityId,
   ProjectWorkspaceState,
   type ProjectWorkspaceSurface,
-  REVIEW_COMMENTS_ACTIVITY_ID,
   resolveProjectWorkspaceActivity,
 } from "@diffdash/domain/project-workspace"
 import type { Repo } from "@diffdash/domain/repository"
@@ -47,6 +43,7 @@ export const selectedReviewTargetForPersistence = (selection: SelectedReviewTarg
 export const resolveProjectWorkspaceState = <Persisted>(
   repo: Repo,
   persisted: Persisted,
+  availableActivityIds: readonly ProjectWorkspaceActivityId[],
 ): ResolvedProjectWorkspaceState => {
   if (persisted === null) return defaultProjectWorkspaceState(null)
 
@@ -69,13 +66,7 @@ export const resolveProjectWorkspaceState = <Persisted>(
       activeSurface: state.activeSurface,
       activeActivity: state.activeActivity,
     },
-    [
-      PROJECT_WORKSPACE_REVIEWS_ACTIVITY_ID,
-      PROJECT_WORKSPACE_FILES_ACTIVITY_ID,
-      PROJECT_WORKSPACE_CODE_ACTIVITY_ID,
-      PROJECT_WORKSPACE_WALKTHROUGH_ACTIVITY_ID,
-      REVIEW_COMMENTS_ACTIVITY_ID,
-    ],
+    availableActivityIds,
   )
   const selection = activityResolution.selection
   const activityNotice = Match.valueTags(activityResolution, {

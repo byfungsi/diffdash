@@ -16,12 +16,14 @@ import {
 import { LinkedCheckout, Repo, RepositoryCheckoutPath } from "@diffdash/domain/repository"
 import { RepositoryRelativePath } from "@diffdash/domain/repository-path"
 import { ReviewProjectId } from "@diffdash/domain/review-identity"
+import { PROJECT_WORKSPACE_CODE_ACTIVITY_ID } from "@diffdash/domain/project-workspace"
 import { Suspense, useState } from "react"
 import { createRoot, type Root } from "react-dom/client"
 import { afterEach, describe, expect, it, vi } from "vitest"
 import { page } from "vitest/browser"
 
 import { installDiffDashApi } from "@/test/app-browser-support"
+import { CORE_PROJECT_ACTIVITIES } from "@/extensions/core-workspace/core-workspace-extension"
 import { FloatingPaneWorkspace } from "@/shared/ui/floating-pane"
 import { isMacPlatform } from "@/shell/keyboard-shortcut-platform"
 
@@ -91,6 +93,8 @@ describe("CodeScreen definitions", () => {
       return (
         <CodeScreen
           active
+          activeActivity={PROJECT_WORKSPACE_CODE_ACTIVITY_ID}
+          activities={CORE_PROJECT_ACTIVITIES}
           codeThemes={DEFAULT_CODE_THEME_PREFERENCES}
           colorScheme="light"
           contextWidth={280}
@@ -100,7 +104,7 @@ describe("CodeScreen definitions", () => {
           sidebarExpanded
           target={ProjectHeadCodeWorkspaceTarget.make({ projectId: repo.id })}
           threadDetailWidth={320}
-          onActiveRibbonChange={() => undefined}
+          onActiveActivityChange={() => undefined}
           onLinkRepository={() => undefined}
           onSelectedPathChange={(path) => {
             selectedPathChanges(path)

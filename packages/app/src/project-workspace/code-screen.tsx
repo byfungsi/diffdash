@@ -9,13 +9,14 @@ import {
   ProjectHeadCodeWorkspaceTarget,
 } from "@diffdash/domain/code-workspace"
 import type { DiffFileStatus } from "@diffdash/domain/diff"
-import type { ProjectWorkspaceRibbon } from "@diffdash/domain/project-workspace"
+import type { ProjectWorkspaceActivityId } from "@diffdash/domain/project-workspace"
 import { LanguagePosition, LanguageRange } from "@diffdash/domain/language"
 import type { Repo } from "@diffdash/domain/repository"
 import { RepositoryRelativePath } from "@diffdash/domain/repository-path"
 import { HashMap, Match, Option, Schema } from "effect"
 import { useEffect, useEffectEvent, useRef, useState } from "react"
 
+import type { ProjectActivityContribution } from "@/extensions/extension-registry"
 import { runRendererPromise, useCodeWorkspace } from "@/platform/renderer-runtime"
 import { formatError } from "@/shared/errors"
 import { Button } from "@/shared/ui/button"
@@ -57,6 +58,8 @@ const EMPTY_LINE_CHANGES = HashMap.empty<RepositoryRelativePath, readonly CodeLi
 /** Managed exact-revision Code browser with lazy directory and filename loading. */
 export const CodeScreen = ({
   active,
+  activeActivity,
+  activities,
   codeThemes,
   colorScheme,
   contextWidth,
@@ -68,8 +71,8 @@ export const CodeScreen = ({
   sidebarExpanded,
   target,
   threadDetailWidth,
-  onActiveRibbonChange,
   onHistoryDefinitionNavigationHandled,
+  onActiveActivityChange,
   onLinkRepository,
   onNavigateToDefinition,
   onSelectedPathChange,
@@ -78,6 +81,8 @@ export const CodeScreen = ({
   onThreadDetailWidthChange,
 }: {
   readonly active: boolean
+  readonly activeActivity: ProjectWorkspaceActivityId
+  readonly activities: readonly ProjectActivityContribution[]
   readonly codeThemes: CodeThemePreferences
   readonly colorScheme: ColorScheme
   readonly contextWidth: number
@@ -89,8 +94,8 @@ export const CodeScreen = ({
   readonly sidebarExpanded: boolean
   readonly target: CodeWorkspaceTarget
   readonly threadDetailWidth: number
-  readonly onActiveRibbonChange: (ribbon: ProjectWorkspaceRibbon) => void
   readonly onHistoryDefinitionNavigationHandled?: (id: number) => void
+  readonly onActiveActivityChange: (activityId: ProjectWorkspaceActivityId) => void
   readonly onLinkRepository: () => void
   readonly onNavigateToDefinition?: (destination: LanguageNavigationDestination) => void
   readonly onSelectedPathChange: (path: RepositoryRelativePath | null) => void
@@ -582,13 +587,14 @@ export const CodeScreen = ({
   return (
     <>
       <ProjectWorkspaceFrame
-        activeRibbon="code"
+        activeActivity={activeActivity}
+        activities={activities}
         context={context}
         contextWidth={contextWidth}
         main={main}
         sidebarExpanded={sidebarExpanded}
         threadDetailWidth={threadDetailWidth}
-        onActiveRibbonChange={onActiveRibbonChange}
+        onActiveActivityChange={onActiveActivityChange}
         onSidebarExpandedChange={onSidebarExpandedChange}
         onSidebarWidthChange={onSidebarWidthChange}
         onThreadDetailWidthChange={onThreadDetailWidthChange}

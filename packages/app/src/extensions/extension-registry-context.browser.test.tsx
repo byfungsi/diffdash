@@ -41,7 +41,9 @@ describe("TrustedExtensionRegistryProvider", () => {
     )
 
     await vi.waitFor(() => {
-      expect(container.textContent).toBe("Comments:diffdash.builtin.review-comments")
+      expect(container.textContent).toBe(
+        "Reviews:diffdash.core.workspace,Files:diffdash.core.workspace,Code:diffdash.core.workspace,Walkthrough:diffdash.core.workspace,Comments:diffdash.builtin.review-comments",
+      )
     })
   })
 })

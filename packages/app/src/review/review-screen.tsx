@@ -1,9 +1,16 @@
 /* oxlint-disable eslint/no-underscore-dangle -- Domain unions use Effect-compatible _tag discriminants. */
-import type { ProjectWorkspaceRibbon } from "@diffdash/domain/project-workspace"
+import {
+  PROJECT_WORKSPACE_FILES_ACTIVITY_ID,
+  PROJECT_WORKSPACE_REVIEWS_ACTIVITY_ID,
+  PROJECT_WORKSPACE_WALKTHROUGH_ACTIVITY_ID,
+  type ProjectWorkspaceActivityId,
+  REVIEW_COMMENTS_ACTIVITY_ID,
+} from "@diffdash/domain/project-workspace"
 import type { ReactNode } from "react"
 import { useEffect, useState } from "react"
 import { Match } from "effect"
 
+import type { ProjectActivityContribution } from "@/extensions/extension-registry"
 import { ProjectWorkspaceFrame } from "@/project-workspace/project-workspace-frame"
 import { Button } from "@/shared/ui/button"
 import { ProjectWorkspaceStatePanel } from "@/shared/ui/project-workspace-state-panel"
@@ -17,30 +24,33 @@ import type { ReviewSourceOperationProjection } from "./use-review-source-operat
 import { useProgressiveReviewContent } from "./use-progressive-review-content"
 import { useViewedFileMutations } from "./use-viewed-file-mutations"
 
-type ReviewWorkspaceRibbon = Exclude<ProjectWorkspaceRibbon, "code">
+type ReviewWorkspaceRibbon = "reviews" | "files" | "walkthrough" | "threads"
 
 /** Branches once over normalized selection and directly composes ready review detail. */
 export const ReviewScreen = ({
-  activeRibbon,
+  activeActivity,
+  activities,
   detailEnvironment,
   reviewsContext,
   reviewsMain,
   selection,
   sourceOperations,
   workspaceNotice,
-  onActiveRibbonChange,
+  onActiveActivityChange,
   onRetrySelection,
 }: {
-  readonly activeRibbon: ReviewWorkspaceRibbon
+  readonly activeActivity: ProjectWorkspaceActivityId
+  readonly activities: readonly ProjectActivityContribution[]
   readonly detailEnvironment: ReviewDetailEnvironment
   readonly reviewsContext: ReactNode
   readonly reviewsMain: ReactNode
   readonly selection: ReviewSelectionProjection
   readonly sourceOperations: ReviewSourceOperationProjection
   readonly workspaceNotice: string | null
-  readonly onActiveRibbonChange: (ribbon: ProjectWorkspaceRibbon) => void
+  readonly onActiveActivityChange: (activityId: ProjectWorkspaceActivityId) => void
   readonly onRetrySelection: () => void
 }) => {
+  const activeRibbon = projectWorkspaceActivityToReviewRibbon(activeActivity)
   const readySelection = Match.valueTags(selection, {
     ready: (ready) => ready,
     loading: () => null,
@@ -55,12 +65,13 @@ export const ReviewScreen = ({
     return (
       <ReadyReviewScreen
         key={readySelection.sourceKey}
-        activeRibbon={activeRibbon}
+        activeActivity={activeActivity}
+        activities={activities}
         detailEnvironment={detailEnvironment}
         reviewsContext={reviewsContext}
         selection={readySelection}
         operations={readyOperations.operations}
-        onActiveRibbonChange={onActiveRibbonChange}
+        onActiveActivityChange={onActiveActivityChange}
       />
     )
   }
@@ -72,13 +83,14 @@ export const ReviewScreen = ({
       <WorkspaceContextUnavailable
         ribbon={activeRibbon}
         selection={selection}
-        onReviews={() => onActiveRibbonChange("reviews")}
+        onReviews={() => onActiveActivityChange(PROJECT_WORKSPACE_REVIEWS_ACTIVITY_ID)}
       />
     )
 
   return (
     <ProjectWorkspaceFrame
-      activeRibbon={activeRibbon}
+      activeActivity={activeActivity}
+      activities={activities}
       context={context}
       contextWidth={detailEnvironment.sidebarWidth}
       main={
@@ -88,12 +100,12 @@ export const ReviewScreen = ({
           reviewsMain={reviewsMain}
           selection={selection}
           onRetry={onRetrySelection}
-          onReviews={() => onActiveRibbonChange("reviews")}
+          onReviews={() => onActiveActivityChange(PROJECT_WORKSPACE_REVIEWS_ACTIVITY_ID)}
         />
       }
       sidebarExpanded={detailEnvironment.sidebarExpanded}
       threadDetailWidth={detailEnvironment.threadDetailWidth}
-      onActiveRibbonChange={onActiveRibbonChange}
+      onActiveActivityChange={onActiveActivityChange}
       onSidebarExpandedChange={detailEnvironment.onSidebarExpandedChange}
       onSidebarWidthChange={detailEnvironment.onSidebarWidthChange}
       onThreadDetailWidthChange={detailEnvironment.onThreadDetailWidthChange}
@@ -102,19 +114,21 @@ export const ReviewScreen = ({
 }
 
 const ReadyReviewScreen = ({
-  activeRibbon,
+  activeActivity,
+  activities,
   detailEnvironment,
   reviewsContext,
   selection,
   operations,
-  onActiveRibbonChange,
+  onActiveActivityChange,
 }: {
-  readonly activeRibbon: ReviewWorkspaceRibbon
+  readonly activeActivity: ProjectWorkspaceActivityId
+  readonly activities: readonly ProjectActivityContribution[]
   readonly detailEnvironment: ReviewDetailEnvironment
   readonly reviewsContext: ReactNode
   readonly selection: Extract<ReviewSelectionProjection, { readonly _tag: "ready" }>
   readonly operations: ReadyReviewDetailState["sourceOperations"]
-  readonly onActiveRibbonChange: (ribbon: ProjectWorkspaceRibbon) => void
+  readonly onActiveActivityChange: (activityId: ProjectWorkspaceActivityId) => void
 }) => {
   const content = useProgressiveReviewContent(selection.review.manifest, operations.refresh)
   const inventory = content.inventory
@@ -169,11 +183,12 @@ const ReadyReviewScreen = ({
 
   return (
     <ReviewDetailView
-      activeRibbon={activeRibbon}
+      activeActivity={activeActivity}
+      activities={activities}
       environment={detailEnvironment}
       ready={ready}
       reviewsContext={reviewsContext}
-      onActiveRibbonChange={onActiveRibbonChange}
+      onActiveActivityChange={onActiveActivityChange}
     />
   )
 }
@@ -332,5 +347,14 @@ const ribbonLabel = (ribbon: ReviewWorkspaceRibbon) =>
     : ribbon === "walkthrough"
       ? "Walkthrough"
       : ribbon === "threads"
-        ? "Threads"
+        ? "Comments"
         : "Reviews"
+
+const projectWorkspaceActivityToReviewRibbon = (
+  activityId: ProjectWorkspaceActivityId,
+): ReviewWorkspaceRibbon => {
+  if (activityId === PROJECT_WORKSPACE_FILES_ACTIVITY_ID) return "files"
+  if (activityId === PROJECT_WORKSPACE_WALKTHROUGH_ACTIVITY_ID) return "walkthrough"
+  if (activityId === REVIEW_COMMENTS_ACTIVITY_ID) return "threads"
+  return "reviews"
+}
