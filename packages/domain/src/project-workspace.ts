@@ -49,7 +49,7 @@ export const ProjectWorkspaceSurface = Schema.Literals(["review", "code"])
 /** Main source surface kept visible while project activities change. */
 export type ProjectWorkspaceSurface = typeof ProjectWorkspaceSurface.Type
 
-/** Bounded namespaced identity for one project workspace activity contribution. */
+/** Lowercase activity ID with 3+ dot segments and at most 128 ASCII identifier characters. */
 export const ProjectWorkspaceActivityId = Schema.String.pipe(
   Schema.check(Schema.isMaxLength(128)),
   Schema.check(
@@ -60,7 +60,7 @@ export const ProjectWorkspaceActivityId = Schema.String.pipe(
   Schema.brand("ProjectWorkspaceActivityId"),
 )
 
-/** Bounded namespaced identity for one project workspace activity contribution. */
+/** Lowercase activity ID with 3+ dot segments and at most 128 ASCII identifier characters. */
 export type ProjectWorkspaceActivityId = typeof ProjectWorkspaceActivityId.Type
 
 /** Stable activity identity for the built-in Reviews activity. */
@@ -109,6 +109,11 @@ export type ProjectWorkspaceActivityResolution =
       readonly selection: ProjectWorkspaceActivitySelection
       readonly unavailableActivity: ProjectWorkspaceActivityId
     }
+  | {
+      readonly _tag: "unresolved"
+      readonly selection: ProjectWorkspaceActivitySelection
+      readonly unavailableActivity: ProjectWorkspaceActivityId
+    }
 
 /** Selects a project activity while applying its explicit source-surface policy. */
 export const selectProjectWorkspaceActivity = (
@@ -129,14 +134,28 @@ export const resolveProjectWorkspaceActivity = (
     return { _tag: "available", selection }
   }
 
+  const fallbackActivity =
+    selection.activeSurface === "code"
+      ? availableActivityIds.find((activityId) => activityId === PROJECT_WORKSPACE_CODE_ACTIVITY_ID)
+      : availableActivityIds.find(
+          (activityId) =>
+            activityId === PROJECT_WORKSPACE_REVIEWS_ACTIVITY_ID ||
+            activityId === PROJECT_WORKSPACE_FILES_ACTIVITY_ID,
+        )
+
+  if (fallbackActivity === undefined) {
+    return {
+      _tag: "unresolved",
+      selection,
+      unavailableActivity: selection.activeActivity,
+    }
+  }
+
   return {
     _tag: "repaired",
     selection: {
       activeSurface: selection.activeSurface,
-      activeActivity:
-        selection.activeSurface === "code"
-          ? PROJECT_WORKSPACE_CODE_ACTIVITY_ID
-          : PROJECT_WORKSPACE_REVIEWS_ACTIVITY_ID,
+      activeActivity: fallbackActivity,
     },
     unavailableActivity: selection.activeActivity,
   }

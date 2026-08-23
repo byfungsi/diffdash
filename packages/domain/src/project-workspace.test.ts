@@ -209,6 +209,38 @@ describe("project workspace", () => {
       },
       unavailableActivity: "example.extension.missing",
     })
+    expect(
+      resolveProjectWorkspaceActivity(
+        {
+          activeSurface: "review",
+          activeActivity: ProjectWorkspaceActivityId.make("example.extension.missing"),
+        },
+        [PROJECT_WORKSPACE_FILES_ACTIVITY_ID],
+      ),
+    ).toEqual({
+      _tag: "repaired",
+      selection: {
+        activeSurface: "review",
+        activeActivity: PROJECT_WORKSPACE_FILES_ACTIVITY_ID,
+      },
+      unavailableActivity: "example.extension.missing",
+    })
+    expect(
+      resolveProjectWorkspaceActivity(
+        {
+          activeSurface: "code",
+          activeActivity: ProjectWorkspaceActivityId.make("example.extension.missing"),
+        },
+        [PROJECT_WORKSPACE_REVIEWS_ACTIVITY_ID],
+      ),
+    ).toEqual({
+      _tag: "unresolved",
+      selection: {
+        activeSurface: "code",
+        activeActivity: "example.extension.missing",
+      },
+      unavailableActivity: "example.extension.missing",
+    })
   })
 
   it("models no selection and each complete hosted or local review target", () => {
