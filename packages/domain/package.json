@@ -24,6 +24,7 @@
     "./local-review": "./src/local-review.ts",
     "./local-checkout-file": "./src/local-checkout-file.ts",
     "./project-workspace": "./src/project-workspace.ts",
+    "./prerequisites": "./src/prerequisites.ts",
     "./provider-failure": "./src/provider-failure.ts",
     "./repository": "./src/repository.ts",
     "./repository-path": "./src/repository-path.ts",

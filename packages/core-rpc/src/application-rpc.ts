@@ -1,5 +1,5 @@
-import { AgentModelId, AgentProviderId } from "@diffdash/domain/agent-provider"
-import { AgentCapability, AgentModelQuality, AISettings } from "@diffdash/domain/ai-settings"
+import { AgentProviderCatalog } from "@diffdash/domain/agent-provider"
+import { AISettings } from "@diffdash/domain/ai-settings"
 import {
   CodeWorkspaceDirectoryPage,
   CodeWorkspaceChangesResult,
@@ -10,7 +10,6 @@ import {
   CodeWorkspaceSearchResult,
   CodeWorkspaceTarget,
 } from "@diffdash/domain/code-workspace"
-import { ExecutablePath } from "@diffdash/domain/executable-path"
 import { LanguagePosition, RepositoryLanguageLocationResult } from "@diffdash/domain/language"
 import {
   CommentDestination,
@@ -23,7 +22,6 @@ import {
 import {
   GitFileRevision,
   GitProviderDescriptor,
-  GitProviderDiagnostic,
   GitProviderId,
   HostedRepository,
   HostedRepositoryLocator,
@@ -42,6 +40,7 @@ import {
 import {
   RepositoryComparisonRef,
   RepositoryComparisonTarget,
+  ResolvedRepositoryComparison,
 } from "@diffdash/domain/repository-comparison"
 import {
   Repo,
@@ -50,6 +49,7 @@ import {
   RepositorySearchScope,
 } from "@diffdash/domain/repository"
 import { RepositoryRelativePath } from "@diffdash/domain/repository-path"
+import { AppPrerequisites, DiffDashCliInstallResult } from "@diffdash/domain/prerequisites"
 import {
   HostedReviewSnapshotManifest,
   LocalReviewSnapshotManifest,
@@ -60,6 +60,7 @@ import {
   ReviewKey,
   ReviewProjectId,
   ReviewRevision,
+  ViewedFileRecord,
 } from "@diffdash/domain/review-identity"
 import {
   ReviewThread,
@@ -171,86 +172,6 @@ const AnalyticsEvent = Schema.Union([
   Schema.Struct({ event: Schema.Literal("update_install_started") }),
 ])
 
-const AgentProviderCapabilityStatus = Schema.TaggedUnion({
-  Ready: { runtimeVersion: Schema.NullOr(Schema.String) },
-  Unavailable: { reason: Schema.String },
-  PolicyUnsupported: { reason: Schema.String },
-  Unsupported: { reason: Schema.String },
-})
-const AgentProviderCatalog = Schema.Struct({
-  providers: Schema.Array(
-    Schema.Struct({
-      id: AgentProviderId,
-      displayName: Schema.NonEmptyString,
-      description: Schema.String,
-      homepage: Schema.NullOr(WebUrl),
-      capabilities: Schema.Record(AgentCapability, AgentProviderCapabilityStatus),
-      models: Schema.Array(
-        Schema.Struct({
-          id: AgentModelId,
-          displayName: Schema.NonEmptyString,
-          capabilities: Schema.Array(AgentCapability),
-          quality: AgentModelQuality,
-        }),
-      ),
-      defaults: Schema.Struct({
-        walkthroughModel: Schema.NullOr(AgentModelId),
-        reviewThreadModel: Schema.NullOr(AgentModelId),
-      }),
-      setup: Schema.Array(
-        Schema.Struct({
-          name: Schema.NonEmptyString,
-          versionRange: Schema.NullOr(Schema.String),
-          installHint: Schema.NullOr(Schema.String),
-        }),
-      ),
-    }),
-  ),
-  autoCandidates: Schema.Struct({
-    walkthrough: Schema.Array(AgentProviderId),
-    reviewThread: Schema.Array(AgentProviderId),
-  }),
-})
-
-const AppPrerequisites = Schema.Struct({
-  gitInstalled: Schema.Boolean,
-  ghInstalled: Schema.Boolean,
-  ghVersion: Schema.NullOr(Schema.String),
-  ghSearchRepositoriesAvailable: Schema.Boolean,
-  ghSupported: Schema.Boolean,
-  ghAuthenticated: Schema.Boolean,
-  codingAgentInstalled: Schema.Boolean,
-  installedCodingAgents: Schema.Array(
-    Schema.String.pipe(Schema.check(Schema.isMinLength(1)), Schema.brand("CodingAgentName")),
-  ),
-  providerDiagnostics: Schema.Array(
-    Schema.Struct({ descriptor: GitProviderDescriptor, diagnostic: GitProviderDiagnostic }),
-  ),
-  setupRequirements: Schema.Array(
-    Schema.Struct({
-      key: Schema.String.pipe(
-        Schema.check(Schema.isMinLength(1)),
-        Schema.brand("SetupRequirementKey"),
-      ),
-      providerId: Schema.NullOr(Schema.Union([GitProviderId, AgentProviderId])),
-      title: Schema.String,
-      description: Schema.String,
-      detail: Schema.String,
-      ready: Schema.Boolean,
-      requiredForLocalUse: Schema.Boolean,
-      helpUrl: Schema.NullOr(WebUrl),
-    }),
-  ),
-  diffDashCliInstalled: Schema.Boolean,
-  diffDashCliInPath: Schema.Boolean,
-  diffDashCliPath: Schema.NullOr(ExecutablePath),
-  checkedAt: Schema.String,
-})
-const DiffDashCliInstallResult = Schema.Struct({
-  path: ExecutablePath,
-  pathSetupCommand: Schema.NullOr(Schema.String),
-})
-
 const CliRepositorySelector = Schema.Struct({
   providerId: Schema.NullOr(GitProviderId),
   namespace: RepositoryNamespace,
@@ -262,12 +183,6 @@ const OpenRepositoryComparisonCommand = Schema.TaggedStruct("openRepositoryCompa
   baseRef: RepositoryComparisonRef,
   headRef: RepositoryComparisonRef,
 })
-const ResolvedRepositoryComparison = Schema.Struct({
-  repo: Repo,
-  target: Schema.Union([RepositoryComparisonTarget, LocalReviewTarget]),
-})
-const ViewedFileRecord = Schema.Struct({ reviewKey: ReviewKey, patchHash: ReviewFilePatchHash })
-
 /** Stable public failure code emitted by an application RPC adapter. */
 export const CoreApplicationFailureCode = Schema.String.pipe(
   Schema.check(Schema.isMinLength(1)),

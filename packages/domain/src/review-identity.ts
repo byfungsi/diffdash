@@ -66,6 +66,12 @@ export const ReviewFilePatchHash = Schema.String.pipe(
 /** Canonical displayed-patch identity used to retain viewed state across revisions. */
 export type ReviewFilePatchHash = typeof ReviewFilePatchHash.Type
 
+/** Persisted viewed-file identity returned for one review scope. */
+export class ViewedFileRecord extends Schema.Class<ViewedFileRecord>("ViewedFileRecord")({
+  reviewKey: ReviewKey,
+  patchHash: ReviewFilePatchHash,
+}) {}
+
 /** Snapshot-local identity for one parsed diff hunk. */
 export const ReviewHunkId = Schema.String.pipe(
   Schema.check(Schema.isMinLength(1)),

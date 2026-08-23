@@ -2,7 +2,7 @@ import { Effect, Schema } from "effect"
 
 import { ChangedFile } from "./git-provider"
 import { RepositoryCheckoutPath } from "./repository"
-import { RepositoryComparisonRef } from "./repository-comparison"
+import { RepositoryComparisonRef } from "./repository-comparison-ref"
 import { ReviewDiffIdentity, ReviewRevision } from "./review-identity"
 
 /** Local changes compared with the checkout's current HEAD. */

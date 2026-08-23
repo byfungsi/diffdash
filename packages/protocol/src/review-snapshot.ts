@@ -1,7 +1,6 @@
 import { HostedReviewLocator } from "@diffdash/domain/git-provider"
 import { LocalReviewTarget } from "@diffdash/domain/local-review"
 import { RepositoryComparisonTarget } from "@diffdash/domain/repository-comparison"
-import { Repo } from "@diffdash/domain/repository"
 import { RepositoryRelativePath } from "@diffdash/domain/repository-path"
 import {
   HostedReviewSnapshotManifest,
@@ -16,6 +15,8 @@ import {
 } from "@diffdash/domain/review-identity"
 import { Schema } from "effect"
 import { OpenRepositoryComparisonCommand } from "./cli-navigation"
+
+export { ResolvedRepositoryComparison } from "@diffdash/domain/repository-comparison"
 
 /** Stable identity for one exact literal occurrence in an immutable review snapshot. */
 export const ReviewSnapshotSearchMatchId = Schema.String.pipe(
@@ -38,14 +39,6 @@ export class AcquireLocalReviewSnapshotRequest extends Schema.Class<AcquireLocal
   "AcquireLocalReviewSnapshotRequest",
 )({
   target: LocalReviewTarget,
-}) {}
-
-/** Exact saved repository and immutable target resolved from one CLI command. */
-export class ResolvedRepositoryComparison extends Schema.Class<ResolvedRepositoryComparison>(
-  "ResolvedRepositoryComparison",
-)({
-  repo: Repo,
-  target: Schema.Union([RepositoryComparisonTarget, LocalReviewTarget]),
 }) {}
 
 /** Renderer request to resolve and pin one repository comparison command. */

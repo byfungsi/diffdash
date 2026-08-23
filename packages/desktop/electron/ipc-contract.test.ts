@@ -1,9 +1,17 @@
-import { AgentProviderId } from "@diffdash/domain/agent-provider"
+import {
+  AgentProviderAutoCandidates,
+  AgentProviderCapabilityStatus,
+  AgentProviderCatalog,
+  AgentProviderDefaults,
+  AgentProviderId,
+  AgentProviderStatus,
+} from "@diffdash/domain/agent-provider"
 import { AISettings, DEFAULT_AI_SETTINGS } from "@diffdash/domain/ai-settings"
 import { DiagnosticOperation } from "@diffdash/domain/diagnostic-operation"
 import { CodeWorkspaceLease, CodeWorkspaceLeaseId } from "@diffdash/domain/code-workspace"
 import { DiffFileVisibility } from "@diffdash/domain/diff"
 import { LocalRepositorySource } from "@diffdash/domain/git-provider"
+import { LocalReviewTarget } from "@diffdash/domain/local-review"
 import {
   LanguagePosition,
   LanguageRange,
@@ -12,8 +20,9 @@ import {
   RepositoryLanguageLocationResult,
 } from "@diffdash/domain/language"
 import { AgentProviderFailure } from "@diffdash/domain/provider-failure"
+import { AppPrerequisites } from "@diffdash/domain/prerequisites"
 import { LinkedCheckout, Repo, RepositoryCheckoutPath } from "@diffdash/domain/repository"
-import { GitCommitSha } from "@diffdash/domain/repository-comparison"
+import { GitCommitSha, ResolvedRepositoryComparison } from "@diffdash/domain/repository-comparison"
 import { RepositoryRelativePath } from "@diffdash/domain/repository-path"
 import { ReviewAgentProviderId } from "@diffdash/domain/review-agent-provider-id"
 import { WebUrl } from "@diffdash/domain/web-url"
@@ -24,7 +33,14 @@ import {
   ReviewKey,
   ReviewRevision,
   ReviewSnapshotId,
+  ViewedFileRecord,
 } from "@diffdash/domain/review-identity"
+import {
+  AgentProvidersGetCatalogRpc,
+  PrerequisitesGetRpc,
+  RepositoryComparisonsResolveRpc,
+  ViewedFilesListLocalRpc,
+} from "@diffdash/core-rpc/application-rpc"
 import { ApplicationInstanceId, CoreProcessEpoch, HostRequestId } from "@diffdash/core-rpc/identity"
 import { CoreReviewSessionFailure } from "@diffdash/core-rpc/review-session"
 import { ListOpenCodeSessionsRequest } from "@diffdash/protocol/ai-connection"
@@ -950,6 +966,181 @@ describe("IPC contract", () => {
     )(response)
 
     expect(envelope.value).toEqual(AppUpdateIdle.make({ currentVersion: "0.3.1" }))
+  })
+
+  it("re-encodes a Core RPC-decoded agent provider catalog for renderer IPC", async () => {
+    const providerId = AgentProviderId.make("fixture")
+    const catalog = AgentProviderCatalog.make({
+      providers: [
+        AgentProviderStatus.make({
+          id: providerId,
+          displayName: "Fixture",
+          description: "Packaged E2E provider",
+          homepage: null,
+          capabilities: {
+            walkthrough: AgentProviderCapabilityStatus.cases.Ready.make({
+              runtimeVersion: "1.0.0",
+            }),
+            "review-thread": AgentProviderCapabilityStatus.cases.Unsupported.make({
+              reason: "Not configured",
+            }),
+          },
+          models: [],
+          defaults: AgentProviderDefaults.make({
+            walkthroughModel: null,
+            reviewThreadModel: null,
+          }),
+          setup: [],
+        }),
+      ],
+      autoCandidates: AgentProviderAutoCandidates.make({
+        walkthrough: [providerId],
+        reviewThread: [],
+      }),
+    })
+    const coreCodec = Schema.toCodecJson(AgentProvidersGetCatalogRpc.successSchema)
+    const mainOwnedCatalog = Schema.decodeUnknownSync(coreCodec)(
+      Schema.encodeSync(coreCodec)(catalog),
+    )
+    const host = hostIpc()
+    const registry = new IpcControllerRegistry(testRendererSecurityPolicy(), host.api, [
+      InvokeChannel.agentProvidersGetCatalog,
+    ])
+    registry.define(InvokeChannel.agentProvidersGetCatalog, async () => mainOwnedCatalog)
+    registry.install()
+
+    const response = await host.handler?.(trustedEvent(), {})
+    const envelope = Schema.decodeUnknownSync(
+      successEnvelope(invokeResponseSchema(InvokeChannel.agentProvidersGetCatalog)),
+    )(response)
+
+    expect(response).toMatchObject({
+      _tag: "Success",
+      value: { providers: [{ id: providerId }] },
+    })
+    expect(mainOwnedCatalog).toBeInstanceOf(AgentProviderCatalog)
+    expect(mainOwnedCatalog.providers[0]).toBeInstanceOf(AgentProviderStatus)
+    expect(envelope.value).toBeInstanceOf(AgentProviderCatalog)
+  })
+
+  it("re-encodes other Core RPC-decoded domain classes for renderer IPC", async () => {
+    const target = LocalReviewTarget.make({
+      kind: "local",
+      rootPath: RepositoryCheckoutPath.make("/repo"),
+    })
+    const repo = Repo.make({
+      id: ReviewProjectId.make("repo"),
+      source: LocalRepositorySource.make(),
+      checkout: LinkedCheckout.make({
+        remoteUrl: "file:///repo",
+        path: target.rootPath,
+      }),
+      isFavorite: false,
+      lastOpenedAt: null,
+      lastSyncedAt: null,
+      createdAt: "2026-08-23T00:00:00.000Z",
+      updatedAt: "2026-08-23T00:00:00.000Z",
+    })
+    const comparison = ResolvedRepositoryComparison.make({ repo, target })
+    const comparisonCodec = Schema.toCodecJson(RepositoryComparisonsResolveRpc.successSchema)
+    const mainOwnedComparison = Schema.decodeUnknownSync(comparisonCodec)(
+      Schema.encodeSync(comparisonCodec)(comparison),
+    )
+    const comparisonHost = hostIpc()
+    const comparisonRegistry = new IpcControllerRegistry(
+      testRendererSecurityPolicy(),
+      comparisonHost.api,
+      [InvokeChannel.resolveRepositoryComparison],
+    )
+    comparisonRegistry.define(
+      InvokeChannel.resolveRepositoryComparison,
+      async () => mainOwnedComparison,
+    )
+    comparisonRegistry.install()
+
+    const comparisonResponse = await comparisonHost.handler?.(trustedEvent(), {
+      command: {
+        _tag: "openRepositoryComparison",
+        localPath: target.rootPath,
+        repository: null,
+        baseRef: "main",
+        headRef: "feature",
+      },
+    })
+    expect(comparisonResponse).toMatchObject({ _tag: "Success" })
+    const comparisonEnvelope = Schema.decodeUnknownSync(
+      successEnvelope(invokeResponseSchema(InvokeChannel.resolveRepositoryComparison)),
+    )(comparisonResponse)
+
+    expect(mainOwnedComparison).toBeInstanceOf(ResolvedRepositoryComparison)
+    expect(comparisonEnvelope.value).toBeInstanceOf(ResolvedRepositoryComparison)
+
+    const prerequisites = AppPrerequisites.make({
+      gitInstalled: true,
+      ghInstalled: false,
+      ghVersion: null,
+      ghSearchRepositoriesAvailable: false,
+      ghSupported: false,
+      ghAuthenticated: false,
+      codingAgentInstalled: false,
+      installedCodingAgents: [],
+      providerDiagnostics: [],
+      setupRequirements: [],
+      diffDashCliInstalled: false,
+      diffDashCliInPath: false,
+      diffDashCliPath: null,
+      checkedAt: "2026-08-23T00:00:00.000Z",
+    })
+    const prerequisitesCodec = Schema.toCodecJson(PrerequisitesGetRpc.successSchema)
+    const mainOwnedPrerequisites = Schema.decodeUnknownSync(prerequisitesCodec)(
+      Schema.encodeSync(prerequisitesCodec)(prerequisites),
+    )
+    const prerequisitesHost = hostIpc()
+    const prerequisitesRegistry = new IpcControllerRegistry(
+      testRendererSecurityPolicy(),
+      prerequisitesHost.api,
+      [InvokeChannel.appDiagnostics],
+    )
+    prerequisitesRegistry.define(InvokeChannel.appDiagnostics, async () => mainOwnedPrerequisites)
+    prerequisitesRegistry.install()
+
+    const prerequisitesResponse = await prerequisitesHost.handler?.(trustedEvent(), {})
+    expect(prerequisitesResponse).toMatchObject({ _tag: "Success" })
+    const prerequisitesEnvelope = Schema.decodeUnknownSync(
+      successEnvelope(invokeResponseSchema(InvokeChannel.appDiagnostics)),
+    )(prerequisitesResponse)
+
+    expect(mainOwnedPrerequisites).toBeInstanceOf(AppPrerequisites)
+    expect(prerequisitesEnvelope.value).toBeInstanceOf(AppPrerequisites)
+
+    const viewedFile = ViewedFileRecord.make({
+      reviewKey: ReviewKey.make("review"),
+      patchHash: ReviewFilePatchHash.make("patch"),
+    })
+    const viewedFilesCodec = Schema.toCodecJson(ViewedFilesListLocalRpc.successSchema)
+    const mainOwnedViewedFiles = Schema.decodeUnknownSync(viewedFilesCodec)(
+      Schema.encodeSync(viewedFilesCodec)([viewedFile]),
+    )
+    const viewedFilesHost = hostIpc()
+    const viewedFilesRegistry = new IpcControllerRegistry(
+      testRendererSecurityPolicy(),
+      viewedFilesHost.api,
+      [InvokeChannel.listLocalViewedFiles],
+    )
+    viewedFilesRegistry.define(InvokeChannel.listLocalViewedFiles, async () => mainOwnedViewedFiles)
+    viewedFilesRegistry.install()
+
+    const viewedFilesResponse = await viewedFilesHost.handler?.(trustedEvent(), {
+      target: Schema.encodeSync(LocalReviewTarget)(target),
+      sourceBranch: null,
+    })
+    expect(viewedFilesResponse).toMatchObject({ _tag: "Success" })
+    const viewedFilesEnvelope = Schema.decodeUnknownSync(
+      successEnvelope(invokeResponseSchema(InvokeChannel.listLocalViewedFiles)),
+    )(viewedFilesResponse)
+
+    expect(mainOwnedViewedFiles[0]).toBeInstanceOf(ViewedFileRecord)
+    expect(viewedFilesEnvelope.value[0]).toBeInstanceOf(ViewedFileRecord)
   })
 
   it("rejects response values that are not owned by the main-process schema runtime", async () => {

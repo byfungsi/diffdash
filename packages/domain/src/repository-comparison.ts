@@ -2,6 +2,8 @@ import { Schema } from "effect"
 
 import { ChangedFile, HostedRepositoryLocator, makeHostedRepositoryKey } from "./git-provider"
 import { RepositoryComparisonRef } from "./repository-comparison-ref"
+import { LocalReviewTarget } from "./local-review"
+import { Repo } from "./repository"
 import { ReviewKey, ReviewRevision } from "./review-identity"
 
 export { RepositoryComparisonRef } from "./repository-comparison-ref"
@@ -26,6 +28,14 @@ export class RepositoryComparisonTarget extends Schema.Class<RepositoryCompariso
   baseSha: GitCommitSha,
   headSha: GitCommitSha,
   mergeBaseSha: GitCommitSha,
+}) {}
+
+/** Exact saved repository and immutable target resolved from one comparison command. */
+export class ResolvedRepositoryComparison extends Schema.Class<ResolvedRepositoryComparison>(
+  "ResolvedRepositoryComparison",
+)({
+  repo: Repo,
+  target: Schema.Union([RepositoryComparisonTarget, LocalReviewTarget]),
 }) {}
 
 /** Renderer-safe metadata for one exact immutable repository comparison. */
