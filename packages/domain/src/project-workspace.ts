@@ -41,6 +41,107 @@ export const ProjectOpenResult = Schema.Union([ProjectOpened, ProjectRemoteSelec
 /** Canonical result of opening a local project in the main process. */
 export type ProjectOpenResult = typeof ProjectOpenResult.Type
 
+const projectWorkspaceActivityIdPattern = /^[a-z][a-z0-9-]*(?:\.[a-z][a-z0-9-]*){2,}$/u
+
+/** Main source surface kept visible while project activities change. */
+export const ProjectWorkspaceSurface = Schema.Literals(["review", "code"])
+
+/** Main source surface kept visible while project activities change. */
+export type ProjectWorkspaceSurface = typeof ProjectWorkspaceSurface.Type
+
+/** Bounded namespaced identity for one project workspace activity contribution. */
+export const ProjectWorkspaceActivityId = Schema.String.pipe(
+  Schema.check(Schema.isMaxLength(128)),
+  Schema.check(
+    Schema.makeFilter((value) => projectWorkspaceActivityIdPattern.test(value), {
+      message: "Expected a namespaced project workspace activity ID",
+    }),
+  ),
+  Schema.brand("ProjectWorkspaceActivityId"),
+)
+
+/** Bounded namespaced identity for one project workspace activity contribution. */
+export type ProjectWorkspaceActivityId = typeof ProjectWorkspaceActivityId.Type
+
+/** Stable activity identity for the built-in Reviews activity. */
+export const PROJECT_WORKSPACE_REVIEWS_ACTIVITY_ID =
+  ProjectWorkspaceActivityId.make("diffdash.core.reviews")
+
+/** Stable activity identity for the built-in Files activity. */
+export const PROJECT_WORKSPACE_FILES_ACTIVITY_ID =
+  ProjectWorkspaceActivityId.make("diffdash.core.files")
+
+/** Stable activity identity for the built-in Code activity. */
+export const PROJECT_WORKSPACE_CODE_ACTIVITY_ID =
+  ProjectWorkspaceActivityId.make("diffdash.core.code")
+
+/** Stable activity identity for the built-in Walkthrough activity. */
+export const PROJECT_WORKSPACE_WALKTHROUGH_ACTIVITY_ID = ProjectWorkspaceActivityId.make(
+  "diffdash.core.walkthrough",
+)
+
+/** Stable activity identity persisted for the trusted Review Comments extension. */
+export const REVIEW_COMMENTS_ACTIVITY_ID = ProjectWorkspaceActivityId.make(
+  "diffdash.builtin.review-comments.comments",
+)
+
+/** Source-surface effect applied when a project workspace activity is selected. */
+export const ProjectWorkspaceActivitySurfacePolicy = Schema.Literals(["review", "code", "preserve"])
+
+/** Source-surface effect applied when a project workspace activity is selected. */
+export type ProjectWorkspaceActivitySurfacePolicy =
+  typeof ProjectWorkspaceActivitySurfacePolicy.Type
+
+/** Active project source surface and activity selected independently. */
+export interface ProjectWorkspaceActivitySelection {
+  readonly activeSurface: ProjectWorkspaceSurface
+  readonly activeActivity: ProjectWorkspaceActivityId
+}
+
+/** Result of resolving a persisted activity against currently registered contributions. */
+export type ProjectWorkspaceActivityResolution =
+  | {
+      readonly _tag: "available"
+      readonly selection: ProjectWorkspaceActivitySelection
+    }
+  | {
+      readonly _tag: "repaired"
+      readonly selection: ProjectWorkspaceActivitySelection
+      readonly unavailableActivity: ProjectWorkspaceActivityId
+    }
+
+/** Selects a project activity while applying its explicit source-surface policy. */
+export const selectProjectWorkspaceActivity = (
+  selection: ProjectWorkspaceActivitySelection,
+  activeActivity: ProjectWorkspaceActivityId,
+  surfacePolicy: ProjectWorkspaceActivitySurfacePolicy,
+): ProjectWorkspaceActivitySelection => ({
+  activeSurface: surfacePolicy === "preserve" ? selection.activeSurface : surfacePolicy,
+  activeActivity,
+})
+
+/** Repairs an unavailable activity without changing the persisted source surface. */
+export const resolveProjectWorkspaceActivity = (
+  selection: ProjectWorkspaceActivitySelection,
+  availableActivityIds: readonly ProjectWorkspaceActivityId[],
+): ProjectWorkspaceActivityResolution => {
+  if (availableActivityIds.includes(selection.activeActivity)) {
+    return { _tag: "available", selection }
+  }
+
+  return {
+    _tag: "repaired",
+    selection: {
+      activeSurface: selection.activeSurface,
+      activeActivity:
+        selection.activeSurface === "code"
+          ? PROJECT_WORKSPACE_CODE_ACTIVITY_ID
+          : PROJECT_WORKSPACE_REVIEWS_ACTIVITY_ID,
+    },
+    unavailableActivity: selection.activeActivity,
+  }
+}
+
 /** Top-level project workspace section selected by the user. */
 export const ProjectWorkspaceRibbon = Schema.Literals([
   "reviews",

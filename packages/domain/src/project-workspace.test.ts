@@ -4,13 +4,21 @@ import { Schema } from "effect"
 import { HostedRepositorySource, makeHostedReviewLocator } from "./git-provider"
 import { BranchComparison, LocalReviewTarget, workingTreeReviewTarget } from "./local-review"
 import {
+  PROJECT_WORKSPACE_CODE_ACTIVITY_ID,
+  PROJECT_WORKSPACE_FILES_ACTIVITY_ID,
+  PROJECT_WORKSPACE_REVIEWS_ACTIVITY_ID,
+  PROJECT_WORKSPACE_WALKTHROUGH_ACTIVITY_ID,
   ProjectOpened,
   ProjectOpenResult,
   ProjectRemoteCandidate,
   ProjectRemoteSelectionRequired,
+  ProjectWorkspaceActivityId,
   ProjectWorkspaceRibbon,
   ProjectWorkspaceState,
   ProjectWorkspaceStateInput,
+  REVIEW_COMMENTS_ACTIVITY_ID,
+  resolveProjectWorkspaceActivity,
+  selectProjectWorkspaceActivity,
 } from "./project-workspace"
 import { LinkedCheckout, Repo, RepositoryCheckoutPath } from "./repository"
 import { RepositoryComparisonRef } from "./repository-comparison"
@@ -95,6 +103,112 @@ describe("project workspace", () => {
       ["reviews", "files", "code", "walkthrough", "threads"].map((value) => decode(value)),
     ).toEqual(["reviews", "files", "code", "walkthrough", "threads"])
     expect(() => decode("settings")).toThrow(/Expected/)
+  })
+
+  it("accepts bounded namespaced project activity IDs", () => {
+    const decode = Schema.decodeUnknownSync(ProjectWorkspaceActivityId)
+
+    expect(decode("diffdash.builtin.review-comments.comments")).toBe(REVIEW_COMMENTS_ACTIVITY_ID)
+    expect(() => decode("comments")).toThrow(/namespaced project workspace activity ID/)
+    expect(() => decode("DiffDash.core.reviews")).toThrow(
+      /namespaced project workspace activity ID/,
+    )
+    expect(() => decode(`diffdash.extension.${"a".repeat(110)}`)).toThrow(/at most 128/)
+  })
+
+  it("provides stable IDs for built-in project activities", () => {
+    expect([
+      PROJECT_WORKSPACE_REVIEWS_ACTIVITY_ID,
+      PROJECT_WORKSPACE_FILES_ACTIVITY_ID,
+      PROJECT_WORKSPACE_CODE_ACTIVITY_ID,
+      PROJECT_WORKSPACE_WALKTHROUGH_ACTIVITY_ID,
+      REVIEW_COMMENTS_ACTIVITY_ID,
+    ]).toEqual([
+      "diffdash.core.reviews",
+      "diffdash.core.files",
+      "diffdash.core.code",
+      "diffdash.core.walkthrough",
+      "diffdash.builtin.review-comments.comments",
+    ])
+  })
+
+  it("selects or preserves the source surface according to activity policy", () => {
+    const reviewSelection = {
+      activeSurface: "review" as const,
+      activeActivity: PROJECT_WORKSPACE_REVIEWS_ACTIVITY_ID,
+    }
+
+    expect(
+      selectProjectWorkspaceActivity(reviewSelection, PROJECT_WORKSPACE_CODE_ACTIVITY_ID, "code"),
+    ).toEqual({
+      activeSurface: "code",
+      activeActivity: PROJECT_WORKSPACE_CODE_ACTIVITY_ID,
+    })
+    expect(
+      selectProjectWorkspaceActivity(
+        reviewSelection,
+        PROJECT_WORKSPACE_FILES_ACTIVITY_ID,
+        "review",
+      ),
+    ).toEqual({
+      activeSurface: "review",
+      activeActivity: PROJECT_WORKSPACE_FILES_ACTIVITY_ID,
+    })
+    expect(
+      selectProjectWorkspaceActivity(reviewSelection, REVIEW_COMMENTS_ACTIVITY_ID, "preserve"),
+    ).toEqual({
+      activeSurface: "review",
+      activeActivity: REVIEW_COMMENTS_ACTIVITY_ID,
+    })
+  })
+
+  it("repairs unavailable activities based on the retained source surface", () => {
+    const availableActivityIds = [
+      PROJECT_WORKSPACE_REVIEWS_ACTIVITY_ID,
+      PROJECT_WORKSPACE_CODE_ACTIVITY_ID,
+      REVIEW_COMMENTS_ACTIVITY_ID,
+    ]
+    const availableSelection = {
+      activeSurface: "review" as const,
+      activeActivity: REVIEW_COMMENTS_ACTIVITY_ID,
+    }
+
+    expect(resolveProjectWorkspaceActivity(availableSelection, availableActivityIds)).toEqual({
+      _tag: "available",
+      selection: availableSelection,
+    })
+    expect(
+      resolveProjectWorkspaceActivity(
+        {
+          activeSurface: "code",
+          activeActivity: ProjectWorkspaceActivityId.make("example.extension.missing"),
+        },
+        availableActivityIds,
+      ),
+    ).toEqual({
+      _tag: "repaired",
+      selection: {
+        activeSurface: "code",
+        activeActivity: PROJECT_WORKSPACE_CODE_ACTIVITY_ID,
+      },
+      unavailableActivity: "example.extension.missing",
+    })
+    expect(
+      resolveProjectWorkspaceActivity(
+        {
+          activeSurface: "review",
+          activeActivity: ProjectWorkspaceActivityId.make("example.extension.missing"),
+        },
+        availableActivityIds,
+      ),
+    ).toEqual({
+      _tag: "repaired",
+      selection: {
+        activeSurface: "review",
+        activeActivity: PROJECT_WORKSPACE_REVIEWS_ACTIVITY_ID,
+      },
+      unavailableActivity: "example.extension.missing",
+    })
   })
 
   it("models no selection and each complete hosted or local review target", () => {
