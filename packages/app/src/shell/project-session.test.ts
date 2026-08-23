@@ -5,7 +5,10 @@ import {
 } from "@diffdash/domain/git-provider"
 import { LocalReviewTarget, RevisionRangeComparison } from "@diffdash/domain/local-review"
 import {
+  PROJECT_WORKSPACE_CODE_ACTIVITY_ID,
   PROJECT_WORKSPACE_FILES_ACTIVITY_ID,
+  PROJECT_WORKSPACE_REVIEWS_ACTIVITY_ID,
+  PROJECT_WORKSPACE_WALKTHROUGH_ACTIVITY_ID,
   ProjectOpened,
   ProjectRemoteCandidate,
   ProjectRemoteSelectionRequired,
@@ -39,6 +42,13 @@ const repo = Repo.make({
 })
 
 const makeDependencies = () => ({
+  availableActivityIds: [
+    PROJECT_WORKSPACE_REVIEWS_ACTIVITY_ID,
+    PROJECT_WORKSPACE_FILES_ACTIVITY_ID,
+    PROJECT_WORKSPACE_CODE_ACTIVITY_ID,
+    PROJECT_WORKSPACE_WALKTHROUGH_ACTIVITY_ID,
+    REVIEW_COMMENTS_ACTIVITY_ID,
+  ],
   loadWorkspace: async () => Option.none<ProjectWorkspaceState>(),
   openProject: async () => ProjectOpened.make({ repo }),
   resolveLocalReview: async () => {

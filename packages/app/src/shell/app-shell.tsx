@@ -21,12 +21,8 @@ import {
   PROJECT_WORKSPACE_CODE_ACTIVITY_ID,
   PROJECT_WORKSPACE_FILES_ACTIVITY_ID,
   PROJECT_WORKSPACE_REVIEWS_ACTIVITY_ID,
-  PROJECT_WORKSPACE_WALKTHROUGH_ACTIVITY_ID,
   type ProjectWorkspaceActivityId,
-  type ProjectWorkspaceActivitySurfacePolicy,
-  type ProjectWorkspaceRibbon,
   type ProjectWorkspaceSurface,
-  REVIEW_COMMENTS_ACTIVITY_ID,
   selectProjectWorkspaceActivity,
 } from "@diffdash/domain/project-workspace"
 import type { ReviewSnapshotFileInventory } from "@diffdash/domain/review-context"
@@ -52,6 +48,7 @@ import { useAtomRefresh, useAtomSet, useAtomValue } from "@effect/atom-react"
 import { HashMap, Match, Option } from "effect"
 import { AsyncResult } from "effect/unstable/reactivity"
 import { useDeferredValue, useEffect, useRef, useState } from "react"
+import { useTrustedExtensionRegistry } from "@/extensions/extension-registry-context"
 import { HomeScreen, hostedRepositoryLabel } from "@/home/home-screen"
 import { diagnosticsAtom } from "@/onboarding/atoms"
 import { OnboardingScreen } from "@/onboarding/onboarding-screen"
@@ -126,41 +123,12 @@ import {
 } from "./project-session"
 
 type Screen = "home" | "project"
-type ReviewWorkspaceRibbon = Exclude<ProjectWorkspaceRibbon, "code">
-
 const MOUSE_BUTTON_BACK = 3
 const EMPTY_PROVIDER_DESCRIPTORS: readonly GitProviderDescriptor[] = []
 const EMPTY_REPOSITORY_SEARCH_SCOPES: readonly RepositorySearchScope[] = []
 const EMPTY_REPOS: readonly Repo[] = []
 const EMPTY_HOSTED_REPOSITORIES: readonly HostedRepository[] = []
 const EMPTY_HOSTED_REVIEWS: readonly HostedReviewSummary[] = []
-
-interface ProjectWorkspaceRibbonActivity {
-  readonly id: ProjectWorkspaceActivityId
-  readonly surfacePolicy: ProjectWorkspaceActivitySurfacePolicy
-}
-
-const projectWorkspaceRibbonActivities = {
-  reviews: { id: PROJECT_WORKSPACE_REVIEWS_ACTIVITY_ID, surfacePolicy: "review" },
-  files: { id: PROJECT_WORKSPACE_FILES_ACTIVITY_ID, surfacePolicy: "review" },
-  code: { id: PROJECT_WORKSPACE_CODE_ACTIVITY_ID, surfacePolicy: "code" },
-  walkthrough: { id: PROJECT_WORKSPACE_WALKTHROUGH_ACTIVITY_ID, surfacePolicy: "review" },
-  threads: { id: REVIEW_COMMENTS_ACTIVITY_ID, surfacePolicy: "review" },
-} as const satisfies Readonly<Record<ProjectWorkspaceRibbon, ProjectWorkspaceRibbonActivity>>
-
-const projectWorkspaceRibbonActivity = (
-  ribbon: ProjectWorkspaceRibbon,
-): ProjectWorkspaceRibbonActivity => projectWorkspaceRibbonActivities[ribbon]
-
-const projectWorkspaceActivityToRibbon = (
-  activityId: ProjectWorkspaceActivityId,
-): ProjectWorkspaceRibbon => {
-  if (activityId === PROJECT_WORKSPACE_FILES_ACTIVITY_ID) return "files"
-  if (activityId === PROJECT_WORKSPACE_CODE_ACTIVITY_ID) return "code"
-  if (activityId === PROJECT_WORKSPACE_WALKTHROUGH_ACTIVITY_ID) return "walkthrough"
-  if (activityId === REVIEW_COMMENTS_ACTIVITY_ID) return "threads"
-  return "reviews"
-}
 
 /** Application shell coordinating navigation and feature composition. */
 export function AppShell() {
@@ -169,6 +137,7 @@ export function AppShell() {
   const preferences = useRendererPreferences()
   const projectWorkspace = useProjectWorkspace()
   const repositories = useRepositories()
+  const { projectActivities } = useTrustedExtensionRegistry()
   const [screen, setScreen] = useState<Screen>("home")
   const [selectedRepo, setSelectedRepo] = useState<Repo | null>(null)
   const [selectedReview, setSelectedReview] = useState<SelectedReviewTarget | null>(null)
@@ -176,7 +145,6 @@ export function AppShell() {
   const [activeActivity, setActiveActivity] = useState<ProjectWorkspaceActivityId>(
     PROJECT_WORKSPACE_REVIEWS_ACTIVITY_ID,
   )
-  const activeRibbon = projectWorkspaceActivityToRibbon(activeActivity)
   const [selectedCodePath, setSelectedCodePath] = useState<Option.Option<RepositoryRelativePath>>(
     Option.none,
   )
@@ -197,6 +165,7 @@ export function AppShell() {
   const [projectSession] = useState(
     () =>
       new ProjectSession({
+        availableActivityIds: projectActivities.map((activity) => activity.id),
         loadWorkspace: (projectId) => runRendererPromise(preferences.loadWorkspace(projectId)),
         openProject: (localPath, selectedRepository) =>
           runRendererPromise(repositories.openProject(localPath, selectedRepository)),
@@ -294,7 +263,7 @@ export function AppShell() {
   const remoteSearchAtom = remoteRepositorySearchAtom(remoteSearchKey)
   const selectedRepoPullRequestsAtom = pullRequestsAtom(selectedRepoKey)
   const selectedWorkingTreeKey =
-    activeRibbon !== "reviews" ||
+    activeActivity !== PROJECT_WORKSPACE_REVIEWS_ACTIVITY_ID ||
     selectedRepo?.localPath === null ||
     selectedRepo?.localPath === undefined
       ? ""
@@ -644,17 +613,18 @@ export function AppShell() {
     }
   }
 
-  const updateProjectRibbon = (ribbon: ProjectWorkspaceRibbon) => {
+  const updateProjectActivity = (activityId: ProjectWorkspaceActivityId) => {
+    const activity = projectActivities.find((candidate) => candidate.id === activityId)
+    if (activity === undefined) return
     projectSession.cancelRestore()
-    const activity = projectWorkspaceRibbonActivity(ribbon)
     const selection = selectProjectWorkspaceActivity(
       { activeSurface, activeActivity },
-      activity.id,
+      activityId,
       activity.surfacePolicy,
     )
     setActiveSurface(selection.activeSurface)
     setActiveActivity(selection.activeActivity)
-    if (selection.activeSurface === "code" && selectedRepo !== null) {
+    if (activeSurface !== "code" && selection.activeSurface === "code" && selectedRepo !== null) {
       setCodeWorkspaceMounted(true)
       setSelectedCodeTarget(ProjectHeadCodeWorkspaceTarget.make({ projectId: selectedRepo.id }))
       setCodeFileStatuses(new Map())
@@ -684,7 +654,7 @@ export function AppShell() {
     > = HashMap.empty(),
   ) => {
     if (selectedRepo === null) return
-    updateProjectRibbon("code")
+    updateProjectActivity(PROJECT_WORKSPACE_CODE_ACTIVITY_ID)
     setSelectedCodePath(Option.some(path))
     setSelectedCodeTarget(
       target ?? ProjectHeadCodeWorkspaceTarget.make({ projectId: selectedRepo.id }),
@@ -1088,10 +1058,10 @@ export function AppShell() {
     })
   const commandLabel = workbenchCommandLabel(selectedRepo, selectedReview, reviewSelection)
   const canNavigateBack = appState?.onboardingCompleted === true && screen !== "home"
-  const reviewRibbon = Option.liftPredicate(
-    activeRibbon,
-    (ribbon): ribbon is ReviewWorkspaceRibbon => activeSurface === "review" && ribbon !== "code",
-  )
+  const reviewActivity =
+    activeSurface === "review"
+      ? Option.some(activeActivity)
+      : Option.none<ProjectWorkspaceActivityId>()
   const openQuickNavigation = () => {
     if (reviewWorkbenchReady) {
       setReviewQuickNavigationRequest((request) => request + 1)
@@ -1223,6 +1193,8 @@ export function AppShell() {
                       <CodeScreen
                         key={selectedRepo.id}
                         active={activeSurface === "code"}
+                        activeActivity={activeActivity}
+                        activities={projectActivities}
                         codeThemes={aiSettings.codeThemes}
                         colorScheme={THEME_DEFINITIONS[resolvedTheme].colorScheme}
                         contextWidth={aiSettings.layout.review.contextWidth}
@@ -1236,7 +1208,7 @@ export function AppShell() {
                           ProjectHeadCodeWorkspaceTarget.make({ projectId: selectedRepo.id })
                         }
                         threadDetailWidth={aiSettings.layout.review.threadDetailWidth}
-                        onActiveRibbonChange={updateProjectRibbon}
+                        onActiveActivityChange={updateProjectActivity}
                         onLinkRepository={linkSelectedProjectRepository}
                         onSelectedPathChange={(path) =>
                           setSelectedCodePath(path === null ? Option.none : Option.some(path))
@@ -1246,11 +1218,12 @@ export function AppShell() {
                         onThreadDetailWidthChange={updateReviewThreadDetailWidth}
                       />
                     ) : null}
-                    {Option.match(reviewRibbon, {
+                    {Option.match(reviewActivity, {
                       onNone: () => null,
-                      onSome: (activeReviewRibbon) => (
+                      onSome: (activeReviewActivity) => (
                         <ReviewScreen
-                          activeRibbon={activeReviewRibbon}
+                          activeActivity={activeReviewActivity}
+                          activities={projectActivities}
                           detailEnvironment={{
                             aiAgentAvailable:
                               agentRouteAvailable(
@@ -1303,7 +1276,7 @@ export function AppShell() {
                           selection={reviewSelection}
                           sourceOperations={reviewSourceOperations}
                           workspaceNotice={workspaceNotice}
-                          onActiveRibbonChange={updateProjectRibbon}
+                          onActiveActivityChange={updateProjectActivity}
                           onRetrySelection={() => {
                             refreshSelectedHostedReview()
                             refreshSelectedLocalReview()

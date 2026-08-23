@@ -1,49 +1,35 @@
-import type { ProjectWorkspaceRibbon } from "@diffdash/domain/project-workspace"
+import type { ProjectWorkspaceActivityId } from "@diffdash/domain/project-workspace"
 import { Code2, Files, GitPullRequest, MessageSquare, Sparkles } from "lucide-react"
 import type { Ref } from "react"
 
+import type {
+  ProjectActivityContribution,
+  ProjectActivityIcon,
+} from "@/extensions/extension-registry"
 import { Button } from "@/shared/ui/button"
 import { cn } from "@/shared/utils"
 
 interface ProjectActivityNavigationProps {
-  readonly activeRibbon: ProjectWorkspaceRibbon
-  readonly buttonRefs?: Partial<Readonly<Record<ProjectWorkspaceRibbon, Ref<HTMLButtonElement>>>>
+  readonly activeActivity: ProjectWorkspaceActivityId
+  readonly activities: readonly ProjectActivityContribution[]
+  readonly buttonRefs?: ReadonlyMap<ProjectWorkspaceActivityId, Ref<HTMLButtonElement>>
   readonly placement: "rail" | "bottom"
   readonly sidebarExpanded: boolean
-  readonly onSelect: (ribbon: ProjectWorkspaceRibbon) => void
+  readonly onSelect: (activity: ProjectActivityContribution) => void
 }
 
-const activityDefinitions = {
-  reviews: { label: "Reviews", icon: GitPullRequest },
-  files: { label: "Files", icon: Files },
-  code: { label: "Code", icon: Code2 },
-  walkthrough: { label: "Walkthrough", icon: Sparkles },
-  threads: { label: "Threads", icon: MessageSquare },
-} as const satisfies Readonly<
-  Record<
-    ProjectWorkspaceRibbon,
-    {
-      readonly label: string
-      readonly icon: typeof Files
-    }
-  >
->
-
-const activities = [
-  { id: "reviews", ...activityDefinitions.reviews },
-  { id: "files", ...activityDefinitions.files },
-  { id: "code", ...activityDefinitions.code },
-  { id: "walkthrough", ...activityDefinitions.walkthrough },
-  { id: "threads", ...activityDefinitions.threads },
-] as const satisfies readonly {
-  readonly id: ProjectWorkspaceRibbon
-  readonly label: string
-  readonly icon: typeof Files
-}[]
+const activityIcons = {
+  reviews: GitPullRequest,
+  files: Files,
+  code: Code2,
+  walkthrough: Sparkles,
+  comments: MessageSquare,
+} as const satisfies Readonly<Record<ProjectActivityIcon, typeof Files>>
 
 /** Shared project activity rail used before, during, and after review loading. */
 export const ProjectActivityNavigation = ({
-  activeRibbon,
+  activeActivity,
+  activities,
   buttonRefs,
   placement,
   sidebarExpanded,
@@ -66,27 +52,48 @@ export const ProjectActivityNavigation = ({
         placement === "bottom" ? "flex-row justify-around" : "flex-col py-2",
       )}
     >
-      {activities.map(({ id, icon: Icon, label }) => (
-        <Button
-          key={id}
-          ref={buttonRefs?.[id]}
-          type="button"
-          size="icon-lg"
-          variant="ghost"
-          className={cn(
-            "text-shell-activity-rail-muted size-10 hover:bg-transparent hover:text-primary dark:hover:bg-transparent",
-            activeRibbon === id && "text-primary",
-          )}
-          aria-label={label}
-          aria-pressed={activeRibbon === id}
-          aria-expanded={activeRibbon === id && sidebarExpanded}
-          title={label}
-          onClick={() => onSelect(id)}
-        >
-          <Icon className="size-6" />
-          <span className="sr-only">{label}</span>
-        </Button>
-      ))}
+      {activities.map((activity) => {
+        const Icon = activityIcons[activity.icon]
+        const selected = activeActivity === activity.id
+        return (
+          <Button
+            key={activity.id}
+            ref={buttonRefs?.get(activity.id)}
+            type="button"
+            size="icon-lg"
+            variant="ghost"
+            className={cn(
+              "text-shell-activity-rail-muted size-10 hover:bg-transparent hover:text-primary dark:hover:bg-transparent",
+              selected && "text-primary",
+            )}
+            aria-label={activity.label}
+            aria-pressed={selected}
+            aria-expanded={selected && sidebarExpanded}
+            data-project-activity-id={activity.id}
+            data-project-activity-placement={placement}
+            title={activity.label}
+            onClick={() => {
+              onSelect(activity)
+              window.requestAnimationFrame(() => {
+                const buttons = document.querySelectorAll<HTMLButtonElement>(
+                  "[data-project-activity-id]",
+                )
+                Array.from(buttons)
+                  .find(
+                    (button) =>
+                      button.dataset.projectActivityId === activity.id &&
+                      button.dataset.projectActivityPlacement === placement &&
+                      button.ariaPressed === "true",
+                  )
+                  ?.focus()
+              })
+            }}
+          >
+            <Icon className="size-6" />
+            <span className="sr-only">{activity.label}</span>
+          </Button>
+        )
+      })}
     </nav>
   </aside>
 )

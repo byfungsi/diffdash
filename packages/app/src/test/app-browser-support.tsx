@@ -2029,29 +2029,41 @@ scenario("codeRibbon", async () => {
 
   document.querySelector<HTMLButtonElement>('button[aria-label="Reviews"]')?.click()
   await vi.waitFor(() => {
-    expect(
-      document.querySelector('button[aria-label="Reviews"][aria-pressed="true"]'),
-    ).not.toBeNull()
+    const reviewsButton = document.querySelector(
+      'button[aria-label="Reviews"][aria-pressed="true"]',
+    )
+    expect(reviewsButton).not.toBeNull()
+    expect(document.activeElement).toBe(reviewsButton)
   })
   document.querySelector<HTMLButtonElement>('button[aria-label="Code"]')?.click()
   await vi.waitFor(() => {
-    expect(document.querySelector('button[aria-label="Code"][aria-pressed="true"]')).not.toBeNull()
+    const codeButton = document.querySelector('button[aria-label="Code"][aria-pressed="true"]')
+    expect(codeButton).not.toBeNull()
+    expect(document.activeElement).toBe(codeButton)
     expect(calls.openCodeWorkspace).toHaveBeenCalledTimes(2)
     expect(calls.releaseCodeWorkspace).toHaveBeenCalledTimes(1)
   })
 
-  document.querySelector<HTMLButtonElement>('button[aria-label="Threads"]')?.click()
+  document.querySelector<HTMLButtonElement>('button[aria-label="Comments"]')?.click()
   await vi.waitFor(() => {
-    expect(
-      document.querySelector('button[aria-label="Threads"][aria-pressed="true"]'),
-    ).not.toBeNull()
+    const commentsButton = document.querySelector(
+      'button[aria-label="Comments"][aria-pressed="true"]',
+    )
+    expect(commentsButton).not.toBeNull()
+    expect(document.activeElement).toBe(commentsButton)
     expect(calls.saveProjectWorkspace).toHaveBeenLastCalledWith(
       expect.objectContaining({
-        activeSurface: "review",
+        activeSurface: "code",
         activeActivity: REVIEW_COMMENTS_ACTIVITY_ID,
       }),
     )
+    expect(calls.releaseCodeWorkspace).toHaveBeenCalledTimes(1)
+    expect(document.querySelector("diffs-container")?.shadowRoot?.textContent).toContain(
+      'export const app = "DiffDash"',
+    )
   })
+  await waitForAnimationFrames(2)
+  expect(calls.openCodeWorkspace).toHaveBeenCalledTimes(2)
 })
 
 scenario("codeRibbonLink", async () => {
@@ -3944,7 +3956,7 @@ scenario("threadNavigationConvergence", async () => {
 
   await openHostedReview(77)
   const threadsButton = await vi.waitFor(() => {
-    const button = document.querySelector<HTMLButtonElement>('button[aria-label="Threads"]')
+    const button = document.querySelector<HTMLButtonElement>('button[aria-label="Comments"]')
     expect(button).not.toBeNull()
     return button!
   })
@@ -4207,7 +4219,7 @@ scenario("reviewThreadSidebar", async () => {
   await openDefaultHostedReview()
   await showWideReviewLayout()
   const railButton = await vi.waitFor(() => {
-    const button = document.querySelector<HTMLButtonElement>('button[aria-label="Threads"]')
+    const button = document.querySelector<HTMLButtonElement>('button[aria-label="Comments"]')
     expect(button).not.toBeNull()
     return button!
   })
@@ -4220,7 +4232,7 @@ scenario("reviewThreadSidebar", async () => {
   const commandCenter = document.querySelector<HTMLButtonElement>("[data-workbench-command-center]")
   expect(activityRail).not.toBeNull()
   expect(treeActivity).not.toBeNull()
-  expect(railButton.textContent).toBe("Threads")
+  expect(railButton.textContent).toBe("Comments")
   expect(titlebar).not.toBeNull()
   expect(workbenchFrame).not.toBeNull()
   expect(reviewWorkspaceFrame).not.toBeNull()
@@ -4540,7 +4552,7 @@ scenario("reviewThreadSidebar", async () => {
       expect(getComputedStyle(bottomRail!).borderTopWidth).toBe("0px")
     })
 
-    document.querySelector<HTMLButtonElement>('button[aria-label="Threads"]')?.click()
+    document.querySelector<HTMLButtonElement>('button[aria-label="Comments"]')?.click()
     await vi.waitFor(() => {
       expect(lockDetail.parentElement?.getAttribute("aria-hidden")).toBe("true")
       expect(
@@ -4646,7 +4658,7 @@ scenario("reviewThreadSidebar", async () => {
     setInputValue(restoredFilterInput, "app")
     restoredFilterInput.dispatchEvent(new Event("input", { bubbles: true }))
   }
-  document.querySelector<HTMLButtonElement>('button[aria-label="Threads"]')?.click()
+  document.querySelector<HTMLButtonElement>('button[aria-label="Comments"]')?.click()
   const docsThreadButton = await vi.waitFor(() => {
     const button = document.querySelector<HTMLButtonElement>(
       'button[aria-label="Open thread details for docs/readme.md R1"]',
@@ -4683,7 +4695,7 @@ scenario("reviewThreadSidebar", async () => {
     { timeout: 10_000 },
   )
 
-  document.querySelector<HTMLButtonElement>('button[aria-label="Threads"]')?.click()
+  document.querySelector<HTMLButtonElement>('button[aria-label="Comments"]')?.click()
   const outdatedButton = await vi.waitFor(() => {
     const button = document.querySelector<HTMLButtonElement>(
       'button[aria-label="Open thread details for src/app.tsx R1"]',
@@ -4801,7 +4813,7 @@ scenario("reviewThreadSidebar", async () => {
   )
   await vi.waitFor(() => {
     const collapsedRailButton = document.querySelector<HTMLButtonElement>(
-      'button[aria-label="Threads"]',
+      'button[aria-label="Comments"]',
     )
     expect(document.querySelector("[data-review-thread-list]")).toBeNull()
     expect(document.activeElement).toBe(collapsedRailButton)
@@ -7271,7 +7283,7 @@ const showResponsiveDiffPane = async () => {
 
 const openOnlyReviewThreadInDiff = async (path: string, lineLabel: string) => {
   const threadsButton = await vi.waitFor(() => {
-    const button = document.querySelector<HTMLButtonElement>('button[aria-label="Threads"]')
+    const button = document.querySelector<HTMLButtonElement>('button[aria-label="Comments"]')
     expect(button).not.toBeNull()
     return button!
   })

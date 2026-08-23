@@ -159,7 +159,7 @@ export function useReviewThreads(scope: ReviewThreadScope): ReviewThreadsControl
       if (activeScopeKeyRef.current === requestedScopeKey) {
         setDetails([])
         setLoading(false)
-        setError("Threads are unavailable until the review revisions are known.")
+        setError("Comments are unavailable until the review revisions are known.")
       }
       return
     }
@@ -200,7 +200,7 @@ export function useReviewThreads(scope: ReviewThreadScope): ReviewThreadsControl
     if (!available) {
       setDetails([])
       setLoading(false)
-      setError("Threads are unavailable until the review revisions are known.")
+      setError("Comments are unavailable until the review revisions are known.")
       return undefined
     }
 

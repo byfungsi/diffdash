@@ -20,7 +20,14 @@ import {
 import { DiffFileVisibility, type ParsedDiffFile } from "@diffdash/domain/diff"
 import type { ReviewSnapshotFileInventory } from "@diffdash/domain/review-context"
 import type { ReviewFileId } from "@diffdash/domain/review-identity"
-import type { ProjectWorkspaceRibbon } from "@diffdash/domain/project-workspace"
+import {
+  PROJECT_WORKSPACE_CODE_ACTIVITY_ID,
+  PROJECT_WORKSPACE_FILES_ACTIVITY_ID,
+  PROJECT_WORKSPACE_REVIEWS_ACTIVITY_ID,
+  PROJECT_WORKSPACE_WALKTHROUGH_ACTIVITY_ID,
+  type ProjectWorkspaceActivityId,
+  REVIEW_COMMENTS_ACTIVITY_ID,
+} from "@diffdash/domain/project-workspace"
 import type { RepositoryRelativePath } from "@diffdash/domain/repository-path"
 import {
   ReviewLocationV1,
@@ -71,6 +78,7 @@ import {
   useRef,
   useState,
 } from "react"
+import type { ProjectActivityContribution } from "@/extensions/extension-registry"
 import {
   runRendererPromise,
   useDesktopRuntime,
@@ -161,7 +169,7 @@ import type { ProgressiveReviewContent } from "./use-progressive-review-content"
 import { diffCardDomId, useViewedFileViewport, type ViewedFileUpdate } from "./viewed-file-viewport"
 
 type ReviewSidebarTab = "reviews" | "tree" | "walkthrough" | "threads"
-type ReviewWorkspaceRibbon = Exclude<ProjectWorkspaceRibbon, "code">
+type ReviewWorkspaceRibbon = "reviews" | "files" | "walkthrough" | "threads"
 
 type PullRequestApprovalState = "checking" | "unapproved" | "approving" | "approved"
 
@@ -346,18 +354,21 @@ const reviewDiffHighlighterOptions = (
 
 /** Source-neutral review detail composition with its coupled ephemeral interaction state. */
 export const ReviewDetailView = ({
-  activeRibbon,
+  activeActivity,
+  activities,
   environment,
   ready,
   reviewsContext,
-  onActiveRibbonChange,
+  onActiveActivityChange,
 }: {
-  readonly activeRibbon: ReviewWorkspaceRibbon
+  readonly activeActivity: ProjectWorkspaceActivityId
+  readonly activities: readonly ProjectActivityContribution[]
   readonly environment: ReviewDetailEnvironment
   readonly ready: ReadyReviewDetailState
   readonly reviewsContext: ReactNode
-  readonly onActiveRibbonChange: (ribbon: ProjectWorkspaceRibbon) => void
+  readonly onActiveActivityChange: (activityId: ProjectWorkspaceActivityId) => void
 }) => {
+  const activeRibbon = projectWorkspaceActivityToReviewRibbon(activeActivity)
   const captureAnalytics = useCaptureAnalytics()
   const desktop = useDesktopRuntime()
   const reviewContentService = useReviewContent()
@@ -456,7 +467,7 @@ export const ReviewDetailView = ({
   )
   const sidebarTab = projectRibbonToSidebarTab(activeRibbon)
   const setSidebarTab = (tab: ReviewSidebarTab) =>
-    onActiveRibbonChange(sidebarTabToProjectRibbon(tab))
+    onActiveActivityChange(sidebarTabToProjectWorkspaceActivity(tab))
   const [walkthroughState, setWalkthroughState] = useState<WalkthroughState>({ status: "idle" })
   const [activeWalkthroughStepIndex, setActiveWalkthroughStepIndex] = useState(0)
   const [visitedWalkthroughStepIndexes, setVisitedWalkthroughStepIndexes] = useState<
@@ -1817,35 +1828,28 @@ export const ReviewDetailView = ({
         onDetailWidthCommit={onThreadDetailWidthChange}
         renderActivityNavigation={(placement) => (
           <ProjectActivityNavigation
-            activeRibbon={activeRibbon}
-            buttonRefs={{
-              reviews: reviewsActivityButtonRef,
-              files: treeActivityButtonRef,
-              walkthrough: walkthroughActivityButtonRef,
-              threads: threadsActivityButtonRef,
-            }}
+            activeActivity={activeActivity}
+            activities={activities}
+            buttonRefs={
+              new Map([
+                [PROJECT_WORKSPACE_REVIEWS_ACTIVITY_ID, reviewsActivityButtonRef],
+                [PROJECT_WORKSPACE_FILES_ACTIVITY_ID, treeActivityButtonRef],
+                [PROJECT_WORKSPACE_WALKTHROUGH_ACTIVITY_ID, walkthroughActivityButtonRef],
+                [REVIEW_COMMENTS_ACTIVITY_ID, threadsActivityButtonRef],
+              ])
+            }
             placement={placement}
             sidebarExpanded={sidebarExpanded && (placement === "rail" || activePane === "context")}
-            onSelect={(ribbon) => {
-              const reviewRibbon = Option.liftPredicate(
-                ribbon,
-                (candidate): candidate is ReviewWorkspaceRibbon => candidate !== "code",
+            onSelect={(activity) => {
+              if (activity.id === PROJECT_WORKSPACE_CODE_ACTIVITY_ID) {
+                onSidebarExpandedChange(true)
+                onActiveActivityChange(activity.id)
+                return
+              }
+              toggleSidebarTab(
+                projectRibbonToSidebarTab(projectWorkspaceActivityToReviewRibbon(activity.id)),
+                placement,
               )
-              Option.match(reviewRibbon, {
-                onSome: (candidate) =>
-                  toggleSidebarTab(projectRibbonToSidebarTab(candidate), placement),
-                onNone: () => {
-                  onSidebarExpandedChange(true)
-                  onActiveRibbonChange(ribbon)
-                  window.requestAnimationFrame(() => {
-                    document
-                      .querySelector<HTMLButtonElement>(
-                        'button[aria-label="Code"][aria-pressed="true"]',
-                      )
-                      ?.focus()
-                  })
-                },
-              })
             }}
           />
         )}
@@ -2182,7 +2186,12 @@ export const ReviewDetailView = ({
                           ? "Loading changed files..."
                           : (inventoryError ?? "No changed files in this review.")}
                       </p>
-                      <Button variant="outline" onClick={() => onActiveRibbonChange("reviews")}>
+                      <Button
+                        variant="outline"
+                        onClick={() =>
+                          onActiveActivityChange(PROJECT_WORKSPACE_REVIEWS_ACTIVITY_ID)
+                        }
+                      >
                         Choose another review
                       </Button>
                     </div>
@@ -2896,5 +2905,20 @@ const captureReviewSearchAnchor = (
 const projectRibbonToSidebarTab = (ribbon: ReviewWorkspaceRibbon): ReviewSidebarTab =>
   ribbon === "files" ? "tree" : ribbon
 
-const sidebarTabToProjectRibbon = (tab: ReviewSidebarTab): ReviewWorkspaceRibbon =>
-  tab === "tree" ? "files" : tab
+const sidebarTabToProjectWorkspaceActivity = (
+  tab: ReviewSidebarTab,
+): ProjectWorkspaceActivityId => {
+  if (tab === "tree") return PROJECT_WORKSPACE_FILES_ACTIVITY_ID
+  if (tab === "walkthrough") return PROJECT_WORKSPACE_WALKTHROUGH_ACTIVITY_ID
+  if (tab === "threads") return REVIEW_COMMENTS_ACTIVITY_ID
+  return PROJECT_WORKSPACE_REVIEWS_ACTIVITY_ID
+}
+
+const projectWorkspaceActivityToReviewRibbon = (
+  activityId: ProjectWorkspaceActivityId,
+): ReviewWorkspaceRibbon => {
+  if (activityId === PROJECT_WORKSPACE_FILES_ACTIVITY_ID) return "files"
+  if (activityId === PROJECT_WORKSPACE_WALKTHROUGH_ACTIVITY_ID) return "walkthrough"
+  if (activityId === REVIEW_COMMENTS_ACTIVITY_ID) return "threads"
+  return "reviews"
+}

@@ -8,7 +8,7 @@ import {
   PROJECT_WORKSPACE_CODE_ACTIVITY_ID,
   PROJECT_WORKSPACE_FILES_ACTIVITY_ID,
   PROJECT_WORKSPACE_REVIEWS_ACTIVITY_ID,
-  ProjectWorkspaceActivityId,
+  PROJECT_WORKSPACE_WALKTHROUGH_ACTIVITY_ID,
   ProjectWorkspaceState,
   REVIEW_COMMENTS_ACTIVITY_ID,
 } from "@diffdash/domain/project-workspace"
@@ -22,7 +22,21 @@ import { ReviewProjectId } from "@diffdash/domain/review-identity"
 import { HostedReviewTarget } from "@diffdash/domain/review-thread"
 import { describe, expect, it } from "vitest"
 
-import { resolveProjectWorkspaceState, selectedReviewTargetForPersistence } from "./workspace-state"
+import {
+  resolveProjectWorkspaceState as resolveWorkspaceState,
+  selectedReviewTargetForPersistence,
+} from "./workspace-state"
+
+const availableActivityIds = [
+  PROJECT_WORKSPACE_REVIEWS_ACTIVITY_ID,
+  PROJECT_WORKSPACE_FILES_ACTIVITY_ID,
+  PROJECT_WORKSPACE_CODE_ACTIVITY_ID,
+  PROJECT_WORKSPACE_WALKTHROUGH_ACTIVITY_ID,
+  REVIEW_COMMENTS_ACTIVITY_ID,
+]
+
+const resolveProjectWorkspaceState = <Persisted>(repo: Repo, persisted: Persisted) =>
+  resolveWorkspaceState(repo, persisted, availableActivityIds)
 
 const repo = Repo.make({
   id: ReviewProjectId.make("github:fungsi/diffdash"),
@@ -151,16 +165,22 @@ describe("project workspace state", () => {
     }
   })
 
-  it("repairs an unavailable activity without changing the source surface", () => {
-    const resolved = resolveProjectWorkspaceState(
+  it("repairs an unavailable extension activity without changing the source surface", () => {
+    const resolved = resolveWorkspaceState(
       repo,
       ProjectWorkspaceState.make({
         projectId: repo.id,
         activeSurface: "code",
-        activeActivity: ProjectWorkspaceActivityId.make("example.extension.missing"),
+        activeActivity: REVIEW_COMMENTS_ACTIVITY_ID,
         selectedReviewTarget: null,
         updatedAt: "2026-08-20T00:00:00.000Z",
       }),
+      [
+        PROJECT_WORKSPACE_REVIEWS_ACTIVITY_ID,
+        PROJECT_WORKSPACE_FILES_ACTIVITY_ID,
+        PROJECT_WORKSPACE_CODE_ACTIVITY_ID,
+        PROJECT_WORKSPACE_WALKTHROUGH_ACTIVITY_ID,
+      ],
     )
 
     expect(resolved).toEqual({

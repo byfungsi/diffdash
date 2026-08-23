@@ -66,7 +66,7 @@ export function ReviewThreadListPane({
     >
       <header className="border-review-sidebar-divider flex h-9 shrink-0 items-center gap-3 border-b px-3">
         <h2 className="text-caption min-w-0 flex-1 font-semibold tracking-wide uppercase">
-          Threads
+          Comments
         </h2>
         {children}
       </header>
