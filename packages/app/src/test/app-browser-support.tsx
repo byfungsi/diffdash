@@ -2199,7 +2199,10 @@ scenario("codeRibbonShortcuts", async () => {
     ).not.toBeNull()
   })
 
-  dispatchKeyboardShortcut("k", { metaKey: true })
+  dispatchKeyboardShortcut("k", {
+    ctrlKey: !macPrimaryModifier,
+    metaKey: macPrimaryModifier,
+  })
   const fileInput = await vi.waitFor(() => {
     const input = document.querySelector<HTMLInputElement>(
       'dialog input[placeholder="Search repository files"]',
@@ -2237,8 +2240,14 @@ scenario("codeRibbonShortcuts", async () => {
     )
   })
 
-  dispatchKeyboardShortcut("b", { metaKey: true })
-  dispatchKeyboardShortcut("f", { metaKey: true })
+  dispatchKeyboardShortcut("b", {
+    ctrlKey: !macPrimaryModifier,
+    metaKey: macPrimaryModifier,
+  })
+  dispatchKeyboardShortcut("f", {
+    ctrlKey: !macPrimaryModifier,
+    metaKey: macPrimaryModifier,
+  })
   const searchInput = await vi.waitFor(() => {
     const input = document.querySelector<HTMLInputElement>(
       'input[aria-label="Search current file"]',
