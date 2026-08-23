@@ -217,6 +217,7 @@ import {
   REVIEW_SEARCH_ACTIVE_HIGHLIGHT,
   REVIEW_SEARCH_MATCH_HIGHLIGHT,
 } from "@/review/review-search-highlights"
+import { isMacPlatform } from "@/shell/keyboard-shortcut-platform"
 import { App } from "../app"
 import { lineReviewAnchor } from "../review/thread-annotations"
 import "../styles.css"
@@ -2180,12 +2181,14 @@ scenario("codeRibbonShortcuts", async () => {
     expect(token).toBeDefined()
     return token
   })
+  const macPrimaryModifier = isMacPlatform()
   appToken?.dispatchEvent(
     new MouseEvent("click", {
       bubbles: true,
       button: 0,
       composed: true,
-      metaKey: true,
+      ctrlKey: !macPrimaryModifier,
+      metaKey: macPrimaryModifier,
       shiftKey: true,
     }),
   )

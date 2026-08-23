@@ -23,6 +23,7 @@ import { page } from "vitest/browser"
 
 import { installDiffDashApi } from "@/test/app-browser-support"
 import { FloatingPaneWorkspace } from "@/shared/ui/floating-pane"
+import { isMacPlatform } from "@/shell/keyboard-shortcut-platform"
 
 import { CodeScreen } from "./code-screen"
 
@@ -174,7 +175,9 @@ describe("CodeScreen definitions", () => {
       return match
     })
     await new Promise<void>((resolve) => window.setTimeout(resolve, 0))
-    await page.getByText("target", { exact: true }).click({ modifiers: ["Meta", "Shift"] })
+    await page
+      .getByText("target", { exact: true })
+      .click({ modifiers: [isMacPlatform() ? "Meta" : "Control", "Shift"] })
 
     await vi.waitFor(() => {
       expect(calls.codeWorkspaceReferences).toHaveBeenCalled()

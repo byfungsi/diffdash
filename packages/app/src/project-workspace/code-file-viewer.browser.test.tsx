@@ -18,6 +18,7 @@ import { afterEach, assert, describe, expect, it, vi } from "vitest"
 import { page } from "vitest/browser"
 
 import "../styles.css"
+import { isMacPlatform } from "@/shell/keyboard-shortcut-platform"
 import { isHTMLElement } from "@/shared/dom"
 import { FloatingPaneWorkspace } from "@/shared/ui/floating-pane"
 import { CodeFileViewer } from "./code-file-viewer"
@@ -550,6 +551,7 @@ describe("CodeFileViewer", () => {
     })
 
     const token = await definitionToken("greeting")
+    const macPrimaryModifier = isMacPlatform()
     const selection = document.getSelection()
     const range = document.createRange()
     range.selectNodeContents(token)
@@ -560,7 +562,8 @@ describe("CodeFileViewer", () => {
         bubbles: true,
         button: 0,
         composed: true,
-        metaKey: true,
+        ctrlKey: !macPrimaryModifier,
+        metaKey: macPrimaryModifier,
         shiftKey: true,
       }),
     )
@@ -568,7 +571,8 @@ describe("CodeFileViewer", () => {
       new PointerEvent("pointermove", {
         bubbles: true,
         composed: true,
-        metaKey: true,
+        ctrlKey: !macPrimaryModifier,
+        metaKey: macPrimaryModifier,
         pointerType: "mouse",
         shiftKey: true,
       }),
