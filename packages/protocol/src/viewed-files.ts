@@ -7,11 +7,7 @@ import {
 import { ReviewFilePatchHash, ReviewKey } from "@diffdash/domain/review-identity"
 import { Schema } from "effect"
 
-/** Persisted viewed-file identity returned for one review scope. */
-export class ViewedFileRecord extends Schema.Class<ViewedFileRecord>("ViewedFileRecord")({
-  reviewKey: ReviewKey,
-  patchHash: ReviewFilePatchHash,
-}) {}
+export { ViewedFileRecord } from "@diffdash/domain/review-identity"
 
 /** Content-scoped viewed-file lookup for one hosted review target. */
 export class HostedViewedFilesRequest extends Schema.Class<HostedViewedFilesRequest>(

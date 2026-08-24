@@ -1,11 +1,14 @@
 import {
   CodeWorkspaceDirectoryPage,
+  CodeWorkspaceChangesResult,
   CodeWorkspaceFileReadResult,
   CodeWorkspaceLease,
   CodeWorkspaceLeaseId,
+  CodeWorkspaceLineChangesResult,
   CodeWorkspaceSearchResult,
   CodeWorkspaceTarget,
 } from "@diffdash/domain/code-workspace"
+import { LanguagePosition, RepositoryLanguageLocationResult } from "@diffdash/domain/language"
 import { RepositoryRelativePath } from "@diffdash/domain/repository-path"
 import { Schema } from "effect"
 
@@ -60,9 +63,41 @@ export const ReadCodeWorkspaceFileRequest = Schema.Struct({
 /** Request to read one repository-relative managed-checkout file. */
 export type ReadCodeWorkspaceFileRequest = typeof ReadCodeWorkspaceFileRequest.Type
 
+/** Request for compact current-side changed-line ranges in one workspace file. */
+export const CodeWorkspaceLineChangesRequest = Schema.Struct({
+  leaseId: CodeWorkspaceLeaseId,
+  path: RepositoryRelativePath,
+})
+
+/** Request for compact current-side changed-line ranges in one workspace file. */
+export type CodeWorkspaceLineChangesRequest = typeof CodeWorkspaceLineChangesRequest.Type
+
+/** Request for definitions at one source position in a managed Code workspace. */
+export const CodeWorkspaceDefinitionsRequest = Schema.Struct({
+  leaseId: CodeWorkspaceLeaseId,
+  path: RepositoryRelativePath,
+  position: LanguagePosition,
+})
+
+/** Request for definitions at one source position in a managed Code workspace. */
+export type CodeWorkspaceDefinitionsRequest = typeof CodeWorkspaceDefinitionsRequest.Type
+
+/** Request for references at one source position in a managed Code workspace. */
+export const CodeWorkspaceReferencesRequest = Schema.Struct({
+  leaseId: CodeWorkspaceLeaseId,
+  path: RepositoryRelativePath,
+  position: LanguagePosition,
+})
+
+/** Request for references at one source position in a managed Code workspace. */
+export type CodeWorkspaceReferencesRequest = typeof CodeWorkspaceReferencesRequest.Type
+
 export {
   CodeWorkspaceDirectoryPage,
+  CodeWorkspaceChangesResult,
   CodeWorkspaceFileReadResult,
   CodeWorkspaceLease,
+  CodeWorkspaceLineChangesResult,
   CodeWorkspaceSearchResult,
+  RepositoryLanguageLocationResult,
 }

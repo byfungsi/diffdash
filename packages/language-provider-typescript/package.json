@@ -1,0 +1,29 @@
+{
+  "name": "@diffdash/language-provider-typescript",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "exports": {
+    ".": "./src/typescript-language-adapter.ts"
+  },
+  "scripts": {
+    "build": "tsc --noEmit",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "lint": "oxlint src --no-error-on-unmatched-pattern"
+  },
+  "dependencies": {
+    "@diffdash/domain": "workspace:*",
+    "@diffdash/language-provider": "workspace:*",
+    "@vscode/tree-sitter-wasm": "0.3.1",
+    "effect": "catalog:",
+    "typescript": "6.0.3",
+    "typescript-language-server": "5.3.0"
+  },
+  "devDependencies": {
+    "@effect/vitest": "catalog:",
+    "@types/node": "catalog:",
+    "oxlint": "catalog:",
+    "vitest": "catalog:"
+  }
+}

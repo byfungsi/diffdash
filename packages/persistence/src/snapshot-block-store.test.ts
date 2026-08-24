@@ -1,5 +1,13 @@
 import { createHash } from "node:crypto"
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync } from "node:fs"
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  renameSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { describe, expect, it } from "@effect/vitest"
@@ -333,6 +341,50 @@ describe("SnapshotBlockStore", () => {
           (yield* store.deleteSnapshot(StoredSnapshotId.make("snapshot:remote")))
             .collectibleResourceIds,
         ).toEqual([resourceId])
+      }).pipe(Effect.provide(makeLayer(directory)))
+    }),
+  )
+
+  it.effect("resolves only a verified complete snapshot spool inside the managed root", () =>
+    Effect.gen(function* () {
+      const directory = yield* makeTempDirectory
+      yield* Effect.gen(function* () {
+        const { catalog, store } = yield* registerRootAndDelta(directory)
+        const resourceId = CatalogResourceId.make("snapshot-spool:code-workspace")
+        const relativePath = "spools/code-workspace.patch"
+        const patch = "diff --git a/new.ts b/new.ts\n"
+        const patchChecksum = `sha256:${createHash("sha256").update(patch).digest("hex")}`
+        const path = join(options(directory).rootPath, relativePath)
+        mkdirSync(join(options(directory).rootPath, "spools"), { recursive: true })
+        writeFileSync(path, patch)
+        yield* catalog.register({
+          id: resourceId,
+          parentId: null,
+          kind: "snapshot-spool",
+          policyClass: "cache",
+          state: "ready",
+          generation: 1,
+          location: {
+            kind: "filesystem",
+            rootId: options(directory).rootId,
+            relativePath,
+          },
+          bytes: Buffer.byteLength(patch),
+          nowMs: 10,
+          checksum: patchChecksum,
+          validation: "complete-unified-diff:v1",
+        })
+
+        expect(yield* store.readSnapshotSpool(resourceId)).toEqual(
+          new Uint8Array(Buffer.from(patch)),
+        )
+
+        writeFileSync(path, patch.replace("new.ts", "bad.ts"))
+        const corrupted = yield* store.readSnapshotSpool(resourceId).pipe(Effect.result)
+        expect(Result.isFailure(corrupted)).toBe(true)
+        if (Result.isFailure(corrupted)) {
+          expect(corrupted.failure.operation).toBe("readSnapshotSpool")
+        }
       }).pipe(Effect.provide(makeLayer(directory)))
     }),
   )

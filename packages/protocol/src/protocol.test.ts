@@ -1,5 +1,6 @@
 import { describe, expect, it } from "@effect/vitest"
 import { AgentProviderId } from "@diffdash/domain/agent-provider"
+import { CodeWorkspaceLeaseId } from "@diffdash/domain/code-workspace"
 import { ExecutablePath } from "@diffdash/domain/executable-path"
 import { WebUrl } from "@diffdash/domain/web-url"
 import { RepositoryRelativePath } from "@diffdash/domain/repository-path"
@@ -22,9 +23,10 @@ import {
   UserReviewThreadMessage,
   UserReviewTurn,
 } from "@diffdash/domain/review-thread"
-import { Result, Schema } from "effect"
+import { HashSet, Option, Result, Schema } from "effect"
 
 import { EventChannel, InvokeChannel } from "./channels"
+import { RepositoryLanguageLocationResult } from "./code-workspace"
 import { HostedRepositorySearchRequest, HostedReviewRequest } from "./hosted-git"
 import { DiffDashMcpToolRequest, DiffDashMcpToolResponse, DiffDashReviewMcpTool } from "./mcp"
 import {
@@ -140,9 +142,9 @@ describe("protocol boundaries", () => {
     const invokeChannels = Object.values(InvokeChannel)
     const eventChannels = Object.values(EventChannel)
 
-    expect(new Set(invokeChannels).size).toBe(79)
-    expect(new Set(eventChannels).size).toBe(4)
-    expect(new Set([...invokeChannels, ...eventChannels]).size).toBe(83)
+    expect(HashSet.size(HashSet.fromIterable(invokeChannels))).toBe(83)
+    expect(HashSet.size(HashSet.fromIterable(eventChannels))).toBe(4)
+    expect(HashSet.size(HashSet.fromIterable([...invokeChannels, ...eventChannels]))).toBe(87)
     expect(invokeChannels).not.toEqual(
       expect.arrayContaining([
         "repositories:addLocal",
@@ -155,6 +157,60 @@ describe("protocol boundaries", () => {
         "localReviews:getSnapshot",
       ]),
     )
+  })
+
+  it("validates managed workspace language positions at the IPC boundary", () => {
+    const request = {
+      leaseId: CodeWorkspaceLeaseId.make("lease-1"),
+      path: RepositoryRelativePath.make("src/app.ts"),
+      position: { line: 12, character: 4 },
+    }
+    for (const channel of [
+      InvokeChannel.codeWorkspaceDefinitions,
+      InvokeChannel.codeWorkspaceReferences,
+    ] as const) {
+      const schema = InvokeContract[channel].request
+      expect(Result.isSuccess(Schema.decodeUnknownResult(schema)(request))).toBe(true)
+      expect(
+        Result.isFailure(
+          Schema.decodeUnknownResult(schema)({
+            ...request,
+            position: { line: -1, character: 4 },
+          }),
+        ),
+      ).toBe(true)
+    }
+  })
+
+  it("normalizes nullable language locations internally and preserves their wire encoding", () => {
+    const encoded = {
+      locations: [
+        {
+          originSelectionRange: null,
+          target: {
+            path: "src/app.ts",
+            range: {
+              start: { line: 1, character: 2 },
+              end: { line: 1, character: 5 },
+            },
+          },
+          targetSelectionRange: {
+            start: { line: 1, character: 2 },
+            end: { line: 1, character: 5 },
+          },
+        },
+      ],
+      truncated: false,
+    }
+    const decoded = Schema.decodeUnknownSync(RepositoryLanguageLocationResult)(encoded)
+
+    expect(decoded.locations).toHaveLength(1)
+    const originSelectionRange = Option.flatMap(
+      Option.fromNullishOr(decoded.locations[0]),
+      (location) => location.originSelectionRange,
+    )
+    expect(originSelectionRange).toEqual(Option.none())
+    expect(Schema.encodeSync(RepositoryLanguageLocationResult)(decoded)).toEqual(encoded)
   })
 
   it("keeps comment mutation receipts independent from thread conversation size", () => {
@@ -237,6 +293,12 @@ describe("protocol boundaries", () => {
         error: transportError("EXPECTED_FAILURE", "Expected failure"),
       }).error.code,
     ).toBe("EXPECTED_FAILURE")
+  })
+
+  it("encodes an empty Code workspace release response as JSON null", () => {
+    expect(
+      Schema.encodeSync(InvokeContract[InvokeChannel.releaseCodeWorkspace].response)(undefined),
+    ).toBe(null)
   })
 
   it("validates project opening and workspace identities at the IPC boundary", () => {

@@ -88,7 +88,7 @@ export const parseUnifiedDiff = (diff: string): ParsedDiff => {
       current.status = "renamed"
       continue
     }
-    if (line.startsWith("Binary files ")) {
+    if (line.startsWith("Binary files ") || line === "GIT binary patch") {
       current.status = "binary"
       continue
     }

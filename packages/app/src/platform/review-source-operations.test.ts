@@ -11,25 +11,25 @@ const { hostedManifest, localManifest, locator, provider } = makeReviewSelection
 const success = <Value>(value: Value) => Promise.resolve({ _tag: "Success" as const, value })
 
 const makeApi = () => {
-  const setHosted = vi.fn<DiffDashBridgeApi["viewedFiles"]["set"]>(() => success(undefined))
-  const setLocal = vi.fn<DiffDashBridgeApi["viewedFiles"]["setLocal"]>(() => success(undefined))
-  const openHosted = vi.fn<DiffDashBridgeApi["openRepositoryFile"]>(() => success(undefined))
-  const openLocal = vi.fn<DiffDashBridgeApi["openLocalRepositoryFile"]>(() => success(undefined))
+  const setHosted = vi.fn<DiffDashBridgeApi["viewedFiles"]["set"]>(() => success(null))
+  const setLocal = vi.fn<DiffDashBridgeApi["viewedFiles"]["setLocal"]>(() => success(null))
+  const openHosted = vi.fn<DiffDashBridgeApi["openRepositoryFile"]>(() => success(null))
+  const openLocal = vi.fn<DiffDashBridgeApi["openLocalRepositoryFile"]>(() => success(null))
   const api = {
     hostedReviews: {
       getDecision: () => success("none" as const),
-      submitDecision: () => success(undefined),
+      submitDecision: () => success(null),
     },
     openLocalRepositoryFile: openLocal,
     openRepositoryFile: openHosted,
-    repositoryComparisons: { openFile: () => success(undefined) },
+    repositoryComparisons: { openFile: () => success(null) },
     viewedFiles: {
       list: () => success([]),
       listLocal: () => success([]),
       listRepositoryComparison: () => success([]),
       set: setHosted,
       setLocal,
-      setRepositoryComparison: () => success(undefined),
+      setRepositoryComparison: () => success(null),
     },
   } satisfies Parameters<typeof makeReviewSourceOperations>[0]
   return {

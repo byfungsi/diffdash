@@ -42,9 +42,14 @@ export const createMainWindow = ({
     createDiffDashBrowserWindowOptions({
       iconPath: configuration.paths.developmentIconPath,
       preloadPath: configuration.paths.preloadPath,
+      title: configuration.identity.appName,
     }),
   )
   logStartupStage("window created")
+  window.on("page-title-updated", (event) => {
+    event.preventDefault()
+    window.setTitle(configuration.identity.appName)
+  })
 
   let isWindowShown = false
   let showFallbackTimer: NodeJS.Timeout | null = null

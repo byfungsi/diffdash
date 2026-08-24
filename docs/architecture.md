@@ -102,6 +102,24 @@ Dependencies must remain acyclic and use `workspace:*`. Relative imports cannot 
 roots. Browser-safe exports are bundled in a browser target during the boundary test to reject Node,
 Electron, SQLite, and concrete-provider leakage.
 
+## Source Surface Capability Boundary
+
+Code files, review diffs, and source previews are source surfaces. `@diffdash/app` owns one source
+surface kernel that is the sole integration point for Pierre render lifecycle, delegated
+interactions, line selection, decorations, and durable floating-pane anchors. A narrow private
+Review adapter retains Pierre's side-aware gutter payload for protected thread interactions; that
+payload is not exposed as a capability or extension contract. Built-in Git,
+language navigation, search, review navigation, and viewed-file behavior register named
+capabilities with that kernel instead of composing Pierre callbacks directly.
+
+The same capability contracts are the intended boundary for future user-owned extensions, but the
+renderer runtime is not itself an extension sandbox. User code must eventually execute outside the
+renderer and communicate through versioned, schema-validated, serializable provider and
+contribution protocols. DOM nodes, React components, Pierre instances/options, Electron APIs, and
+raw input events are never extension API. See
+[Source surface capabilities](source-surface-capabilities.md) for ownership rules, current built-in
+adoption, and the extension-host target.
+
 ## Runtime Trust Boundary
 
 Providers are built into DiffDash and reviewed and released with the desktop application. A package
@@ -175,13 +193,29 @@ repository lookups, and cached artifacts use `Option` inside Core and persistenc
 IPC, SQLite, and encoded configuration contracts remain nullable only at their boundaries. Analytics
 and fixture availability use closed states rather than independent nullable or boolean fields.
 
+### Effect-Neutral Process Boundaries
+
+Every process seam carries encoded data rather than Effect runtime values. Core RPC servers encode
+through each declaration's JSON codec before MessagePack transport, and the generated Electron-main
+client performs the only Core RPC domain decode. Electron main accepts that main-owned domain value
+or fails the operation; it never revives, normalizes, or structurally repairs foreign `Option`, schema
+classes, errors, or other Effect values.
+
 The renderer treats the context-bridged `DiffDashApi` as an encoded transport, not an application
 service. One internal `PreloadClient` owns `window.diffDash`; renderer features depend on cohesive
 Effect services for repositories, project targets, preferences, review content, review automation,
-and Electron-shell capabilities. Their independent Layers are composed once into one atom-owned
-runtime. The adapters re-decode structured-cloned responses, restore ordinary absence as `Option`,
-translate callback subscriptions into scoped streams, and expose typed renderer failures. A package
-boundary test rejects direct bridge access from production feature code.
+and Electron-shell capabilities. Preload validates the encoded side of each channel schema and passes
+only an `EncodedBridgeResult` through `contextBridge`; it must not decode domain classes or `Option`
+before that boundary. Their independent Layers are composed once into one atom-owned runtime. The
+renderer adapters perform the single domain decode, restore ordinary absence as `Option`, translate
+callback subscriptions into scoped streams, and expose typed renderer failures. A package boundary
+test rejects direct bridge access from production feature code.
+
+Electron bridge encodings may use structured-clone-safe native binary leaves such as `Uint8Array`;
+they are not restricted to JSON. Effect-owned objects are never valid encoded leaves. New transformed
+or binary contracts require a round-trip test at the owning process seam. Schema mismatches fail with
+the boundary stage and channel in the public transport error instead of activating compatibility
+recovery.
 
 Core operations return owner-domain failures, not `TransportError`. Electron maps those failures to
 the established public IPC codes at the controller boundary. Conversely, unsolicited updater,

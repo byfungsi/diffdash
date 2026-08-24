@@ -293,8 +293,9 @@ export class IncrementalUnifiedDiffParser {
     } else if (line.startsWith("rename to ")) {
       file.renameTo = line.slice("rename to ".length)
       file.status = "renamed"
-    } else if (line.startsWith("Binary files ")) {
+    } else if (line.startsWith("Binary files ") || line === "GIT binary patch") {
       file.status = "binary"
+      this.#emitPrelude(file)
     } else if (line.startsWith("index ")) {
       // Binary object metadata is derived if this later proves to be a binary file.
       const rawIndex = `raw-${line}`

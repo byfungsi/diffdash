@@ -8,7 +8,7 @@ import {
 import { LinkedCheckout, Repo, RepositoryCheckoutPath } from "@diffdash/domain/repository"
 import { RepositoryRelativePath } from "@diffdash/domain/repository-path"
 import { ReviewProjectId } from "@diffdash/domain/review-identity"
-import { Suspense } from "react"
+import { Suspense, useState } from "react"
 import { createRoot, type Root } from "react-dom/client"
 import { afterEach, describe, expect, it, vi } from "vitest"
 
@@ -57,13 +57,14 @@ const nextFrame = () =>
 
 const runtimeFallback = <div>Loading runtime</div>
 
-const renderCodeScreen = () => {
+const renderCodeScreen = (initialSelectedPath: RepositoryRelativePath | null = null) => {
   const container = document.createElement("div")
   document.body.append(container)
   const mountedRoot = createRoot(container)
   root = mountedRoot
-  mountedRoot.render(
-    <Suspense fallback={runtimeFallback}>
+  const Harness = () => {
+    const [selectedPath, setSelectedPath] = useState(initialSelectedPath)
+    return (
       <CodeScreen
         active
         codeThemes={DEFAULT_CODE_THEME_PREFERENCES}
@@ -71,17 +72,22 @@ const renderCodeScreen = () => {
         contextWidth={280}
         fileStatuses={new Map()}
         repo={repo}
-        selectedPath={null}
+        selectedPath={selectedPath}
         sidebarExpanded
         target={ProjectHeadCodeWorkspaceTarget.make({ projectId: repo.id })}
         threadDetailWidth={320}
         onActiveRibbonChange={() => undefined}
         onLinkRepository={() => undefined}
-        onSelectedPathChange={() => undefined}
+        onSelectedPathChange={setSelectedPath}
         onSidebarExpandedChange={() => undefined}
         onSidebarWidthChange={() => undefined}
         onThreadDetailWidthChange={() => undefined}
       />
+    )
+  }
+  mountedRoot.render(
+    <Suspense fallback={runtimeFallback}>
+      <Harness />
     </Suspense>,
   )
   return { container, mountedRoot }
@@ -111,8 +117,28 @@ describe("CodeScreen workspace lifecycle", () => {
     calls.openCodeWorkspace.mockClear()
     calls.releaseCodeWorkspace.mockClear()
 
-    const firstDirectory = deferred<LocalCheckoutFileListResult>()
+    const removedPath = RepositoryRelativePath.make("removed-directory/file.ts")
     let directoryCall = 0
+    listFiles = async () => {
+      directoryCall += 1
+      if (directoryCall === 1) return LocalCheckoutFileList.make({ paths: [removedPath] })
+      return Promise.reject(new Error("Directory no longer exists"))
+    }
+    const missingAncestorScreen = renderCodeScreen(removedPath)
+
+    await vi.waitFor(() => expect(calls.listLocalCheckoutFiles).toHaveBeenCalledTimes(2))
+    expect(document.body.textContent).not.toContain("Code workspace unavailable")
+    expect(calls.releaseCodeWorkspace).not.toHaveBeenCalled()
+    missingAncestorScreen.mountedRoot.unmount()
+    root = null
+    await nextFrame()
+    document.body.replaceChildren()
+    calls.listLocalCheckoutFiles.mockClear()
+    calls.openCodeWorkspace.mockClear()
+    calls.releaseCodeWorkspace.mockClear()
+
+    const firstDirectory = deferred<LocalCheckoutFileListResult>()
+    directoryCall = 0
     listFiles = async () => {
       directoryCall += 1
       if (directoryCall === 1) return firstDirectory.promise

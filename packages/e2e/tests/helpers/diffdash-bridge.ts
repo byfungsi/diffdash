@@ -1,3 +1,5 @@
+import type { DiffDashApi } from "@diffdash/protocol/api"
+
 type UnwrapBridgeValue<Value> = Value extends {
   readonly _tag: "Success"
   readonly value: infer Result
@@ -17,7 +19,7 @@ type UnwrapBridgeMember<Value> = Value extends (
       ? { readonly [Key in keyof Value]: UnwrapBridgeMember<Value[Key]> }
       : Value
 
-type DiffDashE2eApi = UnwrapBridgeMember<Window["diffDash"]>
+type DiffDashE2eApi = DiffDashApi
 
 type DiffDashE2eDiagnosticsApi = UnwrapBridgeMember<Window["diffDashE2eDiagnostics"]>
 

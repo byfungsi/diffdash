@@ -1,4 +1,5 @@
 import { describe, expect, it } from "@effect/vitest"
+import { Match, Option } from "effect"
 import { array, assert, integer, property } from "fast-check"
 
 import { parseUnifiedDiff } from "@diffdash/domain/diff-parser"
@@ -7,7 +8,6 @@ import {
   IncrementalUnifiedDiffParser,
   REVIEW_DIFF_MAX_BATCH_BYTES,
   REVIEW_DIFF_MAX_BATCH_ITEMS,
-  type ClosedDiffFile,
   type IncrementalDiffEvent,
 } from "./incremental-diff-parser"
 import { replayV1Identities } from "./v1-identity-replay"
@@ -64,16 +64,105 @@ describe("IncrementalUnifiedDiffParser", () => {
       ),
     )
     const finished = parser.finish()
-    expect(accepted._tag).toBe("Success")
-    expect(finished._tag).toBe("Success")
-    if (accepted._tag === "Failure" || finished._tag === "Failure") return
-    const parsedEvents = [...accepted.batches, ...finished.batches].flatMap(
-      ({ events: batchEvents }) => batchEvents,
+    const parsedBatches = [accepted, finished].flatMap((result) =>
+      Match.valueTags(result, { Failure: () => [], Success: ({ batches }) => batches }),
     )
-    const lines = parsedEvents.filter((event) => event._tag === "HunkLine")
-    const closed = parsedEvents.find((event) => event._tag === "HunkClosed")
-    expect(lines.map(({ line }) => line)).toEqual(["-old", "+new"])
-    expect(closed?._tag === "HunkClosed" ? closed.lineCount : null).toBe(2)
+    expect(parsedBatches.length).toBeGreaterThan(0)
+    const parsedEvents = parsedBatches.flatMap(({ events: batchEvents }) => batchEvents)
+    const lines = parsedEvents.flatMap((event) =>
+      Match.valueTags(event, {
+        FileStarted: () => [],
+        FilePrelude: () => [],
+        HunkStarted: () => [],
+        HunkLine: ({ line }) => [line],
+        HunkClosed: () => [],
+        FileClosed: () => [],
+      }),
+    )
+    const closedLineCounts = parsedEvents.flatMap((event) =>
+      Match.valueTags(event, {
+        FileStarted: () => [],
+        FilePrelude: () => [],
+        HunkStarted: () => [],
+        HunkLine: () => [],
+        HunkClosed: ({ lineCount }) => [lineCount],
+        FileClosed: () => [],
+      }),
+    )
+    expect(lines).toEqual(["-old", "+new"])
+    expect(closedLineCounts).toEqual([2])
+  })
+
+  it("classifies complete Git binary patches at every byte split point", () => {
+    const binary = `diff --git a/assets/logo.png b/assets/logo.png
+index 1111111111111111111111111111111111111111..2222222222222222222222222222222222222222 100644
+GIT binary patch
+literal 3
+KcmZQzU|?Vb000000
+`
+    const bytes = new TextEncoder().encode(binary)
+    for (let split = 1; split < bytes.byteLength; split += 1) {
+      const statuses = parseChunks([bytes.slice(0, split), bytes.slice(split)]).flatMap((event) =>
+        Match.valueTags(event, {
+          FileStarted: () => [],
+          FilePrelude: () => [],
+          HunkStarted: () => [],
+          HunkLine: () => [],
+          HunkClosed: () => [],
+          FileClosed: ({ file }) =>
+            Option.match(Option.fromNullishOr(file), {
+              onNone: () => [],
+              onSome: (closed) => [closed.status],
+            }),
+        }),
+      )
+      expect(statuses).toEqual(["binary"])
+    }
+  })
+
+  it("keeps complete binary payloads out of bounded file-prelude state", () => {
+    const binary = `diff --git a/assets/logo.png b/assets/logo.png
+index 1111111111111111111111111111111111111111..2222222222222222222222222222222222222222 100644
+GIT binary patch
+${`${"A".repeat(64)}\n`.repeat(3_000)}`
+    const bytes = new TextEncoder().encode(binary)
+    const chunks: Uint8Array[] = []
+    for (let offset = 0; offset < bytes.byteLength; offset += 64 * 1024)
+      chunks.push(bytes.slice(offset, offset + 64 * 1024))
+    const events = parseChunks(chunks)
+    const preludeLines = events.flatMap((event) =>
+      Match.valueTags(event, {
+        FileStarted: () => [],
+        FilePrelude: ({ lines }) => [lines],
+        HunkStarted: () => [],
+        HunkLine: () => [],
+        HunkClosed: () => [],
+        FileClosed: () => [],
+      }),
+    )
+    const statuses = events.flatMap((event) =>
+      Match.valueTags(event, {
+        FileStarted: () => [],
+        FilePrelude: () => [],
+        HunkStarted: () => [],
+        HunkLine: () => [],
+        HunkClosed: () => [],
+        FileClosed: ({ file }) =>
+          Option.match(Option.fromNullishOr(file), {
+            onNone: () => [],
+            onSome: (closed) => [closed.status],
+          }),
+      }),
+    )
+
+    expect(preludeLines).toEqual([
+      [
+        "diff --git a/assets/logo.png b/assets/logo.png",
+        "index 1111111111111111111111111111111111111111..2222222222222222222222222222222222222222 100644",
+        "GIT binary patch",
+      ],
+    ])
+    expect(statuses).toEqual(["binary"])
   })
 
   it("matches the v1 semantic corpus and identities at every byte split point", () => {
@@ -86,23 +175,32 @@ describe("IncrementalUnifiedDiffParser", () => {
       expect(actual).toEqual(baseline)
     }
 
-    const closedFiles = baseline.filter(
-      (
-        event,
-      ): event is Extract<IncrementalDiffEvent, { readonly _tag: "FileClosed" }> & {
-        readonly file: ClosedDiffFile
-      } => event._tag === "FileClosed" && event.file !== null,
+    const closedFiles = baseline.flatMap((event) =>
+      Match.valueTags(event, {
+        FileStarted: () => [],
+        FilePrelude: () => [],
+        HunkStarted: () => [],
+        HunkLine: () => [],
+        HunkClosed: () => [],
+        FileClosed: ({ file }) => (file === null ? [] : [file]),
+      }),
     )
     expect(closedFiles).toHaveLength(expected.files.length)
     for (const [index, closed] of closedFiles.entries()) {
       const expectedFile = expected.files[index]
       expect(expectedFile).toBeDefined()
-      const identities = replayV1Identities(closed.file, baseline)
-      const hunkEvents = baseline.filter(
-        (event): event is Extract<IncrementalDiffEvent, { readonly _tag: "HunkClosed" }> =>
-          event._tag === "HunkClosed" && event.fileOrdinal === closed.file?.ordinal,
+      const identities = replayV1Identities(closed, baseline)
+      const hunkEvents = baseline.flatMap((event) =>
+        Match.valueTags(event, {
+          FileStarted: () => [],
+          FilePrelude: () => [],
+          HunkStarted: () => [],
+          HunkLine: () => [],
+          HunkClosed: (hunk) => (hunk.fileOrdinal === closed.ordinal ? [hunk] : []),
+          FileClosed: () => [],
+        }),
       )
-      expect(closed.file).toMatchObject({
+      expect(closed).toMatchObject({
         additions: expectedFile?.additions,
         deletions: expectedFile?.deletions,
         fileId: expectedFile?.fileId,
@@ -143,17 +241,22 @@ describe("IncrementalUnifiedDiffParser", () => {
   it("replays the existing v1 identity for a hunk with no normalized content", () => {
     const expected = parseUnifiedDiff(emptyHunkCorpus)
     const events = parseChunks([new TextEncoder().encode(emptyHunkCorpus)])
-    const closed = events.find(
-      (
-        event,
-      ): event is Extract<IncrementalDiffEvent, { readonly _tag: "FileClosed" }> & {
-        readonly file: ClosedDiffFile
-      } => event._tag === "FileClosed" && event.file?.path === "empty.txt",
+    const closed = Option.fromNullishOr(
+      events
+        .flatMap((event) =>
+          Match.valueTags(event, {
+            FileStarted: () => [],
+            FilePrelude: () => [],
+            HunkStarted: () => [],
+            HunkLine: () => [],
+            HunkClosed: () => [],
+            FileClosed: ({ file }) => (file?.path === "empty.txt" ? [file] : []),
+          }),
+        )
+        .at(0),
     )
-    expect(closed).toBeDefined()
-    if (closed === undefined) return
-    expect(replayV1Identities(closed.file, events).hunkIds).toEqual(
-      expected.files[0]?.hunks.map(({ id }) => id),
+    expect(Option.map(closed, (file) => replayV1Identities(file, events).hunkIds)).toEqual(
+      Option.fromNullishOr(expected.files[0]?.hunks.map(({ id }) => id)),
     )
   })
 
@@ -164,7 +267,12 @@ describe("IncrementalUnifiedDiffParser", () => {
     const parser = new IncrementalUnifiedDiffParser()
     const bytes = new TextEncoder().encode(diff)
     let result = parser.accept(bytes.slice(0, 1024))
-    for (let offset = 1024; offset < bytes.byteLength && result._tag === "Success"; offset += 1024)
+    for (
+      let offset = 1024;
+      offset < bytes.byteLength &&
+      Match.valueTags(result, { Failure: () => false, Success: () => true });
+      offset += 1024
+    )
       result = parser.accept(bytes.slice(offset, offset + 1024))
     expect(result).toMatchObject({
       _tag: "Failure",
@@ -179,11 +287,19 @@ describe("IncrementalUnifiedDiffParser", () => {
     let failureReason: string | null = null
     for (let offset = 0; offset < bytes.byteLength; offset += 64 * 1024) {
       const result = parser.accept(bytes.slice(offset, offset + 64 * 1024))
-      if (result._tag === "Failure") {
-        failureReason = result.error.reason
-        break
-      }
-      for (const batch of result.batches) {
+      const failed = Match.valueTags(result, {
+        Failure: ({ error }) => {
+          failureReason = error.reason
+          return true
+        },
+        Success: () => false,
+      })
+      if (failed) break
+      const acceptedBatches = Match.valueTags(result, {
+        Failure: () => [],
+        Success: ({ batches }) => batches,
+      })
+      for (const batch of acceptedBatches) {
         expect(batch.events.length).toBeLessThanOrEqual(REVIEW_DIFF_MAX_BATCH_ITEMS)
         expect(batch.byteCount).toBeLessThanOrEqual(REVIEW_DIFF_MAX_BATCH_BYTES)
       }
@@ -197,11 +313,23 @@ const parseChunks = (chunks: ReadonlyArray<Uint8Array>): ReadonlyArray<Increment
   const events: IncrementalDiffEvent[] = []
   for (const chunk of chunks) {
     const result = parser.accept(chunk)
-    if (result._tag === "Failure") throw result.error
-    for (const batch of result.batches) events.push(...batch.events)
+    Match.valueTags(result, {
+      Failure: ({ error }) => {
+        throw error
+      },
+      Success: ({ batches }) => {
+        for (const batch of batches) events.push(...batch.events)
+      },
+    })
   }
   const result = parser.finish()
-  if (result._tag === "Failure") throw result.error
-  for (const batch of result.batches) events.push(...batch.events)
+  Match.valueTags(result, {
+    Failure: ({ error }) => {
+      throw error
+    },
+    Success: ({ batches }) => {
+      for (const batch of batches) events.push(...batch.events)
+    },
+  })
   return events
 }

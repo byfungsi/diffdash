@@ -2,7 +2,7 @@ import type { ReviewThreadTarget } from "@diffdash/domain/review-thread"
 import { StoredWalkthrough } from "@diffdash/domain/walkthrough"
 import type { WalkthroughOperationId } from "@diffdash/domain/walkthrough-operation"
 import type { DiffDashBridgeApi } from "@diffdash/protocol/api"
-import { InvokeChannel } from "@diffdash/protocol/channels"
+import { EventChannel, InvokeChannel } from "@diffdash/protocol/channels"
 import {
   WalkthroughBridgeIdempotencyKey,
   WalkthroughBridgeStartRequest,
@@ -19,7 +19,12 @@ import {
 import { Context, Effect, Layer, Match } from "effect"
 
 import { PreloadClient } from "./preload-client"
-import { invokePreload, rendererApiError, type RendererApiError } from "./renderer-api-error"
+import {
+  invokePreload,
+  rendererApiError,
+  subscribePreloadEvent,
+  type RendererApiError,
+} from "./renderer-api-error"
 import { runRendererPromise } from "./renderer-effect"
 
 const FALLBACK_QUERY_MILLISECONDS = 1_000
@@ -193,16 +198,13 @@ class PreloadWalkthroughOperationSession implements WalkthroughOperationSession 
 
   #subscribeToHints(operationId: WalkthroughOperationId): void {
     this.#unsubscribeHint?.()
-    this.#unsubscribeHint = this.api.onHint((result) => {
-      Match.valueTags(result, {
-        Failure: () => undefined,
-        Success: (success) => {
-          if (success.value.operationId === operationId && !this.#disposed) {
-            void this.#reconcile()
-          }
-        },
-      })
-    })
+    this.#unsubscribeHint = subscribePreloadEvent(
+      EventChannel.walkthroughOperationHint,
+      this.api.onHint,
+      (hint) => {
+        if (hint.operationId === operationId && !this.#disposed) void this.#reconcile()
+      },
+    )
   }
 
   #scheduleFallback(delay = this.fallbackQueryMilliseconds): void {

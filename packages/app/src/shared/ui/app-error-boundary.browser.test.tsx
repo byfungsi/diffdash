@@ -55,6 +55,26 @@ describe("AppErrorBoundary", () => {
     })
   })
 
+  it("does not replace the app for a browser ResizeObserver delivery warning", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => undefined)
+    render(
+      <AppErrorBoundary onReload={() => undefined}>
+        <p>Application ready</p>
+      </AppErrorBoundary>,
+    )
+    await vi.waitFor(() => expect(document.body.textContent).toContain("Application ready"))
+
+    window.dispatchEvent(
+      new ErrorEvent("error", {
+        message: "ResizeObserver loop completed with undelivered notifications.",
+      }),
+    )
+    await new Promise<void>((resolve) => window.setTimeout(resolve, 50))
+
+    expect(document.body.textContent).toContain("Application ready")
+    expect(document.body.textContent).not.toContain("DiffDash encountered an error")
+  })
+
   it("shows the public message instead of a bridged transport envelope", async () => {
     vi.spyOn(console, "error").mockImplementation(() => undefined)
     render(

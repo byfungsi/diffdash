@@ -40,9 +40,10 @@ const browserSafePackages = new Set([
   "@diffdash/app",
   "@diffdash/domain",
   "@diffdash/git-provider",
+  "@diffdash/language-provider",
   "@diffdash/protocol",
 ])
-const concreteProviderPattern = /^@diffdash\/(?:agent-provider|git-provider)-/
+const concreteProviderPattern = /^@diffdash\/(?:agent-provider|git-provider|language-provider)-/
 const strictProductionPackages = new Set([
   "@diffdash/domain",
   "@diffdash/core-rpc",
@@ -50,6 +51,7 @@ const strictProductionPackages = new Set([
   "@diffdash/agent-provider",
   "@diffdash/agents",
   "@diffdash/git-provider",
+  "@diffdash/language-provider",
   "@diffdash/core",
   "@diffdash/app",
   "@diffdash/web",
@@ -65,6 +67,7 @@ const documentedPackageDependencies = new Map([
   ["@diffdash/settings", ["@diffdash/domain"]],
   ["@diffdash/persistence", ["@diffdash/domain"]],
   ["@diffdash/git-provider", ["@diffdash/domain"]],
+  ["@diffdash/language-provider", ["@diffdash/domain"]],
   ["@diffdash/local-git", ["@diffdash/domain", "@diffdash/git-provider", "@diffdash/process"]],
   ["@diffdash/agents", ["@diffdash/agent-provider", "@diffdash/domain"]],
   ["@diffdash/mcp", ["@diffdash/domain", "@diffdash/protocol"]],
@@ -83,6 +86,8 @@ const documentedPackageDependencies = new Map([
       "@diffdash/git-provider-fixture",
       "@diffdash/git-provider-github",
       "@diffdash/local-git",
+      "@diffdash/language-provider",
+      "@diffdash/language-provider-typescript",
       "@diffdash/mcp",
       "@diffdash/persistence",
       "@diffdash/process",
@@ -109,9 +114,16 @@ const documentedPackageDependencies = new Map([
   ["@diffdash/repository-scale", []],
   ["@diffdash/review-data-worker", ["@diffdash/domain", "@diffdash/git-provider"]],
 ])
-const desktopErrorAdapterDependencies = new Map([
-  ["packages/desktop/electron/main/ipc/public-error.ts", new Set(["@diffdash/domain"])],
-])
+const desktopSourceDependencyExceptions = [
+  {
+    file: "packages/desktop/electron/main/ipc/public-error.ts",
+    dependencies: ["@diffdash/domain"],
+  },
+  {
+    file: "packages/desktop/electron/main/core-utility-process-launcher.fixture.ts",
+    dependencies: ["@diffdash/domain"],
+  },
+]
 
 const sourceFiles = (directory) =>
   globSync("**/*.{js,jsx,ts,tsx,mjs,mjsx,cjs,cjsx}", { cwd: directory })
@@ -229,6 +241,10 @@ test("source package imports follow the documented package dependency allowlist"
       allowedDependencies.add("@diffdash/agent-provider")
       allowedDependencies.add("@diffdash/domain")
       allowedDependencies.add("@diffdash/process")
+    } else if (manifest.name.startsWith("@diffdash/language-provider-")) {
+      allowedDependencies.add("@diffdash/domain")
+      allowedDependencies.add("@diffdash/language-provider")
+      allowedDependencies.add("@diffdash/process")
     } else {
       assert.ok(
         documentedPackageDependencies.has(manifest.name),
@@ -248,17 +264,19 @@ test("source package imports follow the documented package dependency allowlist"
 
     for (const file of files.filter((candidate) => !/\.test\.[cm]?[jt]sx?$/.test(candidate))) {
       const relativeFile = relative(root, file)
-      const adapterDependencies = desktopErrorAdapterDependencies.get(relativeFile) ?? new Set()
+      const adapterDependencies = desktopSourceDependencyExceptions
+        .filter(({ file: exceptionFile }) => exceptionFile === relativeFile)
+        .flatMap(({ dependencies }) => dependencies)
       for (const dependency of workspaceImports(readFileSync(file, "utf8"))) {
         assert.ok(
-          allowedDependencies.has(dependency) || adapterDependencies.has(dependency),
+          allowedDependencies.has(dependency) || adapterDependencies.includes(dependency),
           `${relativeFile} imports undocumented package dependency ${dependency}`,
         )
       }
     }
   }
 
-  for (const [file, dependencies] of desktopErrorAdapterDependencies) {
+  for (const { file, dependencies } of desktopSourceDependencyExceptions) {
     const importedDependencies = new Set(
       workspaceImports(readFileSync(resolve(root, file), "utf8")),
     )
@@ -426,6 +444,33 @@ test("agent providers remain isolated leaf integrations", () => {
       source,
       /(?:from\s*|import\s*\()(["'])(?:electron|react|better-sqlite3|@diffdash\/(?:app|desktop|git-provider|persistence|protocol|settings)|@diffdash\/agent-provider-[^"']+)(?:\/[^"']*)?\1/,
       `${provider.manifest.name} crosses the agent provider leaf boundary`,
+    )
+  }
+})
+
+test("language providers remain isolated leaf integrations", () => {
+  const sdk = manifests.find(({ manifest }) => manifest.name === "@diffdash/language-provider")
+  assert.ok(sdk, "@diffdash/language-provider must exist")
+  assert.deepEqual(Object.keys(sdk.manifest.dependencies), ["@diffdash/domain", "effect"])
+
+  const providers = manifests.filter(({ manifest }) =>
+    manifest.name.startsWith("@diffdash/language-provider-"),
+  )
+  assert.ok(
+    providers.some(({ manifest }) => manifest.name === "@diffdash/language-provider-typescript"),
+  )
+  for (const provider of providers) {
+    assert.ok(
+      Object.keys(provider.manifest.dependencies).includes("@diffdash/language-provider"),
+      `${provider.manifest.name} must depend on the language provider SDK`,
+    )
+    const source = sourceFiles(join(provider.directory, "src"))
+      .map((file) => readFileSync(file, "utf8"))
+      .join("\n")
+    assert.doesNotMatch(
+      source,
+      /(?:from\s*|import\s*\()(["'])(?:electron|react|better-sqlite3|@diffdash\/(?:app|desktop|git-provider|persistence|protocol|settings)|@diffdash\/language-provider-[^"']+)(?:\/[^"']*)?\1/,
+      `${provider.manifest.name} crosses the language provider leaf boundary`,
     )
   }
 })

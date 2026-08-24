@@ -1,5 +1,5 @@
 import { describe, expect, it } from "@effect/vitest"
-import { Option, Schema } from "effect"
+import { HashSet, Option, Schema } from "effect"
 
 import { CoreApplicationRpcs } from "./application-rpc"
 import { AppStateBusinessRpcs, AppStateUpdateRpcs } from "./business"
@@ -44,6 +44,10 @@ const coreMethods = [
   "CodeWorkspace.listDirectory",
   "CodeWorkspace.search",
   "CodeWorkspace.readFile",
+  "CodeWorkspace.definitions",
+  "CodeWorkspace.references",
+  "CodeWorkspace.changes",
+  "CodeWorkspace.lineChanges",
   "ProjectWorkspace.get",
   "ProjectWorkspace.save",
   "OpenCode.listSessions",
@@ -73,8 +77,8 @@ describe("Core application RPC catalog", () => {
       .merge(ReviewAgentBusinessRpcs)
     const coreDeclarations = coreMethods.map((method) => declarations.requests.get(method))
 
-    expect(coreMethods).toHaveLength(57)
-    expect(new Set(coreMethods)).toHaveLength(57)
+    expect(coreMethods).toHaveLength(61)
+    expect(HashSet.size(HashSet.fromIterable(coreMethods))).toBe(61)
     expect(coreDeclarations.every((declaration) => declaration !== undefined)).toBe(true)
     expect(
       coreDeclarations.every(

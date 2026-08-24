@@ -1,10 +1,29 @@
-import { Context, Effect, Layer, Match, Option, Schema } from "effect"
+import {
+  Array as EffectArray,
+  Context,
+  Effect,
+  Layer,
+  Match,
+  Option,
+  Schema,
+  SchemaGetter,
+} from "effect"
 import { createHash } from "node:crypto"
+import { mkdtemp, rm, writeFile } from "node:fs/promises"
+import { tmpdir } from "node:os"
+import { join } from "node:path"
 
 import {
   type DetectedRepositoryCheckout,
   RepositoryCheckoutPath,
 } from "@diffdash/domain/repository"
+import { DiffFileStatus } from "@diffdash/domain/diff"
+import {
+  codeLineChangesFromHunks,
+  type CodeLineChangeRange,
+} from "@diffdash/domain/code-line-change"
+import { parseUnifiedDiff } from "@diffdash/domain/diff-parser"
+import { RepositoryRelativePath } from "@diffdash/domain/repository-path"
 import { GitCommitSha, RepositoryComparisonRef } from "@diffdash/domain/repository-comparison"
 import {
   BranchComparison,
@@ -22,8 +41,39 @@ import {
   type ProcessExecutionError,
 } from "@diffdash/process"
 import { gitProcessRequest } from "./git-environment"
+import { toError } from "./hosted-review-workspace-pool-error"
 
 const EMPTY_TREE_SHA = "4b825dc642cb6eb9a060e54bf8d69288fbee4904"
+
+const GitWorkingTreeStatus = Schema.TaggedUnion({
+  added: { code: Schema.String },
+  deleted: { code: Schema.String },
+  renamed: { code: Schema.String },
+  modified: { code: Schema.String },
+})
+
+const GitWorkingTreeStatusFromCode = Schema.String.pipe(
+  Schema.decodeTo(GitWorkingTreeStatus, {
+    decode: SchemaGetter.transform((code) => {
+      if (code === "??" || code.includes("A")) {
+        return GitWorkingTreeStatus.cases.added.make({ code })
+      }
+      if (code.includes("D")) return GitWorkingTreeStatus.cases.deleted.make({ code })
+      if (code.includes("R") || code.includes("C")) {
+        return GitWorkingTreeStatus.cases.renamed.make({ code })
+      }
+      return GitWorkingTreeStatus.cases.modified.make({ code })
+    }),
+    encode: SchemaGetter.transform((status) =>
+      GitWorkingTreeStatus.match(status, {
+        added: ({ code }) => code,
+        deleted: ({ code }) => code,
+        renamed: ({ code }) => code,
+        modified: ({ code }) => code,
+      }),
+    ),
+  }),
+)
 
 /** The local review changed after its immutable coordinates were resolved. */
 export class LocalReviewChangedError extends Schema.TaggedError<LocalReviewChangedError>()(
@@ -41,6 +91,15 @@ export class LocalReviewTargetError extends Schema.TaggedError<LocalReviewTarget
   },
 ) {}
 
+/** Temporary patch materialization failed before Git could consume its content. */
+export class WorkspacePatchError extends Schema.TaggedError<WorkspacePatchError>()(
+  "WorkspacePatchError",
+  {
+    operation: Schema.Literals(["create", "write", "remove"]),
+    cause: Schema.ErrorInstance(),
+  },
+) {}
+
 /** One configured local Git remote and all of its fetch URLs. */
 export class LocalGitRemote extends Schema.Class<LocalGitRemote>("LocalGitRemote")({
   name: Schema.String,
@@ -53,6 +112,14 @@ export class LocalGitWorktree extends Schema.Class<LocalGitWorktree>("LocalGitWo
   isMain: Schema.Boolean,
   isBare: Schema.Boolean,
   isPrunable: Schema.Boolean,
+}) {}
+
+/** One changed file reported by a linked repository working tree. */
+export class LocalGitWorkingTreeChange extends Schema.Class<LocalGitWorkingTreeChange>(
+  "LocalGitWorkingTreeChange",
+)({
+  path: RepositoryRelativePath,
+  status: DiffFileStatus,
 }) {}
 
 /** Main-process service for local Git repository inspection. */
@@ -74,6 +141,17 @@ export class GitService extends Context.Service<
     readonly listWorktrees: (
       localPath: RepositoryCheckoutPath,
     ) => Effect.Effect<readonly LocalGitWorktree[], ProcessExecutionError>
+    readonly workingTreeChanges: (
+      localPath: RepositoryCheckoutPath,
+    ) => Effect.Effect<readonly LocalGitWorkingTreeChange[], ProcessExecutionError>
+    readonly workingTreeFileLineChanges: (
+      localPath: RepositoryCheckoutPath,
+      path: RepositoryRelativePath,
+    ) => Effect.Effect<readonly CodeLineChangeRange[], ProcessExecutionError>
+    readonly applyWorkspacePatch: (
+      localPath: RepositoryCheckoutPath,
+      patch: Uint8Array,
+    ) => Effect.Effect<void, ProcessExecutionError | WorkspacePatchError>
     readonly resolveBranchComparison: (
       localPath: RepositoryCheckoutPath,
       branchName: RepositoryComparisonRef | null,
@@ -166,6 +244,132 @@ export class GitService extends Context.Service<
           )
         })
       })
+
+      const workingTreeChanges = Effect.fn("GitService.workingTreeChanges")(function* (
+        localPath: RepositoryCheckoutPath,
+      ) {
+        const result = yield* processes.run(
+          gitProcessRequest([
+            "-C",
+            localPath,
+            "status",
+            "--porcelain=v1",
+            "-z",
+            "--untracked-files=all",
+          ]),
+        )
+        return yield* parseWorkingTreeChanges(result)
+      })
+
+      const workingTreeFileLineChanges = Effect.fn("GitService.workingTreeFileLineChanges")(
+        function* (localPath: RepositoryCheckoutPath, path: RepositoryRelativePath) {
+          const tracked = yield* processes.run(
+            gitProcessRequest([
+              "-C",
+              localPath,
+              "diff",
+              "--no-ext-diff",
+              "--no-color",
+              "--unified=0",
+              "HEAD",
+              "--",
+              path,
+            ]),
+          )
+          if (tracked.stdout.length > 0) {
+            return Option.match(
+              EffectArray.findFirst(
+                parseUnifiedDiff(tracked.stdout).files,
+                (candidate) => candidate.path === path,
+              ),
+              { onNone: () => [], onSome: (file) => codeLineChangesFromHunks(file.hunks) },
+            )
+          }
+          const status = yield* processes.run(
+            gitProcessRequest([
+              "-C",
+              localPath,
+              "status",
+              "--porcelain=v1",
+              "-z",
+              "--untracked-files=all",
+              "--",
+              path,
+            ]),
+          )
+          if (!status.stdout.startsWith("?? ")) return []
+          const untracked = yield* processes
+            .run(
+              gitProcessRequest(
+                [
+                  "diff",
+                  "--no-ext-diff",
+                  "--no-color",
+                  "--unified=0",
+                  "--no-index",
+                  "--",
+                  "/dev/null",
+                  path,
+                ],
+                { cwd: localPath },
+              ),
+            )
+            .pipe(
+              Effect.catchTag("ProcessExitError", (error) => {
+                if (error.exitCode === 1) return Effect.succeed(error)
+                return Effect.fail(error)
+              }),
+            )
+          return Option.match(
+            EffectArray.findFirst(
+              parseUnifiedDiff(untracked.stdout).files,
+              (candidate) => candidate.path === path,
+            ),
+            { onNone: () => [], onSome: (file) => codeLineChangesFromHunks(file.hunks) },
+          )
+        },
+      )
+
+      const applyWorkspacePatch = Effect.fn("GitService.applyWorkspacePatch")(
+        (localPath: RepositoryCheckoutPath, patch: Uint8Array) =>
+          Effect.scoped(
+            Effect.gen(function* () {
+              const directory = yield* Effect.acquireRelease(
+                Effect.tryPromise({
+                  try: () => mkdtemp(join(tmpdir(), "diffdash-workspace-patch-")),
+                  catch: (cause) =>
+                    WorkspacePatchError.make({ operation: "create", cause: toError(cause) }),
+                }),
+                (path) =>
+                  Effect.tryPromise({
+                    try: () => rm(path, { force: true, recursive: true }),
+                    catch: (cause) =>
+                      WorkspacePatchError.make({ operation: "remove", cause: toError(cause) }),
+                  }).pipe(Effect.ignore),
+              )
+              const patchFilePath = join(directory, "workspace.patch")
+              yield* Effect.tryPromise({
+                try: () => writeFile(patchFilePath, patch),
+                catch: (cause) =>
+                  WorkspacePatchError.make({ operation: "write", cause: toError(cause) }),
+              })
+              yield* processes.run(
+                gitProcessRequest(
+                  [
+                    "-C",
+                    localPath,
+                    "apply",
+                    "--binary",
+                    "--whitespace=nowarn",
+                    "--",
+                    patchFilePath,
+                  ],
+                  { timeoutMs: 60_000 },
+                ),
+              )
+            }),
+          ),
+      )
 
       const resolveBranchComparison = Effect.fn("GitService.resolveBranchComparison")(function* (
         localPath: RepositoryCheckoutPath,
@@ -367,6 +571,9 @@ export class GitService extends Context.Service<
         currentBranch,
         listRemotes,
         listWorktrees,
+        applyWorkspacePatch,
+        workingTreeChanges,
+        workingTreeFileLineChanges,
         resolveBranchComparison,
         resolveRevisionRangeComparison,
         resolveLastCommit,
@@ -375,6 +582,71 @@ export class GitService extends Context.Service<
     }),
   )
 }
+
+const parseWorkingTreeChanges = Effect.fn("GitService.parseWorkingTreeChanges")(function* (
+  result: ProcessResult,
+) {
+  const fields = result.stdout.split("\0")
+  const parseFrom = (
+    index: number,
+  ): Effect.Effect<readonly LocalGitWorkingTreeChange[], ProcessExecutionError> =>
+    Effect.gen(function* () {
+      if (index >= fields.length) return []
+      const field = Option.getOrElse(EffectArray.get(fields, index), () => "")
+      if (field.length === 0) return yield* parseFrom(index + 1)
+      if (field.length < 4 || field[2] !== " ") {
+        return yield* Effect.fail(
+          invalidStdout(
+            result,
+            "Git returned invalid working-tree status output.",
+            new Error("Malformed porcelain record"),
+          ),
+        )
+      }
+      const code = field.slice(0, 2)
+      if (code === "!!") return yield* parseFrom(index + 1)
+      const workingTreeStatus = yield* Schema.decodeUnknownEffect(GitWorkingTreeStatusFromCode)(
+        code,
+      ).pipe(
+        Effect.mapError((cause) =>
+          invalidStdout(result, "Git returned an invalid working-tree status.", cause),
+        ),
+      )
+      const path = yield* Schema.decodeUnknownEffect(RepositoryRelativePath)(field.slice(3)).pipe(
+        Effect.mapError((cause) =>
+          invalidStdout(result, "Git returned an invalid working-tree path.", cause),
+        ),
+      )
+      const status = GitWorkingTreeStatus.match(workingTreeStatus, {
+        added: () => "added" as const,
+        deleted: () => "deleted" as const,
+        renamed: () => "renamed" as const,
+        modified: () => "modified" as const,
+      })
+      const nextIndex = status === "renamed" ? index + 2 : index + 1
+      if (status === "renamed") {
+        if (
+          Option.match(EffectArray.get(fields, index + 1), {
+            onNone: () => true,
+            onSome: (value) => value.length === 0,
+          })
+        ) {
+          return yield* Effect.fail(
+            invalidStdout(
+              result,
+              "Git returned invalid working-tree rename output.",
+              new Error("Missing rename source path"),
+            ),
+          )
+        }
+      }
+      return EffectArray.prepend(
+        yield* parseFrom(nextIndex),
+        LocalGitWorkingTreeChange.make({ path, status }),
+      )
+    })
+  return yield* parseFrom(0)
+})
 
 type LastCommitRevisions = {
   readonly headSha: GitCommitSha

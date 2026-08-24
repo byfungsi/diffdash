@@ -42,19 +42,21 @@ type RendererSecurityPolicyInput = {
 type BrowserWindowOptionsInput = {
   readonly iconPath: string | null
   readonly preloadPath: string
+  readonly title: string
 }
 
 /** Builds the BrowserWindow options that define DiffDash's renderer security boundary. */
 export const createDiffDashBrowserWindowOptions = ({
   iconPath,
   preloadPath,
+  title,
 }: BrowserWindowOptionsInput): BrowserWindowConstructorOptions => {
   const options: BrowserWindowConstructorOptions = {
     width: 1320,
     height: 860,
     minWidth: 720,
     minHeight: 720,
-    title: "DiffDash",
+    title,
     titleBarStyle: "hidden",
     trafficLightPosition: { x: 10, y: 17 },
     show: false,

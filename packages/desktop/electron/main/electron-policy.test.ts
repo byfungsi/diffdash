@@ -31,13 +31,14 @@ describe("Electron policy", () => {
       createDiffDashBrowserWindowOptions({
         iconPath: "/app/icon.png",
         preloadPath: "/app/preload.mjs",
+        title: "DiffDash Development",
       }),
     ).toEqual({
       width: 1320,
       height: 860,
       minWidth: 720,
       minHeight: 720,
-      title: "DiffDash",
+      title: "DiffDash Development",
       titleBarStyle: "hidden",
       trafficLightPosition: { x: 10, y: 17 },
       show: false,
@@ -54,7 +55,11 @@ describe("Electron policy", () => {
       },
     })
     expect(
-      createDiffDashBrowserWindowOptions({ iconPath: null, preloadPath: "/app/preload.mjs" }),
+      createDiffDashBrowserWindowOptions({
+        iconPath: null,
+        preloadPath: "/app/preload.mjs",
+        title: "DiffDash",
+      }),
     ).not.toHaveProperty("icon")
   })
 

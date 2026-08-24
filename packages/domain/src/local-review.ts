@@ -1,8 +1,8 @@
-import { Effect, Match, Schema } from "effect"
+import { Effect, Schema } from "effect"
 
 import { ChangedFile } from "./git-provider"
 import { RepositoryCheckoutPath } from "./repository"
-import { RepositoryComparisonRef } from "./repository-comparison"
+import { RepositoryComparisonRef } from "./repository-comparison-ref"
 import { ReviewDiffIdentity, ReviewRevision } from "./review-identity"
 
 /** Local changes compared with the checkout's current HEAD. */
@@ -43,7 +43,7 @@ export const LocalReviewComparison = Schema.Union([
   RevisionComparison,
   RevisionRangeComparison,
   LastCommitComparison,
-])
+]).pipe(Schema.toTaggedUnion("_tag"))
 
 /** The comparison strategy used to build a local review. */
 export type LocalReviewComparison = typeof LocalReviewComparison.Type
@@ -85,27 +85,14 @@ export const workingTreeReviewTarget = (rootPath: RepositoryCheckoutPath) =>
 
 /** Stable cache key for one local review target. */
 export const localReviewTargetKey = (target: LocalReviewTarget) =>
-  Match.value(target.comparison).pipe(
-    Match.tag("workingTree", () => `${target.rootPath}\u0000workingTree`),
-    Match.tag(
-      "branch",
-      (comparison) =>
-        `${target.rootPath}\u0000branch\u0000${comparison.baseRef}\u0000${comparison.baseSha}`,
-    ),
-    Match.tag(
-      "revision",
-      (comparison) =>
-        `${target.rootPath}\u0000revision\u0000${comparison.revision}\u0000${comparison.baseSha}`,
-    ),
-    Match.tag(
-      "revisionRange",
-      (comparison) =>
-        `${target.rootPath}\u0000revisionRange\u0000${comparison.baseSha}\u0000${comparison.headSha}\u0000${comparison.mergeBaseSha}`,
-    ),
-    Match.tag(
-      "lastCommit",
-      (comparison) =>
-        `${target.rootPath}\u0000lastCommit\u0000${comparison.baseSha}\u0000${comparison.headSha}`,
-    ),
-    Match.exhaustive,
-  )
+  LocalReviewComparison.match(target.comparison, {
+    workingTree: () => `${target.rootPath}\u0000workingTree`,
+    branch: (comparison) =>
+      `${target.rootPath}\u0000branch\u0000${comparison.baseRef}\u0000${comparison.baseSha}`,
+    revision: (comparison) =>
+      `${target.rootPath}\u0000revision\u0000${comparison.revision}\u0000${comparison.baseSha}`,
+    revisionRange: (comparison) =>
+      `${target.rootPath}\u0000revisionRange\u0000${comparison.baseSha}\u0000${comparison.headSha}\u0000${comparison.mergeBaseSha}`,
+    lastCommit: (comparison) =>
+      `${target.rootPath}\u0000lastCommit\u0000${comparison.baseSha}\u0000${comparison.headSha}`,
+  })

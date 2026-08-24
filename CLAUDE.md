@@ -40,6 +40,30 @@ The pinned package is the compatibility authority because the reference follows 
 - Run `pnpm test` when changing service, parsing, persistence, CLI, or Effect layer behavior.
 - Do not bypass React Doctor findings by adding memoization by default; first prefer simpler component boundaries or stable event patterns.
 
+## Process Boundaries
+
+When changing Core RPC, Electron IPC, preload, or renderer transport, read **Effect-Neutral Process
+Boundaries** in `docs/architecture.md` before editing.
+
+- Carry only schema-encoded, Effect-neutral values across a process seam.
+- Core RPC encodes on the server and decodes once in the generated Electron-main client.
+- Treat successful generated Core RPC client results as decoded, main-owned domain values. Pass them
+  to the IPC controller for encoding; never decode them again in an Electron runtime adapter.
+- Electron main encodes renderer responses, preload validates and forwards encoded values, and the
+  renderer performs the single domain decode.
+- Use the null-backed empty-response schema for void IPC results. Raw `Schema.Void` encodes to
+  `undefined`, which is not a JSON-safe IPC payload.
+- At the Promise boundary, unwrap expected Effect failures and schema-declared remote RPC defects so
+  the IPC error adapter can sanitize their structured value; keep transport and unexpected defects
+  opaque.
+- Treat `Uint8Array` as a supported structured-clone binary leaf, not as JSON.
+- Reject schema mismatches with a stage- and channel-specific transport error. Do not add revivers,
+  normalization fallbacks, structural repair, unchecked casts, or compatibility decoding.
+- Add a seam-level round-trip regression whenever a contract introduces a transform, runtime class,
+  optional value, error type, or binary value.
+- For changed IPC flows, verify at least one real Electron bridge round trip through main and preload;
+  browser fixtures alone do not exercise process encoding ownership.
+
 ## Frontend Design System Rules
 
 - Use Tailwind CSS v4 theme tokens as the source of truth for colors, spacing, sizing, radius, borders, shadows, typography, and motion.

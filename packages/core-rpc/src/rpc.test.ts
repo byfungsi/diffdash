@@ -1,12 +1,16 @@
 import { AppState } from "@diffdash/domain/app-state"
+import { CodeWorkspaceLease, CodeWorkspaceLeaseId } from "@diffdash/domain/code-workspace"
+import { GitCommitSha } from "@diffdash/domain/repository-comparison"
+import { ReviewRevision } from "@diffdash/domain/review-identity"
 import { describe, expect, it } from "@effect/vitest"
-import { Cause, Deferred, Effect, Exit, Fiber, Layer, Result, Schema } from "effect"
+import { Cause, Deferred, Effect, Exit, Fiber, Layer, Option, Result, Schema } from "effect"
 import * as RpcSerialization from "effect/unstable/rpc/RpcSerialization"
 import * as Rpc from "effect/unstable/rpc/Rpc"
 import * as RpcGroup from "effect/unstable/rpc/RpcGroup"
 import * as RpcTest from "effect/unstable/rpc/RpcTest"
 
 import { AppStateGetAdmissionMiddleware, CoreTransportAuthenticationMiddleware } from "./admission"
+import { CodeWorkspaceOpenRpc } from "./application-rpc"
 import { AppStateBusinessRpcs, AppStateGetRpc } from "./business"
 import { CoreAuthorizeDatabaseOwnershipRpc, CoreHealthRpc, CoreShutdownRpc } from "./control"
 import {
@@ -309,10 +313,7 @@ describe("Core RPC declarations", () => {
     ]
 
     const decodedValues = encodedValues.flatMap((value) => {
-      const bytes = parser.encode(value)
-      if (bytes === undefined || typeof bytes === "string") {
-        throw new Error("Native MessagePack did not encode a binary frame")
-      }
+      const bytes = Schema.decodeUnknownSync(Schema.Uint8Array)(parser.encode(value))
       return parser.decode(bytes)
     })
 
@@ -348,19 +349,46 @@ describe("Core RPC declarations", () => {
     expect(decodedIdentityFailure).toEqual(admissionIdentityFailure)
     expect(decodedLifecycleFailure).toEqual(admissionLifecycleFailure)
     const decodedDefectExit = Schema.decodeUnknownSync(appStateExitCodec)(decodedValues[10])
-    expect(Exit.isFailure(decodedDefectExit)).toBe(true)
-    if (Exit.isSuccess(decodedDefectExit)) throw new Error("Expected AppState defect exit")
-    const decodedDefect = Cause.squash(decodedDefectExit.cause)
-    expect(decodedDefect).toEqual(appStateDefect)
-    expect(decodedDefect).not.toHaveProperty("cause")
-    expect(decodedDefect).not.toHaveProperty("stack")
-    expect(decodedDefect).not.toHaveProperty("path")
+    Exit.match(decodedDefectExit, {
+      onFailure: (cause) => {
+        const decodedDefect = Cause.squash(cause)
+        expect(decodedDefect).toEqual(appStateDefect)
+        expect(decodedDefect).not.toHaveProperty("cause")
+        expect(decodedDefect).not.toHaveProperty("stack")
+        expect(decodedDefect).not.toHaveProperty("path")
+      },
+      onSuccess: () => expect.fail("Expected AppState defect exit"),
+    })
     const decodedExit = Schema.decodeSync(Rpc.exitSchema(AppStateGetRpc))(
       Schema.encodeSync(Rpc.exitSchema(AppStateGetRpc))(Exit.fail(admissionLifecycleFailure)),
     )
-    expect(Exit.isFailure(decodedExit)).toBe(true)
-    if (Exit.isSuccess(decodedExit)) throw new Error("Expected AppState admission failure exit")
-    expect(Cause.squash(decodedExit.cause)).toEqual(admissionLifecycleFailure)
+    Exit.match(decodedExit, {
+      onFailure: (cause) => expect(Cause.squash(cause)).toEqual(admissionLifecycleFailure),
+      onSuccess: () => expect.fail("Expected AppState admission failure exit"),
+    })
+  })
+
+  it("roundtrips transformed domain values through the Effect-neutral Core RPC wire", () => {
+    const parser = RpcSerialization.makeMsgPack({ maxBufferSize: 4_096 }).makeUnsafe()
+    const codec = Schema.toCodecJson(CodeWorkspaceOpenRpc.successSchema)
+    const gitRevision = GitCommitSha.make("a".repeat(40))
+    const lease = CodeWorkspaceLease.make({
+      id: CodeWorkspaceLeaseId.make("lease:rpc-wire"),
+      revision: ReviewRevision.make(gitRevision),
+      gitRevision: Option.some(gitRevision),
+      expiresAtMs: 1,
+    })
+    const encoded = Schema.encodeSync(codec)(lease)
+    const bytes = Schema.decodeUnknownSync(Schema.Uint8Array)(parser.encode(encoded))
+    const decodedFrames = parser.decode(bytes)
+    const decoded = Schema.decodeUnknownSync(codec)(decodedFrames[0])
+
+    expect(encoded).toMatchObject({ gitRevision })
+    expect(decoded).toBeInstanceOf(CodeWorkspaceLease)
+    Option.match(decoded.gitRevision, {
+      onNone: () => expect.fail("Expected a Git revision"),
+      onSome: (decodedRevision) => expect(decodedRevision).toBe(gitRevision),
+    })
   })
 
   it("roundtrips a sanitized control defect without private diagnostics", () => {
@@ -368,14 +396,16 @@ describe("Core RPC declarations", () => {
     const encoded = Schema.encodeSync(schema)(Exit.die(healthDefect))
     const decoded = Schema.decodeSync(schema)(encoded)
 
-    expect(Exit.isFailure(decoded)).toBe(true)
-    if (Exit.isSuccess(decoded)) throw new Error("Expected a defect exit")
-
-    const defect = Cause.squash(decoded.cause)
-    expect(defect).toEqual(healthDefect)
-    expect(defect).not.toHaveProperty("cause")
-    expect(defect).not.toHaveProperty("stack")
-    expect(defect).not.toHaveProperty("path")
+    Exit.match(decoded, {
+      onFailure: (cause) => {
+        const defect = Cause.squash(cause)
+        expect(defect).toEqual(healthDefect)
+        expect(defect).not.toHaveProperty("cause")
+        expect(defect).not.toHaveProperty("stack")
+        expect(defect).not.toHaveProperty("path")
+      },
+      onSuccess: () => expect.fail("Expected a defect exit"),
+    })
   })
 
   it("roundtrips a sanitized AppState defect without private diagnostics", () => {
@@ -383,14 +413,16 @@ describe("Core RPC declarations", () => {
     const encoded = Schema.encodeSync(schema)(Exit.die(appStateDefect))
     const decoded = Schema.decodeSync(schema)(encoded)
 
-    expect(Exit.isFailure(decoded)).toBe(true)
-    if (Exit.isSuccess(decoded)) throw new Error("Expected a defect exit")
-
-    const defect = Cause.squash(decoded.cause)
-    expect(defect).toEqual(appStateDefect)
-    expect(defect).not.toHaveProperty("cause")
-    expect(defect).not.toHaveProperty("stack")
-    expect(defect).not.toHaveProperty("path")
+    Exit.match(decoded, {
+      onFailure: (cause) => {
+        const defect = Cause.squash(cause)
+        expect(defect).toEqual(appStateDefect)
+        expect(defect).not.toHaveProperty("cause")
+        expect(defect).not.toHaveProperty("stack")
+        expect(defect).not.toHaveProperty("path")
+      },
+      onSuccess: () => expect.fail("Expected a defect exit"),
+    })
   })
 
   it("rejects control characters and Unicode line separators in safe messages", () => {

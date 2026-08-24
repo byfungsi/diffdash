@@ -3,7 +3,7 @@ import {
   hasBridgeTransportErrorEncoding,
   UNKNOWN_TRANSPORT_ERROR_MESSAGE,
 } from "@diffdash/protocol/transport-error"
-import { Match, Predicate } from "effect"
+import { HashSet, Option, Predicate } from "effect"
 import { Component, type ErrorInfo, type ReactNode } from "react"
 import { rendererFailureInput } from "@/shared/errors"
 
@@ -76,6 +76,11 @@ export class AppErrorBoundary extends Component<AppErrorBoundaryProps, AppErrorB
   }
 
   private readonly onWindowError = (event: ErrorEvent) => {
+    // Browsers report deferred ResizeObserver delivery as window errors, then retry next frame.
+    if (isResizeObserverDeliveryWarning(event)) {
+      event.preventDefault()
+      return
+    }
     // oxlint-disable-next-line eslint/no-console -- Preserve fatal diagnostics for beta debugging.
     console.error("DiffDash runtime failure", errorMessage(event.error ?? event.message))
     this.setState({ errorMessage: errorMessage(event.error ?? event.message) })
@@ -101,22 +106,40 @@ export class AppErrorBoundary extends Component<AppErrorBoundaryProps, AppErrorB
   }
 }
 
-const errorMessage = <Value,>(error: Value): string => {
+const resizeObserverDeliveryWarnings = HashSet.make(
+  "ResizeObserver loop completed with undelivered notifications.",
+  "ResizeObserver loop limit exceeded",
+)
+
+const isResizeObserverDeliveryWarning = (event: ErrorEvent): boolean =>
+  (event.error === null || event.error === undefined) &&
+  HashSet.has(resizeObserverDeliveryWarnings, event.message)
+
+const errorMessage = (error: unknown): string => {
   const input = rendererFailureInput(error)
-  const transport = decodeTransportError(input)
-  if (transport !== null) return transport.message
-  if (hasBridgeTransportErrorEncoding(input)) return UNKNOWN_TRANSPORT_ERROR_MESSAGE
-  const unknownInput: unknown = error
-  return Match.value(unknownInput).pipe(
-    Match.when(Match.instanceOf(Error), (value) =>
-      value.message.length > 0
-        ? value.message
-        : "An unknown error prevented DiffDash from continuing.",
+  const transportMessage = Option.map(
+    Option.fromNullishOr(decodeTransportError(input)),
+    (transportError) => transportError.message,
+  )
+  const fallback = "An unknown error prevented DiffDash from continuing."
+  return Option.getOrElse(
+    Option.orElse(transportMessage, () =>
+      Option.orElse(
+        Option.as(
+          Option.liftPredicate(input, hasBridgeTransportErrorEncoding),
+          UNKNOWN_TRANSPORT_ERROR_MESSAGE,
+        ),
+        () =>
+          Option.filter(
+            Option.orElse(
+              Option.map(Option.liftPredicate(error, Predicate.isError), (value) => value.message),
+              () => Option.liftPredicate(error, Predicate.isString),
+            ),
+            (message) => message.length > 0,
+          ),
+      ),
     ),
-    Match.when(Predicate.isString, (value) =>
-      value.length > 0 ? value : "An unknown error prevented DiffDash from continuing.",
-    ),
-    Match.orElse(() => "An unknown error prevented DiffDash from continuing."),
+    () => fallback,
   )
 }
 

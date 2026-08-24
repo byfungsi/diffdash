@@ -413,6 +413,18 @@ export const coreRpcClientLayer = (options: CoreRpcClientOptions) => {
         readCodeWorkspaceFile: Effect.fn("CoreRpcClient.readCodeWorkspaceFile")((request) =>
           authenticated(client("CodeWorkspace.readFile", request)),
         ),
+        codeWorkspaceDefinitions: Effect.fn("CoreRpcClient.codeWorkspaceDefinitions")((request) =>
+          authenticated(client("CodeWorkspace.definitions", request)),
+        ),
+        codeWorkspaceReferences: Effect.fn("CoreRpcClient.codeWorkspaceReferences")((request) =>
+          authenticated(client("CodeWorkspace.references", request)),
+        ),
+        codeWorkspaceChanges: Effect.fn("CoreRpcClient.codeWorkspaceChanges")((request) =>
+          authenticated(client("CodeWorkspace.changes", request)),
+        ),
+        codeWorkspaceLineChanges: Effect.fn("CoreRpcClient.codeWorkspaceLineChanges")((request) =>
+          authenticated(client("CodeWorkspace.lineChanges", request)),
+        ),
         listRepositories: Effect.fn("CoreRpcClient.listRepositories")((request) =>
           authenticated(client("Repositories.list", request)),
         ),

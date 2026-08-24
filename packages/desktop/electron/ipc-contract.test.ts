@@ -1,20 +1,59 @@
-import { AgentProviderId } from "@diffdash/domain/agent-provider"
+import {
+  AgentProviderAutoCandidates,
+  AgentProviderCapabilityStatus,
+  AgentProviderCatalog,
+  AgentProviderDefaults,
+  AgentProviderId,
+  AgentProviderStatus,
+} from "@diffdash/domain/agent-provider"
 import { AISettings, DEFAULT_AI_SETTINGS } from "@diffdash/domain/ai-settings"
 import { DiagnosticOperation } from "@diffdash/domain/diagnostic-operation"
+import { CodeWorkspaceLease, CodeWorkspaceLeaseId } from "@diffdash/domain/code-workspace"
+import { DiffFileVisibility } from "@diffdash/domain/diff"
 import { LocalRepositorySource } from "@diffdash/domain/git-provider"
+import { LocalReviewTarget } from "@diffdash/domain/local-review"
+import {
+  LanguagePosition,
+  LanguageRange,
+  RepositoryLanguageLocation,
+  RepositoryLanguageLocationLink,
+  RepositoryLanguageLocationResult,
+} from "@diffdash/domain/language"
 import { AgentProviderFailure } from "@diffdash/domain/provider-failure"
+import { AppPrerequisites } from "@diffdash/domain/prerequisites"
 import { LinkedCheckout, Repo, RepositoryCheckoutPath } from "@diffdash/domain/repository"
+import { GitCommitSha, ResolvedRepositoryComparison } from "@diffdash/domain/repository-comparison"
+import { RepositoryRelativePath } from "@diffdash/domain/repository-path"
 import { ReviewAgentProviderId } from "@diffdash/domain/review-agent-provider-id"
 import { WebUrl } from "@diffdash/domain/web-url"
 import { ReviewProjectId } from "@diffdash/domain/review-identity"
-import { ReviewKey, ReviewSnapshotId } from "@diffdash/domain/review-identity"
+import {
+  ReviewFileId,
+  ReviewFilePatchHash,
+  ReviewKey,
+  ReviewRevision,
+  ReviewSnapshotId,
+  ViewedFileRecord,
+} from "@diffdash/domain/review-identity"
+import {
+  AgentProvidersGetCatalogRpc,
+  PrerequisitesGetRpc,
+  RepositoryComparisonsResolveRpc,
+  ViewedFilesListLocalRpc,
+} from "@diffdash/core-rpc/application-rpc"
 import { ApplicationInstanceId, CoreProcessEpoch, HostRequestId } from "@diffdash/core-rpc/identity"
 import { CoreReviewSessionFailure } from "@diffdash/core-rpc/review-session"
 import { ListOpenCodeSessionsRequest } from "@diffdash/protocol/ai-connection"
-import type { AppUpdateState } from "@diffdash/protocol/app-update"
 import { AppUpdateFailed, AppUpdateIdle } from "@diffdash/protocol/app-update"
 import { EventChannel, InvokeChannel } from "@diffdash/protocol/channels"
 import { OpenWorkingTreeCommand } from "@diffdash/protocol/cli-navigation"
+import {
+  ReviewSessionId,
+  ReviewSessionIdentity,
+  ReviewSessionProcessId,
+  ReviewSessionRange,
+  ReviewSessionStateVersion,
+} from "@diffdash/protocol/review-session"
 import type { InvokeRequest } from "@diffdash/protocol/ipc"
 import {
   encodeFailureEnvelopeWithinBudget,
@@ -23,7 +62,7 @@ import {
   invokeResponseSchema,
   successEnvelope,
 } from "@diffdash/protocol/ipc"
-import type { BridgeResult } from "@diffdash/protocol/ipc"
+import type { EncodedBridgeResult } from "@diffdash/protocol/ipc"
 import { jsonSafeUtf8ByteLength } from "@diffdash/protocol/payload-budget"
 import { WalkthroughStartBridgeResult } from "@diffdash/protocol/walkthrough-operation"
 import {
@@ -39,7 +78,7 @@ import {
   transportError,
   UNKNOWN_TRANSPORT_ERROR_MESSAGE,
 } from "@diffdash/protocol/transport-error"
-import { Effect, Schema } from "effect"
+import { Effect, Match, Option, Schema } from "effect"
 import type { IpcMain, IpcMainInvokeEvent } from "electron"
 import { describe, expect, it, vi } from "vitest"
 import { CoreMethod, CoreMethodChannel, RepositoryLinkError } from "@diffdash/core"
@@ -348,6 +387,83 @@ describe("IPC contract", () => {
     })
   })
 
+  it("keeps transformed host responses encoded across contextBridge", async () => {
+    const lease = CodeWorkspaceLease.make({
+      id: CodeWorkspaceLeaseId.make("lease:encoded-response"),
+      revision: ReviewRevision.make("workspace-revision"),
+      gitRevision: Option.some(GitCommitSha.make("a".repeat(40))),
+      expiresAtMs: 1,
+    })
+    const encodedLease = Schema.encodeSync(CodeWorkspaceLease)(lease)
+    const transport = createRendererTransport(
+      rendererIpc({ _tag: "Success", value: encodedLease }).api,
+    )
+
+    const result = await transport.invoke(InvokeChannel.openCodeWorkspace, {
+      target: { _tag: "projectHead", projectId: ReviewProjectId.make("project") },
+    })
+
+    expect(result).toEqual({ _tag: "Success", value: encodedLease })
+    expect(
+      Match.valueTags(result, {
+        Failure: () => false,
+        Success: ({ value }) => Schema.is(CodeWorkspaceLease)(value),
+      }),
+    ).toBe(false)
+  })
+
+  it("preserves structured-clone binary leaves in encoded host responses", async () => {
+    const identity = ReviewSessionIdentity.make({
+      projectId: ReviewProjectId.make("project"),
+      reviewKey: ReviewKey.make("review"),
+      snapshotId: ReviewSnapshotId.make(`snapshot:v1:${"0".repeat(32)}`),
+      processId: ReviewSessionProcessId.make("process"),
+      sessionId: ReviewSessionId.make("session"),
+      stateVersion: ReviewSessionStateVersion.make(1),
+    })
+    const fileId = ReviewFileId.make("file")
+    const bytes = new TextEncoder().encode("diff")
+    const range = ReviewSessionRange.make({
+      identity,
+      file: {
+        ordinal: 0,
+        fileId,
+        path: RepositoryRelativePath.make("source.ts"),
+        oldPath: null,
+        additions: 1,
+        deletions: 0,
+        status: "modified",
+        visibility: DiffFileVisibility.cases.Visible.make({}),
+        patchHash: ReviewFilePatchHash.make("patch"),
+        hunkCount: 1,
+      },
+      blocks: [
+        {
+          id: "block",
+          hunkId: null,
+          ordinal: 0,
+          firstLine: 0,
+          lineCount: 1,
+          bytes,
+        },
+      ],
+      byteCount: bytes.byteLength,
+      complete: true,
+    })
+    const encodedRange = Schema.encodeSync(ReviewSessionRange)(range)
+    const transport = createRendererTransport(
+      rendererIpc({ _tag: "Success", value: encodedRange }).api,
+    )
+
+    const result = await transport.invoke(InvokeChannel.readProgressiveReviewRange, {
+      identity,
+      fileId,
+      startLine: 0,
+    })
+
+    expect(result).toEqual({ _tag: "Success", value: encodedRange })
+  })
+
   it("rejects oversized encoded renderer requests before invoking Electron", async () => {
     const ipc = rendererIpc()
     const transport = createRendererTransport(ipc.api)
@@ -369,6 +485,8 @@ describe("IPC contract", () => {
     await expectTransportError(transport.invoke(InvokeChannel.updatesGetState, {}), {
       _tag: "TransportError",
       code: "INVALID_RESPONSE",
+      message: `${InvokeChannel.updatesGetState} failed: Encoded response did not satisfy the preload schema for ${InvokeChannel.updatesGetState}`,
+      operation: InvokeChannel.updatesGetState,
     })
   })
 
@@ -486,7 +604,7 @@ describe("IPC contract", () => {
   it("decodes events, reports malformed and oversized payloads, and removes the exact listener", () => {
     const ipc = rendererIpc()
     const transport = createRendererTransport(ipc.api)
-    const listener = vi.fn<(result: BridgeResult<AppUpdateState>) => void>()
+    const listener = vi.fn<(result: EncodedBridgeResult) => void>()
     const cleanup = transport.subscribe(EventChannel.updateStateChanged, listener)
     const wrapped = ipc.listeners.get(EventChannel.updateStateChanged)
 
@@ -850,7 +968,182 @@ describe("IPC contract", () => {
     expect(envelope.value).toEqual(AppUpdateIdle.make({ currentVersion: "0.3.1" }))
   })
 
-  it("normalizes class responses decoded by the external Core bundle", async () => {
+  it("re-encodes a Core RPC-decoded agent provider catalog for renderer IPC", async () => {
+    const providerId = AgentProviderId.make("fixture")
+    const catalog = AgentProviderCatalog.make({
+      providers: [
+        AgentProviderStatus.make({
+          id: providerId,
+          displayName: "Fixture",
+          description: "Packaged E2E provider",
+          homepage: null,
+          capabilities: {
+            walkthrough: AgentProviderCapabilityStatus.cases.Ready.make({
+              runtimeVersion: "1.0.0",
+            }),
+            "review-thread": AgentProviderCapabilityStatus.cases.Unsupported.make({
+              reason: "Not configured",
+            }),
+          },
+          models: [],
+          defaults: AgentProviderDefaults.make({
+            walkthroughModel: null,
+            reviewThreadModel: null,
+          }),
+          setup: [],
+        }),
+      ],
+      autoCandidates: AgentProviderAutoCandidates.make({
+        walkthrough: [providerId],
+        reviewThread: [],
+      }),
+    })
+    const coreCodec = Schema.toCodecJson(AgentProvidersGetCatalogRpc.successSchema)
+    const mainOwnedCatalog = Schema.decodeUnknownSync(coreCodec)(
+      Schema.encodeSync(coreCodec)(catalog),
+    )
+    const host = hostIpc()
+    const registry = new IpcControllerRegistry(testRendererSecurityPolicy(), host.api, [
+      InvokeChannel.agentProvidersGetCatalog,
+    ])
+    registry.define(InvokeChannel.agentProvidersGetCatalog, async () => mainOwnedCatalog)
+    registry.install()
+
+    const response = await host.handler?.(trustedEvent(), {})
+    const envelope = Schema.decodeUnknownSync(
+      successEnvelope(invokeResponseSchema(InvokeChannel.agentProvidersGetCatalog)),
+    )(response)
+
+    expect(response).toMatchObject({
+      _tag: "Success",
+      value: { providers: [{ id: providerId }] },
+    })
+    expect(mainOwnedCatalog).toBeInstanceOf(AgentProviderCatalog)
+    expect(mainOwnedCatalog.providers[0]).toBeInstanceOf(AgentProviderStatus)
+    expect(envelope.value).toBeInstanceOf(AgentProviderCatalog)
+  })
+
+  it("re-encodes other Core RPC-decoded domain classes for renderer IPC", async () => {
+    const target = LocalReviewTarget.make({
+      kind: "local",
+      rootPath: RepositoryCheckoutPath.make("/repo"),
+    })
+    const repo = Repo.make({
+      id: ReviewProjectId.make("repo"),
+      source: LocalRepositorySource.make(),
+      checkout: LinkedCheckout.make({
+        remoteUrl: "file:///repo",
+        path: target.rootPath,
+      }),
+      isFavorite: false,
+      lastOpenedAt: null,
+      lastSyncedAt: null,
+      createdAt: "2026-08-23T00:00:00.000Z",
+      updatedAt: "2026-08-23T00:00:00.000Z",
+    })
+    const comparison = ResolvedRepositoryComparison.make({ repo, target })
+    const comparisonCodec = Schema.toCodecJson(RepositoryComparisonsResolveRpc.successSchema)
+    const mainOwnedComparison = Schema.decodeUnknownSync(comparisonCodec)(
+      Schema.encodeSync(comparisonCodec)(comparison),
+    )
+    const comparisonHost = hostIpc()
+    const comparisonRegistry = new IpcControllerRegistry(
+      testRendererSecurityPolicy(),
+      comparisonHost.api,
+      [InvokeChannel.resolveRepositoryComparison],
+    )
+    comparisonRegistry.define(
+      InvokeChannel.resolveRepositoryComparison,
+      async () => mainOwnedComparison,
+    )
+    comparisonRegistry.install()
+
+    const comparisonResponse = await comparisonHost.handler?.(trustedEvent(), {
+      command: {
+        _tag: "openRepositoryComparison",
+        localPath: target.rootPath,
+        repository: null,
+        baseRef: "main",
+        headRef: "feature",
+      },
+    })
+    expect(comparisonResponse).toMatchObject({ _tag: "Success" })
+    const comparisonEnvelope = Schema.decodeUnknownSync(
+      successEnvelope(invokeResponseSchema(InvokeChannel.resolveRepositoryComparison)),
+    )(comparisonResponse)
+
+    expect(mainOwnedComparison).toBeInstanceOf(ResolvedRepositoryComparison)
+    expect(comparisonEnvelope.value).toBeInstanceOf(ResolvedRepositoryComparison)
+
+    const prerequisites = AppPrerequisites.make({
+      gitInstalled: true,
+      ghInstalled: false,
+      ghVersion: null,
+      ghSearchRepositoriesAvailable: false,
+      ghSupported: false,
+      ghAuthenticated: false,
+      codingAgentInstalled: false,
+      installedCodingAgents: [],
+      providerDiagnostics: [],
+      setupRequirements: [],
+      diffDashCliInstalled: false,
+      diffDashCliInPath: false,
+      diffDashCliPath: null,
+      checkedAt: "2026-08-23T00:00:00.000Z",
+    })
+    const prerequisitesCodec = Schema.toCodecJson(PrerequisitesGetRpc.successSchema)
+    const mainOwnedPrerequisites = Schema.decodeUnknownSync(prerequisitesCodec)(
+      Schema.encodeSync(prerequisitesCodec)(prerequisites),
+    )
+    const prerequisitesHost = hostIpc()
+    const prerequisitesRegistry = new IpcControllerRegistry(
+      testRendererSecurityPolicy(),
+      prerequisitesHost.api,
+      [InvokeChannel.appDiagnostics],
+    )
+    prerequisitesRegistry.define(InvokeChannel.appDiagnostics, async () => mainOwnedPrerequisites)
+    prerequisitesRegistry.install()
+
+    const prerequisitesResponse = await prerequisitesHost.handler?.(trustedEvent(), {})
+    expect(prerequisitesResponse).toMatchObject({ _tag: "Success" })
+    const prerequisitesEnvelope = Schema.decodeUnknownSync(
+      successEnvelope(invokeResponseSchema(InvokeChannel.appDiagnostics)),
+    )(prerequisitesResponse)
+
+    expect(mainOwnedPrerequisites).toBeInstanceOf(AppPrerequisites)
+    expect(prerequisitesEnvelope.value).toBeInstanceOf(AppPrerequisites)
+
+    const viewedFile = ViewedFileRecord.make({
+      reviewKey: ReviewKey.make("review"),
+      patchHash: ReviewFilePatchHash.make("patch"),
+    })
+    const viewedFilesCodec = Schema.toCodecJson(ViewedFilesListLocalRpc.successSchema)
+    const mainOwnedViewedFiles = Schema.decodeUnknownSync(viewedFilesCodec)(
+      Schema.encodeSync(viewedFilesCodec)([viewedFile]),
+    )
+    const viewedFilesHost = hostIpc()
+    const viewedFilesRegistry = new IpcControllerRegistry(
+      testRendererSecurityPolicy(),
+      viewedFilesHost.api,
+      [InvokeChannel.listLocalViewedFiles],
+    )
+    viewedFilesRegistry.define(InvokeChannel.listLocalViewedFiles, async () => mainOwnedViewedFiles)
+    viewedFilesRegistry.install()
+
+    const viewedFilesResponse = await viewedFilesHost.handler?.(trustedEvent(), {
+      target: Schema.encodeSync(LocalReviewTarget)(target),
+      sourceBranch: null,
+    })
+    expect(viewedFilesResponse).toMatchObject({ _tag: "Success" })
+    const viewedFilesEnvelope = Schema.decodeUnknownSync(
+      successEnvelope(invokeResponseSchema(InvokeChannel.listLocalViewedFiles)),
+    )(viewedFilesResponse)
+
+    expect(mainOwnedViewedFiles[0]).toBeInstanceOf(ViewedFileRecord)
+    expect(viewedFilesEnvelope.value[0]).toBeInstanceOf(ViewedFileRecord)
+  })
+
+  it("rejects response values that are not owned by the main-process schema runtime", async () => {
     const host = hostIpc()
     const registry = new IpcControllerRegistry(testRendererSecurityPolicy(), host.api, [
       InvokeChannel.updatesGetState,
@@ -862,9 +1155,69 @@ describe("IPC contract", () => {
 
     const response = await host.handler?.(trustedEvent(), {})
 
+    expect(response).toMatchObject({
+      _tag: "Failure",
+      error: {
+        code: "INVALID_RESPONSE",
+        message: `Main-process response did not satisfy the IPC schema for ${InvokeChannel.updatesGetState}`,
+        operation: InvokeChannel.updatesGetState,
+      },
+    })
+  })
+
+  it("encodes Core language locations with absent source ranges", async () => {
+    const host = hostIpc()
+    const registry = new IpcControllerRegistry(testRendererSecurityPolicy(), host.api, [
+      InvokeChannel.codeWorkspaceReferences,
+    ])
+    const range = LanguageRange.make({
+      start: LanguagePosition.make({ line: 0, character: 0 }),
+      end: LanguagePosition.make({ line: 0, character: 6 }),
+    })
+    registry.define(InvokeChannel.codeWorkspaceReferences, async () =>
+      RepositoryLanguageLocationResult.make({
+        locations: [
+          RepositoryLanguageLocationLink.make({
+            originSelectionRange: Option.none(),
+            target: RepositoryLanguageLocation.make({
+              path: RepositoryRelativePath.make("source.ts"),
+              range,
+            }),
+            targetSelectionRange: range,
+          }),
+        ],
+        truncated: false,
+      }),
+    )
+    registry.install()
+
+    const response = await host.handler?.(trustedEvent(), {
+      leaseId: "lease:references",
+      path: "source.ts",
+      position: { line: 0, character: 1 },
+    })
+
     expect(response).toEqual({
       _tag: "Success",
-      value: { _tag: "idle", currentVersion: "0.3.1" },
+      value: {
+        locations: [
+          {
+            originSelectionRange: null,
+            target: {
+              path: "source.ts",
+              range: {
+                start: { line: 0, character: 0 },
+                end: { line: 0, character: 6 },
+              },
+            },
+            targetSelectionRange: {
+              start: { line: 0, character: 0 },
+              end: { line: 0, character: 6 },
+            },
+          },
+        ],
+        truncated: false,
+      },
     })
   })
 
@@ -912,10 +1265,7 @@ describe("IPC contract", () => {
   })
 })
 
-const expectTransportError = async <Value>(
-  promise: Promise<BridgeResult<Value>>,
-  expected: object,
-) => {
+const expectTransportError = async (promise: Promise<EncodedBridgeResult>, expected: object) => {
   const result = await promise
   expect(result).toMatchObject({ _tag: "Failure", error: expected })
 }
@@ -1063,6 +1413,10 @@ const testRuntime = (message: string): ApplicationRuntime => {
       listCodeWorkspaceDirectory: reject,
       searchCodeWorkspace: reject,
       readCodeWorkspaceFile: reject,
+      codeWorkspaceDefinitions: reject,
+      codeWorkspaceReferences: reject,
+      codeWorkspaceChanges: reject,
+      codeWorkspaceLineChanges: reject,
       listRepositories: reject,
       openProject: reject,
       repairRepositoryIdentities: reject,

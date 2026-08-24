@@ -3,7 +3,11 @@ import { LinkedCheckout, Repo, RepositoryCheckoutPath } from "@diffdash/domain/r
 import { ReviewProjectId } from "@diffdash/domain/review-identity"
 import { AppUpdateChecking, AppUpdateIdle } from "@diffdash/protocol/app-update"
 import { EventChannel, InvokeChannel } from "@diffdash/protocol/channels"
-import { FailureEnvelope, type BridgeResult } from "@diffdash/protocol/ipc"
+import {
+  FailureEnvelope,
+  type BridgeResult,
+  type RendererBridgeResult,
+} from "@diffdash/protocol/ipc"
 import { TransportError, transportError } from "@diffdash/protocol/transport-error"
 import { Effect, Fiber, Schema, Stream } from "effect"
 import { TestClock } from "effect/testing"
@@ -63,6 +67,9 @@ describe("invokePreload", () => {
 
       expect(failure).toBeInstanceOf(TransportError)
       expect(failure.code).toBe("INVALID_RESPONSE")
+      expect(failure.message).toBe(
+        `Preload response did not satisfy the renderer schema for ${InvokeChannel.listRepositories}`,
+      )
       expect(failure.operation).toBe(InvokeChannel.listRepositories)
     }),
   )
@@ -91,6 +98,9 @@ describe("invokePreload", () => {
       )
 
       expect(failure.code).toBe("INVALID_RESPONSE")
+      expect(failure.message).toBe(
+        `Preload response did not satisfy the renderer schema for ${InvokeChannel.listRepositories}`,
+      )
       expect(failure.operation).toBe(InvokeChannel.listRepositories)
     }),
   )
@@ -109,7 +119,7 @@ describe("invokePreload", () => {
 describe("renderer streams", () => {
   it.effect("subscribes before loading initial state and replays buffered events afterward", () =>
     Effect.gen(function* () {
-      let listener: ((result: BridgeResult<AppUpdateChecking>) => void) | undefined
+      let listener: ((result: RendererBridgeResult<AppUpdateChecking>) => void) | undefined
       let subscribed = false
       const initial = AppUpdateIdle.make({ currentVersion: "1.0.0" })
       const checking = AppUpdateChecking.make({ currentVersion: "1.0.0" })

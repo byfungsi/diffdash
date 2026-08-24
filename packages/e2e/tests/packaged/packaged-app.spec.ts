@@ -575,7 +575,7 @@ const verifyPackagedResources = async (packaged: PackagedAppPaths) => {
   const bunEntrypoint = await readFile(bunEntrypointPath)
   const version = await desktopPackageVersion()
   expect(manifest.buildId).toBe(
-    `core-${version}-e2e-${process.platform}-${process.arch}-${manifest.entrypointSha256.slice(0, 40)}`,
+    `core-${version}-e2e-${process.platform}-${process.arch}-${manifest.entrypointSha256.slice(0, 20)}-${manifest.typescriptTreeSha256.slice(0, 20)}`,
   )
   expect(manifest.entrypoint).toBe("core.mjs")
   expect(manifest.entrypointSha256).toBe(createHash("sha256").update(entrypoint).digest("hex"))
@@ -623,6 +623,15 @@ const parseCoreArtifactManifest = (text: string) => {
     !("entrypointSha256" in value) ||
     typeof value.entrypointSha256 !== "string" ||
     !/^[a-f0-9]{64}$/u.test(value.entrypointSha256) ||
+    !("language" in value) ||
+    typeof value.language !== "object" ||
+    value.language === null ||
+    !("typescript" in value.language) ||
+    typeof value.language.typescript !== "object" ||
+    value.language.typescript === null ||
+    !("treeSha256" in value.language.typescript) ||
+    typeof value.language.typescript.treeSha256 !== "string" ||
+    !/^[a-f0-9]{64}$/u.test(value.language.typescript.treeSha256) ||
     !("runtime" in value) ||
     typeof value.runtime !== "object" ||
     value.runtime === null ||
@@ -647,6 +656,7 @@ const parseCoreArtifactManifest = (text: string) => {
     buildId: value.buildId,
     entrypoint: value.entrypoint,
     entrypointSha256: value.entrypointSha256,
+    typescriptTreeSha256: value.language.typescript.treeSha256,
     bunEntrypoint: value.runtime.bun.entrypoint,
     bunEntrypointSha256: value.runtime.bun.entrypointSha256,
   }

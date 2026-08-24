@@ -1,4 +1,5 @@
 import { CoreApplicationRpcs } from "@diffdash/core-rpc/application-rpc"
+import { CodeWorkspaceError } from "@diffdash/domain/code-workspace"
 import { GitProviderId } from "@diffdash/domain/git-provider"
 import {
   ApplicationInstanceId,
@@ -13,7 +14,11 @@ import { Deferred, Effect, Fiber, Layer, Ref } from "effect"
 import { TestClock } from "effect/testing"
 import * as RpcTest from "effect/unstable/rpc/RpcTest"
 
-import { coreApplicationRpcHandlersLayer } from "./core-application-rpc-handlers"
+import {
+  coreApplicationRpcHandlersLayer,
+  makeCoreApplicationOperationFailure,
+} from "./core-application-rpc-handlers"
+import { CoreMethod } from "./core-contract"
 import { CoreLifecycle, coreLifecycleLayer } from "./core-lifecycle"
 import { CoreRuntimeServices } from "./core-runtime-services"
 import { ReviewLifecycleDiagnostics } from "./review-lifecycle-diagnostics"
@@ -83,6 +88,27 @@ const becomeReady = Effect.gen(function* () {
 })
 
 describe("Core application RPC handlers admission", () => {
+  it("preserves safe Code workspace failure details", () => {
+    const failure = makeCoreApplicationOperationFailure(
+      CoreMethod.openCodeWorkspace,
+      request,
+      CodeWorkspaceError.make({
+        operation: "open",
+        reason: "revisionUnavailable",
+        message: "Internal adapter detail must not cross the RPC boundary.",
+      }),
+    )
+
+    expect(failure).toMatchObject({
+      _tag: "CoreApplicationFailure",
+      ...request,
+      method: "CodeWorkspace.open",
+      code: "CODE_WORKSPACE_REVISION_UNAVAILABLE",
+      retryClass: "userAction",
+      safeMessage: "Git could not resolve the repository's current revision.",
+    })
+  })
+
   it.effect("rejects requests until Core is ready without invoking the method", () =>
     Effect.gen(function* () {
       const invocations = yield* Ref.make(0)

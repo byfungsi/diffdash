@@ -5,12 +5,14 @@ import { makeReviewDiffIdentity } from "@diffdash/domain/review-identity"
 import type { ReviewThreadAnchor, ReviewThreadDetails } from "@diffdash/domain/review-thread"
 import { Check, ChevronDown, ChevronRight, Copy, MessageSquare } from "lucide-react"
 import { ContextMenu } from "radix-ui"
-import { type RefObject, useLayoutEffect, useMemo, useRef, useState } from "react"
+import { Effect, Option } from "effect"
+import { type RefObject, useId, useLayoutEffect, useMemo, useRef, useState } from "react"
 import {
   FileDiff,
   type FileDiffMetadata,
   type FileDiffOptions,
   getSingularPatch,
+  type PierreFileDiff,
   useStableCallback,
   type VirtualFileMetrics,
 } from "./pierre"
@@ -27,12 +29,19 @@ import { Button } from "@/shared/ui/button"
 import { EmptyState } from "@/shared/ui/empty-state"
 import { MiddleTruncatedText } from "@/shared/ui/middle-truncated-text"
 import {
+  SourceSurfaceContributionId,
+  decodePierrePositiveInteger,
+  type SourceSurfaceRuntime,
+} from "@/source-surface/source-surface-runtime"
+import {
   ReviewThreadComposer,
   ReviewThreadPanel,
   type ReviewThreadsController,
+} from "@/threads/review-threads"
+import {
   reviewLineLabel,
   syncPinnedReviewThreadHistories,
-} from "@/threads/review-threads"
+} from "@/threads/review-thread-presentation"
 
 const REVIEW_DIFF_METRICS = {
   diffHeaderHeight: 0,
@@ -60,8 +69,8 @@ export const OpenDiffCard = ({
   forceExpanded,
   reviewThreads,
   selected,
+  surfaceRuntime,
   viewed,
-  onDiffRendered,
   onFileAnchorChange,
   onOpenFile,
   onOpenThread,
@@ -77,8 +86,8 @@ export const OpenDiffCard = ({
   readonly forceExpanded: boolean
   readonly reviewThreads: ReviewThreadsController
   readonly selected: boolean
+  readonly surfaceRuntime: SourceSurfaceRuntime<PierreFileDiff<ReviewThreadAnnotation>>
   readonly viewed: boolean
-  readonly onDiffRendered: NonNullable<FileDiffOptions<ReviewThreadAnnotation>["onPostRender"]>
   readonly onFileAnchorChange: (element: HTMLElement, focusElement: HTMLElement) => () => void
   readonly onOpenFile: () => void
   readonly onOpenThread: (details: ReviewThreadDetails) => void
@@ -91,6 +100,12 @@ export const OpenDiffCard = ({
   const fileHeaderFocusRef = useRef<HTMLButtonElement>(null)
   const copyOperationRef = useRef(0)
   const threadHistorySyncFrameRef = useRef<number | null>(null)
+  const localContributionId = useId()
+    .replaceAll(/[^a-z0-9]+/giu, "")
+    .toLowerCase()
+  const renderObserverId = SourceSurfaceContributionId.make(
+    `diffdash.builtin.review-card.${localContributionId}`,
+  )
   const [contextMenuState, setContextMenuState] = useState<DiffLineContextMenuState>({
     status: "closed",
   })
@@ -130,22 +145,10 @@ export const OpenDiffCard = ({
     const anchor = lineReviewAnchor(file, annotationSide, lineNumber)
     if (anchor !== null) onToggleLine(anchor)
   })
-  const onPostRender = useStableCallback<
-    NonNullable<FileDiffOptions<ReviewThreadAnnotation>["onPostRender"]>
-  >((node, instance, phase) => {
-    if (phase === "unmount") {
-      onDiffRendered(node, instance, phase)
-      return
-    }
-    setRenderedPatch(file.patch)
-    onDiffRendered(node, instance, phase)
-    if (annotations.length === 0 || threadHistorySyncFrameRef.current !== null) return
-    threadHistorySyncFrameRef.current = window.requestAnimationFrame(() => {
-      threadHistorySyncFrameRef.current = null
-      const card = document.getElementById(diffCardDomId(file.reviewKey))
-      if (card !== null) syncPinnedReviewThreadHistories(card)
-    })
-  })
+  const publishSurfaceRender = useMemo(
+    () => surfaceRuntime.createRenderPublisher(file.reviewKey),
+    [file.reviewKey, surfaceRuntime],
+  )
   const interactiveDiffOptions = useMemo<FileDiffOptions<ReviewThreadAnnotation>>(
     () =>
       renderAsPlainText
@@ -154,15 +157,31 @@ export const OpenDiffCard = ({
             tokenizeMaxLength: 0,
             onGutterUtilityClick,
             onLineClick,
-            onPostRender,
+            onPostRender: publishSurfaceRender,
           }
         : {
             ...diffOptions,
             onGutterUtilityClick,
             onLineClick,
-            onPostRender,
+            onPostRender: publishSurfaceRender,
           },
-    [diffOptions, onGutterUtilityClick, onLineClick, onPostRender, renderAsPlainText],
+    [diffOptions, onGutterUtilityClick, onLineClick, publishSurfaceRender, renderAsPlainText],
+  )
+  useLayoutEffect(
+    () =>
+      Effect.runSync(
+        surfaceRuntime.registerRenderObserver(renderObserverId, ({ phase, surfaceId }) => {
+          if (surfaceId !== file.reviewKey || phase === "unmount") return
+          setRenderedPatch(file.patch)
+          if (annotations.length === 0 || threadHistorySyncFrameRef.current !== null) return
+          threadHistorySyncFrameRef.current = window.requestAnimationFrame(() => {
+            threadHistorySyncFrameRef.current = null
+            const card = document.getElementById(diffCardDomId(file.reviewKey))
+            if (card !== null) syncPinnedReviewThreadHistories(card)
+          })
+        }),
+      ),
+    [annotations.length, file.patch, file.reviewKey, renderObserverId, surfaceRuntime],
   )
   useLayoutEffect(
     () => () => {
@@ -250,14 +269,21 @@ export const OpenDiffCard = ({
               className="bg-diff-canvas relative overflow-hidden"
               onContextMenu={(event) => {
                 const lineNumber = diffLineNumberFromEventPath(event.nativeEvent.composedPath())
-                if (lineNumber === null) {
-                  event.preventDefault()
-                  copyOperationRef.current += 1
-                  setContextMenuState({ status: "closed" })
-                  return
-                }
-                copyOperationRef.current += 1
-                setContextMenuState({ status: "open", lineNumber, copyStatus: "idle" })
+                Option.match(lineNumber, {
+                  onNone: () => {
+                    event.preventDefault()
+                    copyOperationRef.current += 1
+                    setContextMenuState({ status: "closed" })
+                  },
+                  onSome: (selectedLineNumber) => {
+                    copyOperationRef.current += 1
+                    setContextMenuState({
+                      status: "open",
+                      lineNumber: selectedLineNumber,
+                      copyStatus: "idle",
+                    })
+                  },
+                })
               }}
             >
               {diffReady ? null : <DiffLoadingSkeleton />}
@@ -424,16 +450,19 @@ export const OpenDiffCard = ({
   )
 }
 
-const diffLineNumberFromEventPath = (path: readonly EventTarget[]) => {
-  for (const target of path) {
-    if (!isHTMLElement(target)) continue
-    const value = target.getAttribute("data-line") ?? target.getAttribute("data-column-number")
-    if (value === null) continue
-    const lineNumber = Number(value)
-    if (Number.isSafeInteger(lineNumber) && lineNumber > 0) return lineNumber
-  }
-  return null
-}
+const diffLineNumberFromEventPath = (path: readonly EventTarget[]) =>
+  Option.firstSomeOf(
+    path.map((target) =>
+      Option.flatMap(Option.liftPredicate(target, isHTMLElement), (element) =>
+        Option.flatMap(
+          Option.fromNullishOr(
+            element.getAttribute("data-line") ?? element.getAttribute("data-column-number"),
+          ),
+          decodePierrePositiveInteger,
+        ),
+      ),
+    ),
+  )
 
 const DiffLoadingSkeleton = () => (
   <div

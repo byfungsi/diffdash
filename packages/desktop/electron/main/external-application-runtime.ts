@@ -1,5 +1,10 @@
 import * as NodeFileSystem from "@effect/platform-node/NodeFileSystem"
 import * as NodePath from "@effect/platform-node/NodePath"
+import {
+  CoreMethod,
+  type CoreMethod as CoreMethodType,
+  type CoreMethodOutput,
+} from "@diffdash/core"
 import { CoreEventReplayCursor, CoreEventSequence } from "@diffdash/core-rpc/event"
 import {
   ApplicationInstanceId,
@@ -31,8 +36,11 @@ import {
   WalkthroughGetOperationBridgeResult,
   WalkthroughOperationBridgeHint,
 } from "@diffdash/protocol/walkthrough-operation-state"
+import { InvokeChannel } from "@diffdash/protocol/channels"
+import type { InvokeResponse } from "@diffdash/protocol/ipc"
 import { TempResources } from "@diffdash/process/temp-resource"
-import { Effect, Exit, Layer, Schema, Scope, Stream } from "effect"
+import { Cause, Effect, Exit, Layer, Schema, Scope, Stream } from "effect"
+import { RpcClientDefect, RpcClientError } from "effect/unstable/rpc/RpcClientError"
 import { randomUUID } from "node:crypto"
 import { homedir, tmpdir } from "node:os"
 import { dirname, join, resolve } from "node:path"
@@ -69,6 +77,26 @@ const platformLayer = Layer.mergeAll(
 const CORE_SHUTDOWN_REQUEST_TIMEOUT = "1 second"
 const CORE_GRACEFUL_EXIT_TIMEOUT = "3 seconds"
 
+/** Runs one Core client operation while preserving its expected failure as the Promise rejection. */
+export const runExternalCoreOperationPromise = async <A, E>(
+  operation: Effect.Effect<A, E>,
+): Promise<A> => {
+  const exit = await Effect.runPromiseExit(operation)
+  return Exit.match(exit, {
+    onFailure: (cause) => {
+      const failure = Cause.squash(cause)
+      return Promise.reject(
+        Schema.is(RpcClientDefect)(failure)
+          ? failure.cause
+          : Schema.is(RpcClientError)(failure) && Schema.is(RpcClientDefect)(failure.reason)
+            ? failure.reason.cause
+            : failure,
+      )
+    },
+    onSuccess: (value) => Promise.resolve(value),
+  })
+}
+
 /** Creates the production Electron adapter backed exclusively by standalone Core RPC. */
 export const createExternalApplicationRuntime = (
   configuration: DesktopHostConfiguration,
@@ -93,13 +121,23 @@ export const createExternalApplicationRuntime = (
     })
   }
 
-  const invoke = <A, E>(
+  const invokeRaw = <A, E>(
     operation: (client: CoreRpcClient["Service"]) => Effect.Effect<A, E>,
   ): Promise<A> => {
     const current = session
     if (current?.client === undefined) throw new Error("DiffDash Core is not started.")
-    return runtime.runPromise(operation(current.client))
+    return runExternalCoreOperationPromise(operation(current.client))
   }
+
+  const invokeChannel = <Channel extends InvokeChannel, E>(
+    _channel: Channel,
+    operation: (client: CoreRpcClient["Service"]) => Effect.Effect<InvokeResponse<Channel>, E>,
+  ): Promise<InvokeResponse<Channel>> => invokeRaw(operation)
+
+  const invoke = <Method extends CoreMethodType, E>(
+    _method: Method,
+    operation: (client: CoreRpcClient["Service"]) => Effect.Effect<CoreMethodOutput<Method>, E>,
+  ): Promise<CoreMethodOutput<Method>> => invokeRaw(operation)
 
   const runReviewThreadAgent: ApplicationRuntime["core"]["runReviewThreadAgent"] = async (
     input,
@@ -110,135 +148,258 @@ export const createExternalApplicationRuntime = (
       ...input,
     })
     options?.onReviewThreadAgentProgress?.("reviewing")
-    const thread = await invoke((client) => client.runReviewThreadAgent(reviewAgentRequest))
+    const thread = await invoke(CoreMethod.runReviewThreadAgent, (client) =>
+      client.runReviewThreadAgent(reviewAgentRequest),
+    )
     options?.onReviewThreadAgentProgress?.("restoring-workspace")
     return thread
   }
 
   const core: ApplicationRuntime["core"] = {
     analyticsCapture: (input) =>
-      invoke((client) => client.analyticsCapture({ ...requestContext(), ...input })),
+      invoke(CoreMethod.analyticsCapture, (client) =>
+        client.analyticsCapture({ ...requestContext(), ...input }),
+      ),
     analyticsStart: (input) =>
-      invoke((client) => client.analyticsStart({ ...requestContext(), ...input })),
+      invoke(CoreMethod.analyticsStart, (client) =>
+        client.analyticsStart({ ...requestContext(), ...input }),
+      ),
     agentProvidersGetCatalog: (input) =>
-      invoke((client) => client.agentProvidersGetCatalog({ ...requestContext(), ...input })),
+      invoke(CoreMethod.agentProvidersGetCatalog, (client) =>
+        client.agentProvidersGetCatalog({ ...requestContext(), ...input }),
+      ),
     appDiagnostics: (input) =>
-      invoke((client) => client.appDiagnostics({ ...requestContext(), ...input })),
+      invoke(CoreMethod.appDiagnostics, (client) =>
+        client.appDiagnostics({ ...requestContext(), ...input }),
+      ),
     appInstallDiffDashCli: (input) =>
-      invoke((client) => client.appInstallDiffDashCli({ ...requestContext(), ...input })),
+      invoke(CoreMethod.appInstallDiffDashCli, (client) =>
+        client.appInstallDiffDashCli({ ...requestContext(), ...input }),
+      ),
+    // Native file intents terminate in Electron main and never enter renderer IPC.
     appOpenLocalRepositoryFile: (input) =>
-      invoke((client) => client.appOpenLocalRepositoryFile({ ...requestContext(), ...input })),
+      invokeRaw((client) => client.appOpenLocalRepositoryFile({ ...requestContext(), ...input })),
     appOpenRepositoryComparisonFile: (input) =>
-      invoke((client) => client.appOpenRepositoryComparisonFile({ ...requestContext(), ...input })),
+      invokeRaw((client) =>
+        client.appOpenRepositoryComparisonFile({ ...requestContext(), ...input }),
+      ),
     appOpenRepositoryFile: (input) =>
-      invoke((client) => client.appOpenRepositoryFile({ ...requestContext(), ...input })),
+      invokeRaw((client) => client.appOpenRepositoryFile({ ...requestContext(), ...input })),
     appStateGet: (input) =>
-      invoke((client) => client.appStateGet({ ...requestContext(), ...input })),
+      invoke(CoreMethod.appStateGet, (client) =>
+        client.appStateGet({ ...requestContext(), ...input }),
+      ),
     appStateUpdate: (input) =>
-      invoke((client) => client.appStateUpdate({ ...requestContext(), ...input })),
+      invoke(CoreMethod.appStateUpdate, (client) =>
+        client.appStateUpdate({ ...requestContext(), ...input }),
+      ),
     listProviders: (input) =>
-      invoke((client) => client.listProviders({ ...requestContext(), ...input })),
+      invoke(CoreMethod.listProviders, (client) =>
+        client.listProviders({ ...requestContext(), ...input }),
+      ),
     submitHostedReviewDecision: (input) =>
-      invoke((client) => client.submitHostedReviewDecision({ ...requestContext(), ...input })),
+      invoke(CoreMethod.submitHostedReviewDecision, (client) =>
+        client.submitHostedReviewDecision({ ...requestContext(), ...input }),
+      ),
     getHostedReviewDecision: (input) =>
-      invoke((client) => client.getHostedReviewDecision({ ...requestContext(), ...input })),
+      invoke(CoreMethod.getHostedReviewDecision, (client) =>
+        client.getHostedReviewDecision({ ...requestContext(), ...input }),
+      ),
     listHostedReviews: (input) =>
-      invoke((client) => client.listHostedReviews({ ...requestContext(), ...input })),
+      invoke(CoreMethod.listHostedReviews, (client) =>
+        client.listHostedReviews({ ...requestContext(), ...input }),
+      ),
     listAssignedHostedReviews: (input) =>
-      invoke((client) => client.listAssignedHostedReviews({ ...requestContext(), ...input })),
+      invoke(CoreMethod.listAssignedHostedReviews, (client) =>
+        client.listAssignedHostedReviews({ ...requestContext(), ...input }),
+      ),
     listHostedRepositorySearchScopes: (input) =>
-      invoke((client) =>
+      invoke(CoreMethod.listHostedRepositorySearchScopes, (client) =>
         client.listHostedRepositorySearchScopes({ ...requestContext(), ...input }),
       ),
     searchHostedRepositories: (input) =>
-      invoke((client) => client.searchHostedRepositories({ ...requestContext(), ...input })),
+      invoke(CoreMethod.searchHostedRepositories, (client) =>
+        client.searchHostedRepositories({ ...requestContext(), ...input }),
+      ),
     resolveLocalBranch: (input) =>
-      invoke((client) => client.resolveLocalBranch({ ...requestContext(), ...input })),
+      invoke(CoreMethod.resolveLocalBranch, (client) =>
+        client.resolveLocalBranch({ ...requestContext(), ...input }),
+      ),
     resolveLastCommit: (input) =>
-      invoke((client) => client.resolveLastCommit({ ...requestContext(), ...input })),
+      invoke(CoreMethod.resolveLastCommit, (client) =>
+        client.resolveLastCommit({ ...requestContext(), ...input }),
+      ),
     resolveRepositoryComparison: (input) =>
-      invoke((client) => client.resolveRepositoryComparison({ ...requestContext(), ...input })),
+      invoke(CoreMethod.resolveRepositoryComparison, (client) =>
+        client.resolveRepositoryComparison({ ...requestContext(), ...input }),
+      ),
     acquireHostedReviewSnapshot: (input) =>
-      invoke((client) => client.acquireHostedReviewSnapshot({ ...requestContext(), ...input })),
+      invoke(CoreMethod.acquireHostedReviewSnapshot, (client) =>
+        client.acquireHostedReviewSnapshot({ ...requestContext(), ...input }),
+      ),
     acquireLocalReviewSnapshot: (input) =>
-      invoke((client) => client.acquireLocalReviewSnapshot({ ...requestContext(), ...input })),
+      invoke(CoreMethod.acquireLocalReviewSnapshot, (client) =>
+        client.acquireLocalReviewSnapshot({ ...requestContext(), ...input }),
+      ),
     acquireRepositoryComparisonSnapshot: (input) =>
-      invoke((client) =>
+      invoke(CoreMethod.acquireRepositoryComparisonSnapshot, (client) =>
         client.acquireRepositoryComparisonSnapshot({ ...requestContext(), ...input }),
       ),
     favoriteRemoteRepository: (input) =>
-      invoke((client) => client.favoriteRemoteRepository({ ...requestContext(), ...input })),
+      invoke(CoreMethod.favoriteRemoteRepository, (client) =>
+        client.favoriteRemoteRepository({ ...requestContext(), ...input }),
+      ),
     forgetRepository: (input) =>
-      invoke((client) => client.forgetRepository({ ...requestContext(), ...input })),
+      invoke(CoreMethod.forgetRepository, (client) =>
+        client.forgetRepository({ ...requestContext(), ...input }),
+      ),
     installRepository: (input) =>
-      invoke((client) => client.installRepository({ ...requestContext(), ...input })),
+      invoke(CoreMethod.installRepository, (client) =>
+        client.installRepository({ ...requestContext(), ...input }),
+      ),
     linkRepository: (input) =>
-      invoke((client) => client.linkRepository({ ...requestContext(), ...input })),
+      invoke(CoreMethod.linkRepository, (client) =>
+        client.linkRepository({ ...requestContext(), ...input }),
+      ),
     openCodeWorkspace: (input) =>
-      invoke((client) => client.openCodeWorkspace({ ...requestContext(), ...input })),
+      invoke(CoreMethod.openCodeWorkspace, (client) =>
+        client.openCodeWorkspace({ ...requestContext(), ...input }),
+      ),
     heartbeatCodeWorkspace: (input) =>
-      invoke((client) => client.heartbeatCodeWorkspace({ ...requestContext(), ...input })),
+      invoke(CoreMethod.heartbeatCodeWorkspace, (client) =>
+        client.heartbeatCodeWorkspace({ ...requestContext(), ...input }),
+      ),
     releaseCodeWorkspace: (input) =>
-      invoke((client) => client.releaseCodeWorkspace({ ...requestContext(), ...input })),
+      invoke(CoreMethod.releaseCodeWorkspace, (client) =>
+        client.releaseCodeWorkspace({ ...requestContext(), ...input }),
+      ),
     listCodeWorkspaceDirectory: (input) =>
-      invoke((client) => client.listCodeWorkspaceDirectory({ ...requestContext(), ...input })),
+      invoke(CoreMethod.listCodeWorkspaceDirectory, (client) =>
+        client.listCodeWorkspaceDirectory({ ...requestContext(), ...input }),
+      ),
     searchCodeWorkspace: (input) =>
-      invoke((client) => client.searchCodeWorkspace({ ...requestContext(), ...input })),
+      invoke(CoreMethod.searchCodeWorkspace, (client) =>
+        client.searchCodeWorkspace({ ...requestContext(), ...input }),
+      ),
     readCodeWorkspaceFile: (input) =>
-      invoke((client) => client.readCodeWorkspaceFile({ ...requestContext(), ...input })),
+      invoke(CoreMethod.readCodeWorkspaceFile, (client) =>
+        client.readCodeWorkspaceFile({ ...requestContext(), ...input }),
+      ),
+    codeWorkspaceDefinitions: (input) =>
+      invoke(CoreMethod.codeWorkspaceDefinitions, (client) =>
+        client.codeWorkspaceDefinitions({ ...requestContext(), ...input }),
+      ),
+    codeWorkspaceReferences: (input) =>
+      invoke(CoreMethod.codeWorkspaceReferences, (client) =>
+        client.codeWorkspaceReferences({ ...requestContext(), ...input }),
+      ),
+    codeWorkspaceChanges: (input) =>
+      invoke(CoreMethod.codeWorkspaceChanges, (client) =>
+        client.codeWorkspaceChanges({ ...requestContext(), ...input }),
+      ),
+    codeWorkspaceLineChanges: (input) =>
+      invoke(CoreMethod.codeWorkspaceLineChanges, (client) =>
+        client.codeWorkspaceLineChanges({ ...requestContext(), ...input }),
+      ),
     listRepositories: (input) =>
-      invoke((client) => client.listRepositories({ ...requestContext(), ...input })),
+      invoke(CoreMethod.listRepositories, (client) =>
+        client.listRepositories({ ...requestContext(), ...input }),
+      ),
     openProject: (input) =>
-      invoke((client) => client.openProject({ ...requestContext(), ...input })),
+      invoke(CoreMethod.openProject, (client) =>
+        client.openProject({ ...requestContext(), ...input }),
+      ),
     repairRepositoryIdentities: (input) =>
-      invoke((client) => client.repairRepositoryIdentities({ ...requestContext(), ...input })),
+      invoke(CoreMethod.repairRepositoryIdentities, (client) =>
+        client.repairRepositoryIdentities({ ...requestContext(), ...input }),
+      ),
     resourceDiagnostics: (input) =>
-      invoke((client) => client.resourceDiagnostics({ ...requestContext(), ...input })),
+      invoke(CoreMethod.resourceDiagnostics, (client) =>
+        client.resourceDiagnostics({ ...requestContext(), ...input }),
+      ),
     clearDisposableResources: (input) =>
-      invoke((client) => client.clearDisposableResources({ ...requestContext(), ...input })),
+      invoke(CoreMethod.clearDisposableResources, (client) =>
+        client.clearDisposableResources({ ...requestContext(), ...input }),
+      ),
     e2eReviewLifecycleDiagnostics: () =>
-      invoke((client) => client.e2eReviewLifecycleDiagnostics(requestContext())),
+      invokeChannel(InvokeChannel.e2eReviewLifecycleDiagnostics, (client) =>
+        client.e2eReviewLifecycleDiagnostics(requestContext()),
+      ),
     e2eHoldNextReviewAcquisition: () =>
-      invoke((client) => client.e2eHoldNextReviewAcquisition(requestContext())),
+      invokeChannel(InvokeChannel.e2eHoldNextReviewAcquisition, (client) =>
+        client.e2eHoldNextReviewAcquisition(requestContext()),
+      ),
     setRepositoryFavorite: (input) =>
-      invoke((client) => client.setRepositoryFavorite({ ...requestContext(), ...input })),
+      invoke(CoreMethod.setRepositoryFavorite, (client) =>
+        client.setRepositoryFavorite({ ...requestContext(), ...input }),
+      ),
     projectWorkspaceGet: (input) =>
-      invoke((client) => client.projectWorkspaceGet({ ...requestContext(), ...input })),
+      invoke(CoreMethod.projectWorkspaceGet, (client) =>
+        client.projectWorkspaceGet({ ...requestContext(), ...input }),
+      ),
     projectWorkspaceSave: (input) =>
-      invoke((client) => client.projectWorkspaceSave({ ...requestContext(), ...input })),
+      invoke(CoreMethod.projectWorkspaceSave, (client) =>
+        client.projectWorkspaceSave({ ...requestContext(), ...input }),
+      ),
     listOpenCodeSessions: (input) =>
-      invoke((client) => client.listOpenCodeSessions({ ...requestContext(), ...input })),
+      invoke(CoreMethod.listOpenCodeSessions, (client) =>
+        client.listOpenCodeSessions({ ...requestContext(), ...input }),
+      ),
     connectOpenCodeSession: (input) =>
-      invoke((client) => client.connectOpenCodeSession({ ...requestContext(), ...input })),
+      invoke(CoreMethod.connectOpenCodeSession, (client) =>
+        client.connectOpenCodeSession({ ...requestContext(), ...input }),
+      ),
     submitComment: (input) =>
-      invoke((client) => client.submitComment({ ...requestContext(), ...input })),
+      invoke(CoreMethod.submitComment, (client) =>
+        client.submitComment({ ...requestContext(), ...input }),
+      ),
     addReviewThreadUserMessage: (input) =>
-      invoke((client) => client.addReviewThreadUserMessage({ ...requestContext(), ...input })),
+      invoke(CoreMethod.addReviewThreadUserMessage, (client) =>
+        client.addReviewThreadUserMessage({ ...requestContext(), ...input }),
+      ),
     createReviewThread: (input) =>
-      invoke((client) => client.createReviewThread({ ...requestContext(), ...input })),
+      invoke(CoreMethod.createReviewThread, (client) =>
+        client.createReviewThread({ ...requestContext(), ...input }),
+      ),
     getReviewThread: (input) =>
-      invoke((client) => client.getReviewThread({ ...requestContext(), ...input })),
+      invoke(CoreMethod.getReviewThread, (client) =>
+        client.getReviewThread({ ...requestContext(), ...input }),
+      ),
     listReviewThreads: (input) =>
-      invoke((client) => client.listReviewThreads({ ...requestContext(), ...input })),
+      invoke(CoreMethod.listReviewThreads, (client) =>
+        client.listReviewThreads({ ...requestContext(), ...input }),
+      ),
     runReviewThreadAgent,
     settingsGet: (input) =>
-      invoke((client) => client.settingsGet({ ...requestContext(), ...input })),
+      invoke(CoreMethod.settingsGet, (client) =>
+        client.settingsGet({ ...requestContext(), ...input }),
+      ),
     settingsUpdate: (input) =>
-      invoke((client) => client.settingsUpdate({ ...requestContext(), ...input })),
+      invoke(CoreMethod.settingsUpdate, (client) =>
+        client.settingsUpdate({ ...requestContext(), ...input }),
+      ),
     listViewedFiles: (input) =>
-      invoke((client) => client.listViewedFiles({ ...requestContext(), ...input })),
+      invoke(CoreMethod.listViewedFiles, (client) =>
+        client.listViewedFiles({ ...requestContext(), ...input }),
+      ),
     listLocalViewedFiles: (input) =>
-      invoke((client) => client.listLocalViewedFiles({ ...requestContext(), ...input })),
+      invoke(CoreMethod.listLocalViewedFiles, (client) =>
+        client.listLocalViewedFiles({ ...requestContext(), ...input }),
+      ),
     setViewedFile: (input) =>
-      invoke((client) => client.setViewedFile({ ...requestContext(), ...input })),
+      invoke(CoreMethod.setViewedFile, (client) =>
+        client.setViewedFile({ ...requestContext(), ...input }),
+      ),
     setLocalViewedFile: (input) =>
-      invoke((client) => client.setLocalViewedFile({ ...requestContext(), ...input })),
+      invoke(CoreMethod.setLocalViewedFile, (client) =>
+        client.setLocalViewedFile({ ...requestContext(), ...input }),
+      ),
     listRepositoryComparisonViewedFiles: (input) =>
-      invoke((client) =>
+      invoke(CoreMethod.listRepositoryComparisonViewedFiles, (client) =>
         client.listRepositoryComparisonViewedFiles({ ...requestContext(), ...input }),
       ),
     setRepositoryComparisonViewedFile: (input) =>
-      invoke((client) =>
+      invoke(CoreMethod.setRepositoryComparisonViewedFile, (client) =>
         client.setRepositoryComparisonViewedFile({ ...requestContext(), ...input }),
       ),
   }

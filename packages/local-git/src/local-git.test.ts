@@ -1,5 +1,9 @@
 import { describe, expect, it } from "@effect/vitest"
-import { Effect, Result, Layer, Schema, Stream } from "effect"
+import { Effect, Result, Layer, Option, Ref, Schema, Stream } from "effect"
+import { execFileSync } from "node:child_process"
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
+import { tmpdir } from "node:os"
+import { join } from "node:path"
 
 import {
   ProcessExitError,
@@ -11,6 +15,7 @@ import {
 } from "@diffdash/process"
 import { GitService, LocalReviewTargetError } from "./local-git"
 import { RepositoryCheckoutPath } from "@diffdash/domain/repository"
+import { RepositoryRelativePath } from "@diffdash/domain/repository-path"
 import { RepositoryComparisonRef } from "@diffdash/domain/repository-comparison"
 import { REPOSITORY_SCOPED_GIT_ENV } from "./git-environment"
 
@@ -57,6 +62,163 @@ const makeLastCommitProcessLayer = (readRevisions: FakeProcessRun) =>
   })
 
 describe("GitService", () => {
+  it.live("applies modified files and nested additions from a snapshot spool", () =>
+    Effect.acquireUseRelease(
+      Effect.sync(() => {
+        const root = mkdtempSync(join(tmpdir(), "diffdash-workspace-patch-"))
+        const workspace = join(root, "workspace")
+        const patchFilePath = join(root, "review.patch")
+        mkdirSync(join(workspace, "src"), { recursive: true })
+        execFileSync("git", ["init", "--quiet", workspace])
+        writeFileSync(join(workspace, "src/base.ts"), "export const value = 1\n")
+        writeFileSync(
+          patchFilePath,
+          `diff --git a/src/base.ts b/src/base.ts
+--- a/src/base.ts
++++ b/src/base.ts
+@@ -1 +1 @@
+-export const value = 1
++export const value = 2
+diff --git a/generated/nested/new.ts b/generated/nested/new.ts
+new file mode 100644
+--- /dev/null
++++ b/generated/nested/new.ts
+@@ -0,0 +1 @@
++export const added = true
+`,
+        )
+        return { patchFilePath, root, workspace: RepositoryCheckoutPath.make(workspace) }
+      }),
+      ({ patchFilePath, workspace }) =>
+        Effect.gen(function* () {
+          const git = yield* GitService
+          yield* git.applyWorkspacePatch(workspace, readFileSync(patchFilePath))
+          expect(readFileSync(join(workspace, "src/base.ts"), "utf8")).toBe(
+            "export const value = 2\n",
+          )
+          expect(readFileSync(join(workspace, "generated/nested/new.ts"), "utf8")).toBe(
+            "export const added = true\n",
+          )
+        }).pipe(Effect.provide(GitService.layer), Effect.provide(ProcessService.layer)),
+      ({ root }) => Effect.sync(() => rmSync(root, { force: true, recursive: true })),
+    ),
+  )
+
+  it.effect("applies a persisted snapshot patch inside the isolated workspace", () =>
+    Effect.gen(function* () {
+      const applied = yield* Ref.make(Option.none<ProcessRequest>())
+      const processesLayer = makeProcessLayer((_command, args, request) => {
+        return Ref.set(applied, Option.some(request)).pipe(Effect.as(makeProcessResult("", args)))
+      })
+
+      yield* Effect.gen(function* () {
+        const git = yield* GitService
+        yield* git.applyWorkspacePatch(
+          RepositoryCheckoutPath.make("/workspace/snapshot"),
+          new TextEncoder().encode("diff --git a/file.ts b/file.ts\n"),
+        )
+      }).pipe(Effect.provide(GitService.layer), Effect.provide(processesLayer))
+
+      expect(yield* Ref.get(applied)).toEqual(
+        Option.some(
+          expect.objectContaining({
+            args: [
+              "-C",
+              "/workspace/snapshot",
+              "apply",
+              "--binary",
+              "--whitespace=nowarn",
+              "--",
+              expect.stringMatching(/diffdash-workspace-patch-.*\/workspace\.patch$/u),
+            ],
+            stdin: null,
+          }),
+        ),
+      )
+    }),
+  )
+
+  it.effect("projects targeted tracked and untracked working-tree hunks", () =>
+    Effect.gen(function* () {
+      const trackedPatch = `diff --git a/src/app.ts b/src/app.ts
+--- a/src/app.ts
++++ b/src/app.ts
+@@ -2 +2 @@
+-old
++changed
+`
+      const untrackedPatch = `diff --git a/new.ts b/new.ts
+new file mode 100644
+--- /dev/null
++++ b/new.ts
+@@ -0,0 +1,2 @@
++one
++two
+`
+      const processesLayer = makeProcessLayer((_command, args) => {
+        const joined = args.join(" ")
+        if (joined.includes("HEAD -- src/app.ts")) {
+          return Effect.succeed(makeProcessResult(trackedPatch, args))
+        }
+        if (joined.includes("HEAD -- new.ts")) {
+          return Effect.succeed(makeProcessResult("", args))
+        }
+        if (joined.includes("status --porcelain=v1") && joined.endsWith("-- new.ts")) {
+          return Effect.succeed(makeProcessResult("?? new.ts\0", args))
+        }
+        if (joined.includes("--no-index -- /dev/null new.ts")) {
+          return Effect.fail(
+            ProcessExitError.make({
+              ...makeProcessResult(untrackedPatch, args),
+              exitCode: 1,
+              message: "Git reported a difference",
+            }),
+          )
+        }
+        return Effect.die(new Error(`Unexpected Git invocation: ${joined}`))
+      })
+
+      const changes = yield* Effect.gen(function* () {
+        const git = yield* GitService
+        const root = RepositoryCheckoutPath.make("/workspace/repo")
+        return yield* Effect.all([
+          git.workingTreeFileLineChanges(root, RepositoryRelativePath.make("src/app.ts")),
+          git.workingTreeFileLineChanges(root, RepositoryRelativePath.make("new.ts")),
+        ])
+      }).pipe(Effect.provide(GitService.layer), Effect.provide(processesLayer))
+
+      expect(changes).toEqual([
+        [{ kind: "modified", startLine: 2, endLine: 2 }],
+        [{ kind: "added", startLine: 1, endLine: 2 }],
+      ])
+    }),
+  )
+
+  it.effect("parses modified, added, deleted, and renamed working-tree files", () =>
+    Effect.gen(function* () {
+      const processesLayer = makeProcessLayer((_command, args) =>
+        Effect.succeed(
+          makeProcessResult(
+            " M package.json\0?? new file.ts\0 D deleted.ts\0R  moved.ts\0old.ts\0",
+            args,
+          ),
+        ),
+      )
+
+      const changes = yield* Effect.gen(function* () {
+        const git = yield* GitService
+        return yield* git.workingTreeChanges(RepositoryCheckoutPath.make("/workspace/repo"))
+      }).pipe(Effect.provide(GitService.layer), Effect.provide(processesLayer))
+
+      expect(changes.map(({ path, status }) => ({ path, status }))).toEqual([
+        { path: "package.json", status: "modified" },
+        { path: "new file.ts", status: "added" },
+        { path: "deleted.ts", status: "deleted" },
+        { path: "moved.ts", status: "renamed" },
+      ])
+    }),
+  )
+
   it.effect(
     "detects a local Git checkout root and origin URL without parsing provider identity",
     () =>

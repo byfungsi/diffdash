@@ -18,11 +18,22 @@ import {
 } from "@diffdash/domain/comment"
 import {
   CodeWorkspaceDirectoryPage,
+  CodeWorkspaceChangesResult,
+  CodeWorkspaceLineChangesResult,
   CodeWorkspaceEntry,
   CodeWorkspaceLease,
   CodeWorkspaceLeaseId,
   CodeWorkspaceSearchResult,
+  CodeWorkspaceTarget,
+  LocalReviewSnapshotCodeWorkspaceTarget,
 } from "@diffdash/domain/code-workspace"
+import {
+  LanguagePosition,
+  LanguageRange,
+  RepositoryLanguageLocation,
+  RepositoryLanguageLocationLink,
+  RepositoryLanguageLocationResult,
+} from "@diffdash/domain/language"
 import {
   LocalCheckoutFileContent,
   LocalCheckoutFileList,
@@ -175,6 +186,7 @@ import {
   RepairRepositoryIdentitiesCommand,
 } from "@diffdash/protocol/cli-navigation"
 import { InvokeChannel } from "@diffdash/protocol/channels"
+import { invokeResponseSchema } from "@diffdash/protocol/ipc"
 import {
   AppPrerequisites,
   CodingAgentName,
@@ -199,12 +211,13 @@ import type {
 } from "@diffdash/protocol/walkthrough-operation-state"
 import { StrictMode } from "react"
 import { createRoot, type Root } from "react-dom/client"
-import { Match, type Schema } from "effect"
+import { HashMap, Match, Option, Schema } from "effect"
 import { afterEach, expect, vi } from "vitest"
 import {
   REVIEW_SEARCH_ACTIVE_HIGHLIGHT,
   REVIEW_SEARCH_MATCH_HIGHLIGHT,
 } from "@/review/review-search-highlights"
+import { isMacPlatform } from "@/shell/keyboard-shortcut-platform"
 import { App } from "../app"
 import { lineReviewAnchor } from "../review/thread-annotations"
 import "../styles.css"
@@ -1298,8 +1311,9 @@ index 7777777..8888888 100644
   const appearanceSettings = await window.diffDash.settings.get()
   expect(appearanceSettings._tag).toBe("Success")
   if (appearanceSettings._tag === "Success") {
-    expect(appearanceSettings.value.themes.dark).toBe("catppuccin-mocha")
-    expect(appearanceSettings.value.codeThemes.dark).toBe("diffdash-dark")
+    const decodedAppearanceSettings = Schema.decodeUnknownSync(AISettings)(appearanceSettings.value)
+    expect(decodedAppearanceSettings.themes.dark).toBe("catppuccin-mocha")
+    expect(decodedAppearanceSettings.codeThemes.dark).toBe("diffdash-dark")
   }
   renderApp()
 
@@ -2126,6 +2140,20 @@ scenario("codeRibbonShortcuts", async () => {
         path,
         content: path === readmePath ? readmeContents : 'export const app = "DiffDash"\n',
       }),
+    codeWorkspaceReferences: async () => {
+      const position = new LanguagePosition({ line: 0, character: 13 })
+      const range = new LanguageRange({ start: position, end: position })
+      return RepositoryLanguageLocationResult.make({
+        locations: [
+          new RepositoryLanguageLocationLink({
+            originSelectionRange: Option.none(),
+            target: new RepositoryLanguageLocation({ path: appPath, range }),
+            targetSelectionRange: range,
+          }),
+        ],
+        truncated: false,
+      })
+    },
   })
   renderApp()
   await openDefaultProject()
@@ -2145,8 +2173,36 @@ scenario("codeRibbonShortcuts", async () => {
   await vi.waitFor(() =>
     expect(calls.readLocalCheckoutFile).toHaveBeenCalledWith(linked.id, appPath),
   )
+  const appToken = await vi.waitFor(() => {
+    const tokens = document
+      .querySelector("diffs-container")
+      ?.shadowRoot?.querySelectorAll<HTMLElement>("[data-char]")
+    const token = [...(tokens ?? [])].find((candidate) => candidate.textContent === "app")
+    expect(token).toBeDefined()
+    return token
+  })
+  const macPrimaryModifier = isMacPlatform()
+  appToken?.dispatchEvent(
+    new MouseEvent("click", {
+      bubbles: true,
+      button: 0,
+      composed: true,
+      ctrlKey: !macPrimaryModifier,
+      metaKey: macPrimaryModifier,
+      shiftKey: true,
+    }),
+  )
+  await vi.waitFor(() => {
+    expect(calls.codeWorkspaceReferences).toHaveBeenCalled()
+    expect(
+      document.querySelector('[role="dialog"][aria-label="Peek References, 1 result"]'),
+    ).not.toBeNull()
+  })
 
-  dispatchKeyboardShortcut("k", { metaKey: true })
+  dispatchKeyboardShortcut("k", {
+    ctrlKey: !macPrimaryModifier,
+    metaKey: macPrimaryModifier,
+  })
   const fileInput = await vi.waitFor(() => {
     const input = document.querySelector<HTMLInputElement>(
       'dialog input[placeholder="Search repository files"]',
@@ -2184,8 +2240,14 @@ scenario("codeRibbonShortcuts", async () => {
     )
   })
 
-  dispatchKeyboardShortcut("b", { metaKey: true })
-  dispatchKeyboardShortcut("f", { metaKey: true })
+  dispatchKeyboardShortcut("b", {
+    ctrlKey: !macPrimaryModifier,
+    metaKey: macPrimaryModifier,
+  })
+  dispatchKeyboardShortcut("f", {
+    ctrlKey: !macPrimaryModifier,
+    metaKey: macPrimaryModifier,
+  })
   const searchInput = await vi.waitFor(() => {
     const input = document.querySelector<HTMLInputElement>(
       'input[aria-label="Search current file"]',
@@ -6086,6 +6148,11 @@ scenario("shortcutReferenceHome", async () => {
   expect(dialog?.textContent).toContain("Search review")
   expect(dialog?.textContent).toContain("Next match")
   expect(dialog?.textContent).toContain("Previous match")
+  expect(dialog?.textContent).toContain("Code Navigation")
+  expect(dialog?.textContent).toContain("Go to selected Peek result")
+  expect(dialog?.textContent).toContain("Next Peek result")
+  expect(dialog?.textContent).toContain("Previous Peek result")
+  expect(dialog?.textContent).toContain("F12")
   expect(dialog?.textContent).toContain("Toggle viewed file")
   expect(dialog?.textContent).toContain("Submit comment")
   expect(dialog?.textContent).toContain("Cmd")
@@ -6984,6 +7051,12 @@ scenario("localReview", async () => {
 
   await vi.waitFor(() => {
     expect(document.querySelector('button[aria-label="Code"][aria-pressed="true"]')).not.toBeNull()
+    const target = calls.openCodeWorkspace.mock.calls.at(-1)?.[0].target
+    expect(Schema.is(LocalReviewSnapshotCodeWorkspaceTarget)(target)).toBe(true)
+    if (Schema.is(LocalReviewSnapshotCodeWorkspaceTarget)(target)) {
+      expect(target.projectId).toBe("local-repo-1")
+      expect(target.snapshotId).toMatch(/^snapshot:v1:/u)
+    }
     expect(calls.readLocalCheckoutFile).toHaveBeenCalledWith("local-repo-1", "src/local.ts")
   })
 })
@@ -7450,6 +7523,10 @@ export const installDiffDashApi = (
     ) => Promise<void>
     readonly cliInstallResult?: { readonly path: string; readonly pathSetupCommand: string | null }
     readonly diagnostics?: AppPrerequisites
+    readonly codeWorkspaceDefinitions?: DiffDashApi["codeWorkspace"]["definitions"]
+    readonly codeWorkspaceReferences?: DiffDashApi["codeWorkspace"]["references"]
+    readonly codeWorkspaceChanges?: DiffDashApi["codeWorkspace"]["changes"]
+    readonly codeWorkspaceLineChanges?: DiffDashApi["codeWorkspace"]["lineChanges"]
     readonly expireFirstSnapshotPage?: boolean
     readonly getAppState?: DiffDashApi["appState"]["get"]
     readonly getDiagnostics?: DiffDashApi["diagnostics"]
@@ -8087,11 +8164,38 @@ export const installDiffDashApi = (
     codeWorkspaceProjectId = target.projectId
     return CodeWorkspaceLease.make({
       id: codeWorkspaceLeaseId,
-      revision: GitCommitSha.make(target._tag === "projectHead" ? "0".repeat(40) : target.revision),
+      revision: CodeWorkspaceTarget.match(target, {
+        hostedReview: ({ revision }) => revision,
+        localReviewSnapshot: ({ snapshotId }) => ReviewRevision.make(snapshotId),
+        projectHead: () => ReviewRevision.make("0".repeat(40)),
+        projectRevision: ({ revision }) => ReviewRevision.make(revision),
+      }),
+      gitRevision: CodeWorkspaceTarget.match(target, {
+        hostedReview: ({ revision }) => Option.some(GitCommitSha.make(revision)),
+        localReviewSnapshot: () => Option.none(),
+        projectHead: () => Option.some(GitCommitSha.make("0".repeat(40))),
+        projectRevision: ({ revision }) => Option.some(revision),
+      }),
       expiresAtMs: Date.now() + 60 * 60 * 1_000,
     })
   })
   const releaseCodeWorkspace = vi.fn<DiffDashApi["codeWorkspace"]["release"]>(async () => undefined)
+  const codeWorkspaceDefinitions = vi.fn<DiffDashApi["codeWorkspace"]["definitions"]>(
+    options.codeWorkspaceDefinitions ??
+      (async () => RepositoryLanguageLocationResult.make({ locations: [], truncated: false })),
+  )
+  const codeWorkspaceReferences = vi.fn<DiffDashApi["codeWorkspace"]["references"]>(
+    options.codeWorkspaceReferences ??
+      (async () => RepositoryLanguageLocationResult.make({ locations: [], truncated: false })),
+  )
+  const codeWorkspaceChanges = vi.fn<DiffDashApi["codeWorkspace"]["changes"]>(
+    options.codeWorkspaceChanges ??
+      (async () => CodeWorkspaceChangesResult.make({ changes: [], truncated: false })),
+  )
+  const codeWorkspaceLineChanges = vi.fn<DiffDashApi["codeWorkspace"]["lineChanges"]>(
+    options.codeWorkspaceLineChanges ??
+      (async () => CodeWorkspaceLineChangesResult.make({ changes: [], truncated: false })),
+  )
   const codeWorkspacePaths = async () => {
     if (codeWorkspaceProjectId === null) return []
     const listed = await calls.listLocalCheckoutFiles(codeWorkspaceProjectId)
@@ -8358,7 +8462,8 @@ export const installDiffDashApi = (
       heartbeat: async () =>
         CodeWorkspaceLease.make({
           id: codeWorkspaceLeaseId,
-          revision: GitCommitSha.make("0".repeat(40)),
+          revision: ReviewRevision.make("0".repeat(40)),
+          gitRevision: Option.some(GitCommitSha.make("0".repeat(40))),
           expiresAtMs: Date.now() + 60 * 60 * 1_000,
         }),
       release: releaseCodeWorkspace,
@@ -8411,6 +8516,10 @@ export const installDiffDashApi = (
               : result.reason,
         }
       },
+      definitions: codeWorkspaceDefinitions,
+      references: codeWorkspaceReferences,
+      changes: codeWorkspaceChanges,
+      lineChanges: codeWorkspaceLineChanges,
     },
     projectWorkspace: {
       get: calls.getProjectWorkspace,
@@ -8493,6 +8602,10 @@ export const installDiffDashApi = (
     progressiveRange,
     searchReviewSnapshot,
     openCodeWorkspace,
+    codeWorkspaceDefinitions,
+    codeWorkspaceReferences,
+    codeWorkspaceChanges,
+    codeWorkspaceLineChanges,
     releaseCodeWorkspace,
     emitUpdateState: (state: AppUpdateState) => updateStateListener?.(state),
     linkRepositoryFromCli: (rootPath: string) => {
@@ -8552,10 +8665,41 @@ const bridgeEventSubscriptions = new Set([
 
 const bridgeSuccess = <Value,>(value: Value): BridgeResult<Value> => ({ _tag: "Success", value })
 
-const wrapBridgeValue = (value: object): object =>
+const encodedBridgeResponseChannels: HashMap.HashMap<string, InvokeChannel> = HashMap.make(
+  ["analytics.capture", InvokeChannel.analyticsCapture] as const,
+  ["analytics.start", InvokeChannel.analyticsStart] as const,
+  ["navigation.activateWindow", InvokeChannel.appActivateWindow] as const,
+  ["openExternalUrl", InvokeChannel.appOpenExternalUrl] as const,
+  ["openLocalRepositoryFile", InvokeChannel.appOpenLocalRepositoryFile] as const,
+  ["openRepositoryFile", InvokeChannel.appOpenRepositoryFile] as const,
+  ["hostedReviews.submitDecision", InvokeChannel.submitHostedReviewDecision] as const,
+  ["repositoryComparisons.openFile", InvokeChannel.appOpenRepositoryComparisonFile] as const,
+  ["updates.check", InvokeChannel.updatesCheck] as const,
+  ["updates.download", InvokeChannel.updatesDownload] as const,
+  ["updates.restartAndInstall", InvokeChannel.updatesRestartAndInstall] as const,
+  ["viewedFiles.set", InvokeChannel.setViewedFile] as const,
+  ["viewedFiles.setLocal", InvokeChannel.setLocalViewedFile] as const,
+  ["viewedFiles.setRepositoryComparison", InvokeChannel.setRepositoryComparisonViewedFile] as const,
+  ["progressiveReviews.search", InvokeChannel.analyticsStart] as const,
+  ["codeWorkspace.open", InvokeChannel.openCodeWorkspace] as const,
+  ["codeWorkspace.heartbeat", InvokeChannel.heartbeatCodeWorkspace] as const,
+  ["codeWorkspace.release", InvokeChannel.releaseCodeWorkspace] as const,
+  ["codeWorkspace.definitions", InvokeChannel.codeWorkspaceDefinitions] as const,
+  ["codeWorkspace.references", InvokeChannel.codeWorkspaceReferences] as const,
+)
+
+const encodeBridgeResponse = (path: string, value: Schema.Defect["Type"]): Schema.Defect["Type"] =>
+  Option.match(HashMap.get(encodedBridgeResponseChannels, path), {
+    onNone: () => value,
+    onSome: (channel) => Schema.encodeUnknownSync(invokeResponseSchema(channel))(value),
+  })
+
+const wrapBridgeValue = (value: object, path = ""): object =>
   new Proxy(value, {
     get(target, property, receiver) {
       const member = Reflect.get(target, property, receiver)
+      let memberPath = String(property)
+      if (path.length > 0) memberPath = `${path}.${String(property)}`
       if (typeof member === "function") {
         if (bridgeEventSubscriptions.has(String(property))) {
           return (listener: (result: BridgeResult<Schema.Defect["Type"]>) => void) =>
@@ -8567,12 +8711,14 @@ const wrapBridgeValue = (value: object): object =>
           const result = Reflect.apply(member, receiver, arguments_)
           if (!(result instanceof Promise)) return result
           return result.then(
-            (resolved) => bridgeSuccess(resolved),
+            (resolved) => bridgeSuccess(encodeBridgeResponse(memberPath, resolved)),
             (error) => ({ _tag: "Failure", error: toTransportError(error, String(property)) }),
           )
         }
       }
-      return typeof member === "object" && member !== null ? wrapBridgeValue(member) : member
+      return typeof member === "object" && member !== null
+        ? wrapBridgeValue(member, memberPath)
+        : member
     },
   })
 

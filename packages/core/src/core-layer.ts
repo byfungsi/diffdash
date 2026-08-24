@@ -5,6 +5,7 @@ import { CoreRpcPayloadBytes } from "@diffdash/core-rpc"
 import { DEFAULT_AI_SETTINGS } from "@diffdash/domain/ai-settings"
 import { RepositoryCheckoutPath } from "@diffdash/domain/repository"
 import { GitProviderRegistry } from "@diffdash/git-provider"
+import { LanguageAdapterRegistry } from "@diffdash/language-provider/registry"
 import {
   HostedReviewWorkspacePool,
   ReviewRefMutation,
@@ -53,6 +54,7 @@ import {
 } from "./core-review-session-rpc-handlers"
 import { generatedCoreReviewDataWorkerLayer } from "./generated-review-data-worker"
 import { CodeWorkspaceService } from "./services/code-workspace"
+import { CodeWorkspaceSnapshotSource } from "./services/code-workspace-snapshot"
 import {
   ReviewLifecycleDiagnostics,
   reviewLifecycleDiagnosticsLayer,
@@ -175,6 +177,9 @@ export const createStandaloneCoreLayer = (
     }),
   )
   const gitProviderLayer = GitProvider.layer.pipe(Layer.provide(gitProviderRegistryLayer))
+  const languageAdapterRegistryLayer = LanguageAdapterRegistry.layer(
+    providerComposition.createLanguageAdapters(),
+  )
   const appStateLayer = AppState.layer(statePath).pipe(Layer.provide(fileStorageLayer))
   const analyticsLayer = Analytics.makeLayer({
     appVersion: configuration.application.version,
@@ -406,6 +411,13 @@ export const createStandaloneCoreLayer = (
     Layer.provideMerge(ManagedWorkspaceFiles.layer),
     Layer.provideMerge(LocalCheckoutFiles.layer),
     Layer.provideMerge(resourceCollectionLayer),
+    Layer.provideMerge(languageAdapterRegistryLayer),
+    Layer.provideMerge(
+      CodeWorkspaceSnapshotSource.layer.pipe(
+        Layer.provideMerge(snapshotPersistenceLayer),
+        Layer.provide(GitService.layer),
+      ),
+    ),
   )
   const reviewAgentLayer = ReviewAgentService.layer.pipe(
     Layer.provideMerge(reviewAgentRoutingLayer),

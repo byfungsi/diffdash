@@ -19,11 +19,15 @@ import {
 } from "@diffdash/domain/comment"
 import {
   CodeWorkspaceDirectoryPage,
+  CodeWorkspaceChangesResult,
+  CodeWorkspaceLineChangesResult,
   CodeWorkspaceFileReadRejected,
   CodeWorkspaceLease,
   CodeWorkspaceLeaseId,
   CodeWorkspaceSearchResult,
+  CodeWorkspaceTarget,
 } from "@diffdash/domain/code-workspace"
+import { RepositoryLanguageLocationResult } from "@diffdash/domain/language"
 import {
   GitProviderCapabilities,
   GitProviderDescriptor,
@@ -61,6 +65,7 @@ import {
   ReviewProjectId,
   type ReviewFilePatchHash,
   type ReviewKey,
+  ReviewRevision,
 } from "@diffdash/domain/review-identity"
 import {
   CurrentReviewAnchor,
@@ -130,7 +135,7 @@ import {
   ReviewSessionSearchPublication,
   ReviewSessionStateVersion,
 } from "@diffdash/protocol/review-session"
-import { Match } from "effect"
+import { Match, Option } from "effect"
 import {
   isDemoReviewAnchorInParsedDiff,
   makeDemoReviewSnapshotFileInventory,
@@ -796,21 +801,38 @@ export const createDemoRuntime = (scenario: MaterializedDemoScenario): DemoRunti
       open: async ({ target }) =>
         CodeWorkspaceLease.make({
           id: CodeWorkspaceLeaseId.make("demo-code-workspace"),
-          revision: GitCommitSha.make(
-            target._tag === "projectHead" ? "0".repeat(40) : target.revision,
-          ),
+          revision: CodeWorkspaceTarget.match(target, {
+            hostedReview: ({ revision }) => revision,
+            localReviewSnapshot: ({ snapshotId }) => ReviewRevision.make(snapshotId),
+            projectHead: () => ReviewRevision.make("0".repeat(40)),
+            projectRevision: ({ revision }) => ReviewRevision.make(revision),
+          }),
+          gitRevision: CodeWorkspaceTarget.match(target, {
+            hostedReview: ({ revision }) => Option.some(GitCommitSha.make(revision)),
+            localReviewSnapshot: () => Option.none<GitCommitSha>(),
+            projectHead: () => Option.some(GitCommitSha.make("0".repeat(40))),
+            projectRevision: ({ revision }) => Option.some(revision),
+          }),
           expiresAtMs: Date.now() + 60 * 60 * 1_000,
         }),
       heartbeat: async () =>
         CodeWorkspaceLease.make({
           id: CodeWorkspaceLeaseId.make("demo-code-workspace"),
-          revision: GitCommitSha.make("0".repeat(40)),
+          revision: ReviewRevision.make("0".repeat(40)),
+          gitRevision: Option.some(GitCommitSha.make("0".repeat(40))),
           expiresAtMs: Date.now() + 60 * 60 * 1_000,
         }),
       release: async () => undefined,
       listDirectory: async () => CodeWorkspaceDirectoryPage.make({ entries: [], nextOffset: null }),
       search: async () => CodeWorkspaceSearchResult.make({ paths: [], nextOffset: null }),
       readFile: async ({ path }) => CodeWorkspaceFileReadRejected.make({ path, reason: "missing" }),
+      definitions: async () =>
+        RepositoryLanguageLocationResult.make({ locations: [], truncated: false }),
+      references: async () =>
+        RepositoryLanguageLocationResult.make({ locations: [], truncated: false }),
+      changes: async () => CodeWorkspaceChangesResult.make({ changes: [], truncated: false }),
+      lineChanges: async () =>
+        CodeWorkspaceLineChangesResult.make({ changes: [], truncated: false }),
     },
     projectWorkspace: {
       get: async (projectId) => projectWorkspaceStates.get(projectId) ?? null,

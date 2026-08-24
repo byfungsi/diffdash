@@ -51,10 +51,16 @@ import { E2eReviewLifecycleDiagnostics, E2eReviewLifecycleHold } from "./e2e-rev
 import { CliNavigationCommand, NAVIGATION_COMMAND_DRAIN_LIMIT } from "./cli-navigation"
 import {
   CodeWorkspaceDirectoryPage,
+  CodeWorkspaceChangesResult,
+  CodeWorkspaceDefinitionsRequest,
+  CodeWorkspaceReferencesRequest,
   CodeWorkspaceFileReadResult,
   CodeWorkspaceLease,
   CodeWorkspaceLeaseRequest,
+  CodeWorkspaceLineChangesRequest,
+  CodeWorkspaceLineChangesResult,
   CodeWorkspaceSearchResult,
+  RepositoryLanguageLocationResult,
   ListCodeWorkspaceDirectoryRequest,
   OpenCodeWorkspaceRequest,
   ReadCodeWorkspaceFileRequest,
@@ -137,14 +143,27 @@ const EmptyResponse = Schema.Null.pipe(
 export const FailureEnvelope = Schema.TaggedStruct("Failure", {
   error: TransportErrorPayload,
 })
-/** Successful value envelope returned for every invoke operation. */
-export type SuccessEnvelope<Value> = {
-  readonly _tag: "Success"
-  readonly value: Value
-}
+
+/** Creates the schema-owned success or failure envelope for one bridge value. */
+export const bridgeResultSchema = <Value extends Schema.Top>(value: Value) =>
+  Schema.TaggedUnion({
+    Success: { value },
+    Failure: { error: FailureEnvelope.fields.error },
+  })
+
+type BridgeResultSchema<Value> = ReturnType<typeof bridgeResultSchema<Schema.Schema<Value>>>
 
 /** Typed success or failure value crossing the Electron bridge. */
-export type BridgeResult<Value> = SuccessEnvelope<Value> | typeof FailureEnvelope.Type
+export type BridgeResult<Value> = BridgeResultSchema<Value>["Type"]
+
+/** Encoded channel value safe to pass through Electron contextBridge. */
+export type EncodedBridgeValue = Schema.Json | object | undefined | void
+
+/** Encoded envelope safe to pass through Electron contextBridge. */
+export type EncodedBridgeResult = BridgeResultSchema<EncodedBridgeValue>["Encoded"]
+
+/** Production encoded envelope or semantic envelope supplied by an in-memory renderer runtime. */
+export type RendererBridgeResult<Value> = EncodedBridgeResult | BridgeResult<Value>
 
 const BOUNDED_FAILURE_ENVELOPE = Schema.encodeSync(FailureEnvelope)({
   _tag: "Failure",
@@ -466,7 +485,7 @@ export const InvokeContract = {
   [InvokeChannel.releaseCodeWorkspace]: defineInvoke(
     InvokeChannel.releaseCodeWorkspace,
     CodeWorkspaceLeaseRequest,
-    Schema.Void,
+    EmptyResponse,
     { maxRequestBytes: 8 * KIB, maxResponseBytes: 8 * KIB },
   ),
   [InvokeChannel.listCodeWorkspaceDirectory]: defineInvoke(
@@ -486,6 +505,30 @@ export const InvokeContract = {
     ReadCodeWorkspaceFileRequest,
     CodeWorkspaceFileReadResult,
     { maxRequestBytes: 8 * KIB, maxResponseBytes: 640 * KIB },
+  ),
+  [InvokeChannel.codeWorkspaceDefinitions]: defineInvoke(
+    InvokeChannel.codeWorkspaceDefinitions,
+    CodeWorkspaceDefinitionsRequest,
+    RepositoryLanguageLocationResult,
+    { maxRequestBytes: 8 * KIB, maxResponseBytes: 128 * KIB },
+  ),
+  [InvokeChannel.codeWorkspaceReferences]: defineInvoke(
+    InvokeChannel.codeWorkspaceReferences,
+    CodeWorkspaceReferencesRequest,
+    RepositoryLanguageLocationResult,
+    { maxRequestBytes: 8 * KIB, maxResponseBytes: 128 * KIB },
+  ),
+  [InvokeChannel.codeWorkspaceChanges]: defineInvoke(
+    InvokeChannel.codeWorkspaceChanges,
+    CodeWorkspaceLeaseRequest,
+    CodeWorkspaceChangesResult,
+    { maxRequestBytes: 8 * KIB, maxResponseBytes: 384 * KIB },
+  ),
+  [InvokeChannel.codeWorkspaceLineChanges]: defineInvoke(
+    InvokeChannel.codeWorkspaceLineChanges,
+    CodeWorkspaceLineChangesRequest,
+    CodeWorkspaceLineChangesResult,
+    { maxRequestBytes: 8 * KIB, maxResponseBytes: 256 * KIB },
   ),
   [InvokeChannel.listRepositories]: defineInvoke(
     InvokeChannel.listRepositories,

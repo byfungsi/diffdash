@@ -10,6 +10,7 @@ import {
 } from "@diffdash/agent-provider"
 import { NoAgentProviderAvailableError } from "@diffdash/agent-provider/registry"
 import type { CodeWorkspaceError } from "@diffdash/domain/code-workspace"
+import type { LanguageOperationError } from "@diffdash/domain/language"
 import type {
   CommentSubjectMismatchError,
   CommentSubmissionUnsupportedError,
@@ -110,6 +111,10 @@ export const CoreMethod = {
   listCodeWorkspaceDirectory: "CodeWorkspace.listDirectory",
   searchCodeWorkspace: "CodeWorkspace.search",
   readCodeWorkspaceFile: "CodeWorkspace.readFile",
+  codeWorkspaceDefinitions: "CodeWorkspace.definitions",
+  codeWorkspaceReferences: "CodeWorkspace.references",
+  codeWorkspaceChanges: "CodeWorkspace.changes",
+  codeWorkspaceLineChanges: "CodeWorkspace.lineChanges",
   listRepositories: "Repositories.list",
   openProject: "Repositories.openProject",
   repairRepositoryIdentities: "Repositories.repairIdentities",
@@ -175,6 +180,10 @@ export const CoreMethodChannel = {
   [CoreMethod.listCodeWorkspaceDirectory]: InvokeChannel.listCodeWorkspaceDirectory,
   [CoreMethod.searchCodeWorkspace]: InvokeChannel.searchCodeWorkspace,
   [CoreMethod.readCodeWorkspaceFile]: InvokeChannel.readCodeWorkspaceFile,
+  [CoreMethod.codeWorkspaceDefinitions]: InvokeChannel.codeWorkspaceDefinitions,
+  [CoreMethod.codeWorkspaceReferences]: InvokeChannel.codeWorkspaceReferences,
+  [CoreMethod.codeWorkspaceChanges]: InvokeChannel.codeWorkspaceChanges,
+  [CoreMethod.codeWorkspaceLineChanges]: InvokeChannel.codeWorkspaceLineChanges,
   [CoreMethod.listRepositories]: InvokeChannel.listRepositories,
   [CoreMethod.openProject]: InvokeChannel.openProject,
   [CoreMethod.repairRepositoryIdentities]: InvokeChannel.repairRepositoryIdentities,
@@ -335,6 +344,10 @@ export interface CoreOperationFailureMap {
   readonly [CoreMethod.listCodeWorkspaceDirectory]: CodeWorkspaceError
   readonly [CoreMethod.searchCodeWorkspace]: CodeWorkspaceError
   readonly [CoreMethod.readCodeWorkspaceFile]: CodeWorkspaceError
+  readonly [CoreMethod.codeWorkspaceDefinitions]: CodeWorkspaceError | LanguageOperationError
+  readonly [CoreMethod.codeWorkspaceReferences]: CodeWorkspaceError | LanguageOperationError
+  readonly [CoreMethod.codeWorkspaceChanges]: CodeWorkspaceError
+  readonly [CoreMethod.codeWorkspaceLineChanges]: CodeWorkspaceError
   readonly [CoreMethod.listRepositories]: RepositoryLinkError
   readonly [CoreMethod.openProject]: RepositoryLinkError
   readonly [CoreMethod.repairRepositoryIdentities]: RepositoryLinkError

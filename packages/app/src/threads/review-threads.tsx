@@ -23,7 +23,6 @@ import { Array as EffectArray, Effect, Match, Option, Order } from "effect"
 import {
   HostedReviewTarget,
   MarkdownBody,
-  type ReviewThread,
   type ReviewThreadAnchor,
   ReviewThreadDetails,
   type ReviewThreadId,
@@ -59,16 +58,14 @@ import { Button } from "@/shared/ui/button"
 import { Textarea } from "@/shared/ui/textarea"
 import { UnicodeLoadingText } from "@/shared/ui/unicode-loading-text"
 import { cn } from "@/shared/utils"
-import { useCommentSubmission } from "@/comments/comment-submission"
+import { useCommentSubmission } from "@/comments/comment-submission-context"
+import {
+  recordReviewThreadHistoryScrollState,
+  reviewThreadIsPreviousRevision,
+  syncPinnedReviewThreadHistories,
+} from "./review-thread-presentation"
 
 /* oxlint-disable jsx-a11y/no-noninteractive-tabindex -- Scrollable conversation logs need keyboard focus. */
-
-type ReviewThreadHistoryScrollState = {
-  readonly pinned: boolean
-  readonly scrollTop: number
-}
-
-const reviewThreadHistoryScrollStates = new Map<string, ReviewThreadHistoryScrollState>()
 
 /** Renderer-owned review scope used to derive typed preload requests. */
 export type ReviewThreadScope =
@@ -641,25 +638,6 @@ export function ReviewThreadComposer({
   )
 }
 
-/** Restores pinned or reader-controlled scroll positions after inline annotation rendering. */
-export const syncPinnedReviewThreadHistories = (root: ParentNode) => {
-  const histories = [...root.querySelectorAll<HTMLElement>("[data-review-thread-history]")]
-  histories.forEach((history) => {
-    const threadId = history.closest<HTMLElement>("[data-review-thread-id]")?.dataset.reviewThreadId
-    if (threadId === undefined) return
-    const state = reviewThreadHistoryScrollStates.get(threadId)
-    if (state?.pinned === false) {
-      history.scrollTop = state.scrollTop
-      return
-    }
-    history.scrollTop = history.scrollHeight
-    reviewThreadHistoryScrollStates.set(threadId, {
-      pinned: true,
-      scrollTop: history.scrollTop,
-    })
-  })
-}
-
 /** One persisted line thread with its full local conversation. */
 export function ReviewThreadPanel({
   details,
@@ -798,7 +776,7 @@ export function ReviewThreadPanel({
           const history = event.currentTarget
           const pinned = history.scrollHeight - history.clientHeight - history.scrollTop <= 48
           historyPinnedToBottomRef.current = pinned
-          reviewThreadHistoryScrollStates.set(thread.id, {
+          recordReviewThreadHistoryScrollState(thread.id, {
             pinned,
             scrollTop: history.scrollTop,
           })
@@ -1260,22 +1238,3 @@ const reviewThreadTarget = (
 const anchorLabel = (anchor: ReviewThreadAnchor) => {
   return `${anchor.filePath}:${anchor.lineNumber} · ${anchor.side}`
 }
-
-/** Explains why a persisted thread cannot navigate to the current diff. */
-export const fallbackThreadLabel = (details: ReviewThreadDetails) => {
-  return Match.valueTags(details.thread.currentAnchor, {
-    Outdated: () => "Outdated",
-    Unresolved: () => "Anchor unavailable",
-    Active: () =>
-      reviewThreadIsPreviousRevision(details.thread) ? "Previous revision" : "Location unavailable",
-  })
-}
-
-/** Whether a thread originated on a revision older than its latest mapped review snapshot. */
-export const reviewThreadIsPreviousRevision = (thread: ReviewThread) =>
-  thread.baseRevision !== thread.currentBaseRevision ||
-  thread.headRevision !== thread.currentHeadRevision
-
-/** Compact GitHub-style side and line label for an inline review disclosure. */
-export const reviewLineLabel = (anchor: ReviewThreadAnchor) =>
-  `${anchor.side === "old" ? "L" : "R"}${anchor.lineNumber}`
