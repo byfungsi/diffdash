@@ -403,7 +403,7 @@ test("covers finished Home to Review flow with fake CLI fixtures", async ({
       .first()
     const initialComposer = await openGutterThreadComposer(window, gutterNumber)
     await initialComposer.fill("Why was this line changed?")
-    await window.getByRole("button", { name: "Comment" }).click()
+    await window.getByRole("button", { name: "Comment", exact: true }).click()
 
     await expect(window.getByText("Why was this line changed?")).toBeVisible()
     await expect(
@@ -1239,7 +1239,7 @@ for (const fixture of [
         .last()
       const composer = await openGutterThreadComposer(window, gutterNumber)
       await composer.fill("Review this line")
-      await window.getByRole("button", { name: "Comment" }).click()
+      await window.getByRole("button", { name: "Comment", exact: true }).click()
       await expect(window.getByText(fixture.response)).toBeVisible({ timeout: 20_000 })
     } finally {
       await app.close()
