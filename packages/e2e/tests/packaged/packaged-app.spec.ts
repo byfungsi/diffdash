@@ -303,7 +303,7 @@ test("FUN-141 AC: verifies final packaged composition and provider persistence",
       )
       .toBe(true)
     await composer.fill("Review fixture line")
-    await window.getByRole("button", { name: "Comment" }).click()
+    await window.getByRole("button", { name: "Comment", exact: true }).click()
     await expect(window.getByText("Fixture review response")).toBeVisible({ timeout: 20_000 })
 
     await app.close()
