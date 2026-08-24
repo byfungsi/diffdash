@@ -2190,6 +2190,19 @@ scenario("codeRibbon", async () => {
     expect(document.querySelector("diffs-container")?.shadowRoot?.textContent).toContain(
       'export const app = "DiffDash"',
     )
+    expect(document.body.textContent).toContain("Code comments need OpenCode")
+    expect(
+      document.querySelector<HTMLButtonElement>('button[aria-label="Refresh repository files"]'),
+    ).toBeNull()
+  })
+  const firstCodeLine = document
+    .querySelector("diffs-container")
+    ?.shadowRoot?.querySelector<HTMLElement>('[data-line-index="0"]')
+  expect(firstCodeLine).not.toBeNull()
+  firstCodeLine?.click()
+  await vi.waitFor(() => {
+    expect(document.body.textContent).toContain("src/app.tsx:1")
+    expect(document.body.textContent).toContain("Code comments in DiffDash are not supported yet")
   })
   await waitForAnimationFrames(2)
   expect(calls.openCodeWorkspace).toHaveBeenCalledTimes(2)

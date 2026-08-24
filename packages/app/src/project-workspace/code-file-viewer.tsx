@@ -6,11 +6,9 @@ import {
   type RepositoryLanguageLocationResult,
 } from "@diffdash/domain/language"
 import type { RepositoryRelativePath } from "@diffdash/domain/repository-path"
-import { CommentDestination, CommentSubmission, CommentSubject } from "@diffdash/domain/comment"
 import type { GitCommitSha } from "@diffdash/domain/repository-comparison"
 import type { ReviewRevision } from "@diffdash/domain/review-identity"
 import type { ReviewProjectId } from "@diffdash/domain/review-identity"
-import { MarkdownBody } from "@diffdash/domain/review-thread"
 import { Effect, Option } from "effect"
 import { ChevronDown, ChevronUp, Search, X } from "lucide-react"
 import { type KeyboardEvent, useEffect, useEffectEvent, useMemo, useRef, useState } from "react"
@@ -28,12 +26,18 @@ import {
   type WorkerPoolOptions,
   useWorkerPool,
 } from "@/review/pierre"
+import type {
+  CodeSourceContribution,
+  OwnedExtensionContribution,
+} from "@/extensions/extension-registry"
 import { isHTMLElement } from "@/shared/dom"
 import { Button } from "@/shared/ui/button"
 import { Input } from "@/shared/ui/input"
 import type { ColorScheme } from "@/settings/theme"
-import { useCommentSubmission } from "@/extensions/review-comments/comment-submission-context"
-import { ReviewThreadComposer } from "@/threads/review-threads"
+import {
+  type CodeSourceHostAnnotation,
+  useCodeSourceContributionHost,
+} from "@/source-surface/code-source-contribution-host"
 import { useLineChangeCapability } from "@/source-surface/line-change-capability"
 import {
   type CodeSearchHighlightMatch,
@@ -61,23 +65,23 @@ const CODE_VIEW_WORKER_POOL_OPTIONS = {
 } satisfies WorkerPoolOptions
 
 const CODE_COMMENTS_CAPABILITY_ID = SourceSurfaceContributionId.make(
-  "diffdash.builtin.code-comments",
+  "diffdash.host.code-source-contributions",
 )
 
-type CodeCommentAnnotation = {
-  readonly lineNumber: number
-}
-
-type CodeSurfaceInstance = PierreFile<CodeCommentAnnotation> | PierreFileDiff<CodeCommentAnnotation>
+type CodeSurfaceInstance =
+  | PierreFile<CodeSourceHostAnnotation>
+  | PierreFileDiff<CodeSourceHostAnnotation>
 
 /** Read-only Pierre CodeView for one file from the active checkout. */
 export const CodeFileViewer = ({
   codeThemes,
   colorScheme,
   contents,
+  contributions = EMPTY_CODE_SOURCE_CONTRIBUTIONS,
   gitRevision = Option.none(),
   path,
   projectId,
+  revision,
   onLoadDefinitionSource,
   onNavigateToDefinition,
   onRequestDefinitions,
@@ -89,6 +93,7 @@ export const CodeFileViewer = ({
   readonly codeThemes: CodeThemePreferences
   readonly colorScheme: ColorScheme
   readonly contents: string
+  readonly contributions?: readonly OwnedExtensionContribution<CodeSourceContribution>[]
   readonly gitRevision?: Option.Option<GitCommitSha>
   readonly path: RepositoryRelativePath
   readonly projectId: ReviewProjectId
@@ -113,8 +118,7 @@ export const CodeFileViewer = ({
   readonly lineChanges?: readonly CodeLineChangeRange[]
   readonly onDefinitionNavigationHandled?: (id: number) => void
 }) => {
-  const commentSubmission = useCommentSubmission()
-  const codeViewRef = useRef<CodeViewHandle<CodeCommentAnnotation>>(null)
+  const codeViewRef = useRef<CodeViewHandle<CodeSourceHostAnnotation>>(null)
   const scrollRootRef = useRef<HTMLDivElement>(null)
   const surfaceRuntime = useSourceSurfaceRuntime<CodeSurfaceInstance>()
   const publishSurfaceRender = useMemo(
@@ -123,6 +127,11 @@ export const CodeFileViewer = ({
   )
   useSourceSurfaceHost(surfaceRuntime, scrollRootRef)
   useLineChangeCapability(surfaceRuntime, lineChanges)
+  const codeSource = useMemo(
+    () => ({ projectId, workspaceRevision: revision, gitRevision, path }),
+    [gitRevision, path, projectId, revision],
+  )
+  const codeSourceHost = useCodeSourceContributionHost(contributions, codeSource)
   const surfaceSelection = useSourceSurfaceSelection(surfaceRuntime, codeViewRef)
   const languageNavigation = useLanguageNavigationCapability({
     navigate: Option.fromNullishOr(onNavigateToDefinition),
@@ -138,29 +147,22 @@ export const CodeFileViewer = ({
   const [searchOpen, setSearchOpen] = useState(false)
   const [searchQuery, setSearchQuery] = useState("")
   const [activeMatchIndex, setActiveMatchIndex] = useState(0)
-  const [draftLineNumber, setDraftLineNumber] = useState<Option.Option<number>>(Option.none())
-  const versionRef = useRef({ contents, path, draftLineNumber, version: 0 })
+  const versionRef = useRef({ contents, path, generation: codeSourceHost.generation, version: 0 })
   if (
     versionRef.current.contents !== contents ||
     versionRef.current.path !== path ||
-    versionRef.current.draftLineNumber !== draftLineNumber
+    versionRef.current.generation !== codeSourceHost.generation
   ) {
     versionRef.current = {
       contents,
       path,
-      draftLineNumber,
+      generation: codeSourceHost.generation,
       version: versionRef.current.version + 1,
     }
   }
   const version = versionRef.current.version
-  const annotations = useMemo<readonly LineAnnotation<CodeCommentAnnotation>[]>(
-    () =>
-      Option.match(draftLineNumber, {
-        onNone: () => [],
-        onSome: (lineNumber) => [{ lineNumber, metadata: { lineNumber } }],
-      }),
-    [draftLineNumber],
-  )
+  const annotations: readonly LineAnnotation<CodeSourceHostAnnotation>[] =
+    codeSourceHost.annotations
   const item = useMemo(() => {
     return {
       id: path,
@@ -168,7 +170,7 @@ export const CodeFileViewer = ({
       file: { contents, name: path },
       annotations: [...annotations],
       version,
-    } satisfies CodeViewFileItem<CodeCommentAnnotation>
+    } satisfies CodeViewFileItem<CodeSourceHostAnnotation>
   }, [annotations, contents, path, version])
   const items = useMemo(() => [item], [item])
   const searchMatches = useMemo(
@@ -204,23 +206,10 @@ export const CodeFileViewer = ({
   const openSearchFromEffect = useEffectEvent(openSearch)
   const closeSearchFromEffect = useEffectEvent(closeSearch)
   const moveSearchFromEffect = useEffectEvent(moveSearch)
-  const toggleLine = (lineNumber: number) => {
-    setDraftLineNumber((current) =>
-      Option.match(current, {
-        onNone: () => Option.some(lineNumber),
-        onSome: (selectedLine) => {
-          if (selectedLine === lineNumber) return Option.none()
-          return Option.some(lineNumber)
-        },
-      }),
-    )
-  }
-  const toggleLineFromEffect = useEffectEvent(toggleLine)
   const handleCommentLineClick = useStableCallback<SourceSurfaceInteractionRoute["handle"]>(
     ({ event, lineNumber }) => {
       if (isLanguageNavigationInteraction(event) || isInteractiveSurfaceControl(event)) return false
-      toggleLine(lineNumber)
-      return true
+      return codeSourceHost.activateLine(lineNumber, contents.split("\n")[lineNumber - 1] ?? "")
     },
   )
 
@@ -242,7 +231,7 @@ export const CodeFileViewer = ({
     scrollRoot.setAttribute("role", "region")
     scrollRoot.setAttribute(
       "aria-label",
-      `Source code for ${path}. Use arrow keys to select a line and Enter to comment.`,
+      `Source code for ${path}. Use arrow keys to select a line and Enter to activate a line action.`,
     )
     const lineCount = Math.max(1, contents.split("\n").length)
     const onKeyDown = (event: globalThis.KeyboardEvent) => {
@@ -253,7 +242,7 @@ export const CodeFileViewer = ({
       const currentLine = selected?.range.start ?? 1
       if (event.key === "Enter") {
         event.preventDefault()
-        toggleLineFromEffect(currentLine)
+        codeSourceHost.activateLine(currentLine, contents.split("\n")[currentLine - 1] ?? "")
         return
       }
       event.preventDefault()
@@ -278,7 +267,7 @@ export const CodeFileViewer = ({
       scrollRoot.removeEventListener("keydown", onKeyDown)
       surfaceSelection.release("diffdash.builtin.keyboard-navigation")
     }
-  }, [contents, path, surfaceSelection])
+  }, [codeSourceHost, contents, path, surfaceSelection])
 
   useEffect(() => {
     const handleSearchShortcut = (event: globalThis.KeyboardEvent) => {
@@ -369,6 +358,7 @@ export const CodeFileViewer = ({
       poolOptions={CODE_VIEW_WORKER_POOL_OPTIONS}
     >
       <CodeViewThemeSync codeThemes={codeThemes} />
+      {codeSourceHost.mounts}
       <div className="relative flex h-full min-h-0 flex-col bg-diff-canvas">
         {searchOpen ? (
           <CodeSearchToolbar
@@ -385,7 +375,7 @@ export const CodeFileViewer = ({
             }}
           />
         ) : null}
-        <CodeView<CodeCommentAnnotation>
+        <CodeView<CodeSourceHostAnnotation>
           ref={codeViewRef}
           containerRef={scrollRootRef}
           className="h-0 min-h-0 flex-1 overflow-auto bg-diff-canvas"
@@ -456,55 +446,9 @@ export const CodeFileViewer = ({
           `,
             onPostRender: publishSurfaceRender,
           }}
-          renderAnnotation={(annotation) => {
-            const lineNumber = annotation.metadata.lineNumber
-            return CommentDestination.match(commentSubmission.destination, {
-              DiffDash: () => (
-                <div className="bg-diff-canvas px-3 py-1.5">
-                  <div className="bg-card text-muted-foreground rounded-lg border px-3 py-2 text-xs shadow-xs">
-                    Code comments in DiffDash are not supported yet. Connect OpenCode to comment on
-                    code.
-                  </div>
-                </div>
-              ),
-              OpenCode: () =>
-                Option.match(gitRevision, {
-                  onNone: () => (
-                    <div className="bg-diff-canvas px-3 py-1.5">
-                      <div className="bg-card text-muted-foreground rounded-lg border px-3 py-2 text-xs shadow-xs">
-                        OpenCode comments require a committed Git revision.
-                      </div>
-                    </div>
-                  ),
-                  onSome: (commentRevision) => (
-                    <div className="bg-diff-canvas px-3 py-1.5">
-                      <section className="bg-card rounded-lg border p-3 shadow-xs">
-                        <ReviewThreadComposer
-                          label={`Comment on ${path} line ${String(lineNumber)}`}
-                          onCancel={() => setDraftLineNumber(Option.none())}
-                          onSubmit={async (bodyMarkdown) => {
-                            const lineContent = contents.split("\n")[lineNumber - 1] ?? ""
-                            await commentSubmission.submit(
-                              CommentSubmission.cases.Start.make({
-                                subject: CommentSubject.cases.CodeLine.make({
-                                  projectId,
-                                  revision: commentRevision,
-                                  path,
-                                  lineNumber,
-                                  lineContent,
-                                }),
-                                body: MarkdownBody.make(bodyMarkdown),
-                              }),
-                            )
-                            setDraftLineNumber(Option.none())
-                          }}
-                        />
-                      </section>
-                    </div>
-                  ),
-                }),
-            })
-          }}
+          renderAnnotation={(annotation) =>
+            codeSourceHost.renderAnnotation(annotation.metadata.contributionKey)
+          }
         />
         {Option.match(
           Option.product(Option.fromNullishOr(onLoadDefinitionSource), languageNavigation.peek),
@@ -534,6 +478,8 @@ export const CodeFileViewer = ({
 }
 
 const EMPTY_LINE_CHANGES: readonly CodeLineChangeRange[] = []
+const EMPTY_CODE_SOURCE_CONTRIBUTIONS: readonly OwnedExtensionContribution<CodeSourceContribution>[] =
+  []
 
 const isInteractiveSurfaceControl = (event: MouseEvent): boolean =>
   event
