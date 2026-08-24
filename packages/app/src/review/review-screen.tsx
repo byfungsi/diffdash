@@ -28,7 +28,7 @@ import type { ReviewSourceOperationProjection } from "./use-review-source-operat
 import { useProgressiveReviewContent } from "./use-progressive-review-content"
 import { useViewedFileMutations } from "./use-viewed-file-mutations"
 
-type ReviewWorkspaceRibbon = "reviews" | "files" | "walkthrough" | "threads"
+type ReviewWorkspaceRibbon = "reviews" | "files" | "walkthrough" | "comments"
 
 /** Branches once over normalized selection and directly composes ready review detail. */
 export const ReviewScreen = ({
@@ -356,7 +356,7 @@ const ribbonLabel = (ribbon: ReviewWorkspaceRibbon) =>
     ? "Files"
     : ribbon === "walkthrough"
       ? "Walkthrough"
-      : ribbon === "threads"
+      : ribbon === "comments"
         ? "Comments"
         : "Reviews"
 
@@ -365,6 +365,6 @@ const projectWorkspaceActivityToReviewRibbon = (
 ): ReviewWorkspaceRibbon => {
   if (activityId === PROJECT_WORKSPACE_FILES_ACTIVITY_ID) return "files"
   if (activityId === PROJECT_WORKSPACE_WALKTHROUGH_ACTIVITY_ID) return "walkthrough"
-  if (activityId === REVIEW_COMMENTS_ACTIVITY_ID) return "threads"
+  if (activityId === REVIEW_COMMENTS_ACTIVITY_ID) return "comments"
   return "reviews"
 }

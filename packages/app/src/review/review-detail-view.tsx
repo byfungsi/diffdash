@@ -167,8 +167,8 @@ import { reviewWalkthroughScope } from "./review-subject"
 import type { ProgressiveReviewContent } from "./use-progressive-review-content"
 import { diffCardDomId, useViewedFileViewport, type ViewedFileUpdate } from "./viewed-file-viewport"
 
-type ReviewSidebarTab = "reviews" | "tree" | "walkthrough" | "threads"
-type ReviewWorkspaceRibbon = "reviews" | "files" | "walkthrough" | "threads"
+type ReviewSidebarTab = "reviews" | "tree" | "walkthrough" | "comments"
+type ReviewWorkspaceRibbon = "reviews" | "files" | "walkthrough" | "comments"
 
 type PullRequestApprovalState = "checking" | "unapproved" | "approving" | "approved"
 
@@ -462,7 +462,7 @@ export const ReviewDetailView = ({
   const reviewsActivityButtonRef = useRef<HTMLButtonElement>(null)
   const treeActivityButtonRef = useRef<HTMLButtonElement>(null)
   const walkthroughActivityButtonRef = useRef<HTMLButtonElement>(null)
-  const threadsActivityButtonRef = useRef<HTMLButtonElement>(null)
+  const commentsActivityButtonRef = useRef<HTMLButtonElement>(null)
   const previousSidebarExpandedRef = useRef(sidebarExpanded)
   const quickNavigationRequestRef = useRef(quickNavigationRequest)
   const previousReviewSearchFocusRef = useRef<HTMLElement | null>(null)
@@ -528,7 +528,7 @@ export const ReviewDetailView = ({
     setGoToPaletteOpen(true)
   }, [quickNavigationRequest])
   const openContributionDetailPane = useEffectEvent(() => {
-    setSidebarTab("threads")
+    setSidebarTab("comments")
     onSidebarExpandedChange(true)
     setActivePane("thread-detail")
   })
@@ -544,7 +544,7 @@ export const ReviewDetailView = ({
       return
     }
     setActivePane("context")
-    if (sidebarTab === "threads") reviewContribution?.showList()
+    if (sidebarTab === "comments") reviewContribution?.showList()
   }, [reviewContribution, sidebarExpanded, sidebarTab])
   useEffect(() => {
     if (reviewContribution?.detailOpen !== true) return
@@ -1353,7 +1353,7 @@ export const ReviewDetailView = ({
         reviewContribution.collapse()
         onSidebarExpandedChange(false)
         setActivePane("diff")
-        window.requestAnimationFrame(() => threadsActivityButtonRef.current?.focus())
+        window.requestAnimationFrame(() => commentsActivityButtonRef.current?.focus())
         return
       }
       if (isModKey(event) && key === "f") {
@@ -1549,7 +1549,7 @@ export const ReviewDetailView = ({
     setSidebarTab(tab)
     onSidebarExpandedChange(true)
     setActivePane("context")
-    if (tab === "threads") reviewContribution?.showList()
+    if (tab === "comments") reviewContribution?.showList()
     else reviewContribution?.collapse()
   }
   const toggleSidebarTab = (tab: ReviewSidebarTab, placement: "rail" | "bottom") => {
@@ -1577,19 +1577,19 @@ export const ReviewDetailView = ({
           ? treeActivityButtonRef.current
           : sidebarTab === "walkthrough"
             ? walkthroughActivityButtonRef.current
-            : threadsActivityButtonRef.current
+            : commentsActivityButtonRef.current
     window.requestAnimationFrame(() => button?.focus())
   }
-  const collapseThreadSidebar = () => {
+  const collapseCommentsSidebar = () => {
     reviewContribution?.collapse()
     cancelFileNavigation()
     onSidebarExpandedChange(false)
     setActivePane("diff")
     focusActiveSidebarTab()
   }
-  const showThreadList = () => {
+  const showCommentsList = () => {
     reviewContribution?.showList()
-    setSidebarTab("threads")
+    setSidebarTab("comments")
     onSidebarExpandedChange(true)
     setActivePane("context")
   }
@@ -1801,7 +1801,7 @@ export const ReviewDetailView = ({
         sidebarRequestedOpen={sidebarExpanded}
         onContextCollapsedByUser={() => onSidebarExpandedChange(false)}
         onContextWidthCommit={onSidebarWidthChange}
-        onDetailCollapsedByUser={showThreadList}
+        onDetailCollapsedByUser={showCommentsList}
         onDetailWidthCommit={onThreadDetailWidthChange}
         renderActivityNavigation={(placement) => (
           <ProjectActivityNavigation
@@ -1812,7 +1812,7 @@ export const ReviewDetailView = ({
                 [PROJECT_WORKSPACE_REVIEWS_ACTIVITY_ID, reviewsActivityButtonRef],
                 [PROJECT_WORKSPACE_FILES_ACTIVITY_ID, treeActivityButtonRef],
                 [PROJECT_WORKSPACE_WALKTHROUGH_ACTIVITY_ID, walkthroughActivityButtonRef],
-                [REVIEW_COMMENTS_ACTIVITY_ID, threadsActivityButtonRef],
+                [REVIEW_COMMENTS_ACTIVITY_ID, commentsActivityButtonRef],
               ])
             }
             placement={placement}
@@ -1834,10 +1834,10 @@ export const ReviewDetailView = ({
           sidebarExpanded ? (
             sidebarTab === "reviews" ? (
               reviewsContext
-            ) : sidebarTab === "threads" ? (
+            ) : sidebarTab === "comments" ? (
               (reviewContribution?.renderContextPane({
                 navigableThreadIds,
-                onCollapse: collapseThreadSidebar,
+                onCollapse: collapseCommentsSidebar,
                 settings: (
                   <WalkthroughSettingsMenu
                     catalog={agentProviderCatalog}
@@ -1965,7 +1965,7 @@ export const ReviewDetailView = ({
         detail={
           reviewContribution?.renderDetailPane({
             navigableThreadIds,
-            onClose: showThreadList,
+            onClose: showCommentsList,
             onGoToDiff: goToReviewThread,
           }) ?? null
         }
@@ -2889,7 +2889,7 @@ const sidebarTabToProjectWorkspaceActivity = (
 ): ProjectWorkspaceActivityId => {
   if (tab === "tree") return PROJECT_WORKSPACE_FILES_ACTIVITY_ID
   if (tab === "walkthrough") return PROJECT_WORKSPACE_WALKTHROUGH_ACTIVITY_ID
-  if (tab === "threads") return REVIEW_COMMENTS_ACTIVITY_ID
+  if (tab === "comments") return REVIEW_COMMENTS_ACTIVITY_ID
   return PROJECT_WORKSPACE_REVIEWS_ACTIVITY_ID
 }
 
@@ -2898,6 +2898,6 @@ const projectWorkspaceActivityToReviewRibbon = (
 ): ReviewWorkspaceRibbon => {
   if (activityId === PROJECT_WORKSPACE_FILES_ACTIVITY_ID) return "files"
   if (activityId === PROJECT_WORKSPACE_WALKTHROUGH_ACTIVITY_ID) return "walkthrough"
-  if (activityId === REVIEW_COMMENTS_ACTIVITY_ID) return "threads"
+  if (activityId === REVIEW_COMMENTS_ACTIVITY_ID) return "comments"
   return "reviews"
 }

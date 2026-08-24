@@ -39,7 +39,7 @@ import { flushSync } from "react-dom"
 import { createRoot, type Root } from "react-dom/client"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import { page, userEvent } from "vitest/browser"
-import { installDiffDashApi } from "../test/app-browser-support"
+import { installDiffDashApi } from "@/test/app-browser-support"
 import { ReviewThreadListPane } from "./review-thread-sidebar"
 import {
   ReviewMarkdown,
