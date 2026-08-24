@@ -1335,17 +1335,17 @@ describe("IPC contract", () => {
     const registry = new IpcControllerRegistry(testRendererSecurityPolicy(), host.api, [
       InvokeChannel.projectWorkspaceSave,
     ])
-    const execute = vi.fn(
-      async (
+    const execute = vi.fn<
+      (
         request: InvokeRequest<typeof InvokeChannel.projectWorkspaceSave>,
-      ): Promise<ProjectWorkspaceState> => {
-        expect(request.input).toBeInstanceOf(ProjectWorkspaceStateInput)
-        return ProjectWorkspaceState.make({
-          ...request.input,
-          updatedAt: "2026-08-23T00:00:00.000Z",
-        })
-      },
-    )
+      ) => Promise<ProjectWorkspaceState>
+    >(async (request: InvokeRequest<typeof InvokeChannel.projectWorkspaceSave>) => {
+      expect(request.input).toBeInstanceOf(ProjectWorkspaceStateInput)
+      return ProjectWorkspaceState.make({
+        ...request.input,
+        updatedAt: "2026-08-23T00:00:00.000Z",
+      })
+    })
     registry.defineCore(CoreMethod.projectWorkspaceSave, execute)
     registry.install()
 
