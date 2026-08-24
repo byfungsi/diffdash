@@ -146,6 +146,7 @@ type AppNavigationLocation =
     }
   | {
       readonly kind: "projectCode"
+      readonly activeActivity: ProjectWorkspaceActivityId
       readonly fileStatuses: ReadonlyMap<RepositoryRelativePath, DiffFileStatus>
       readonly lineChanges: HashMap.HashMap<RepositoryRelativePath, readonly CodeLineChangeRange[]>
       readonly path: Option.Option<RepositoryRelativePath>
@@ -177,6 +178,7 @@ const sameAppNavigationLocation = (
   }
   if (left.kind === "projectCode" && right.kind === "projectCode") {
     return (
+      left.activeActivity === right.activeActivity &&
       Equal.equals(left.path, right.path) &&
       Equal.equals(left.target, right.target) &&
       Equal.equals(left.revealRange, right.revealRange)
@@ -520,8 +522,12 @@ export function AppShell() {
       return
     }
 
+    const activity = projectActivities.find(
+      (candidate) =>
+        candidate.id === location.activeActivity && candidate.supportedSurfaces.includes("code"),
+    )
     setActiveSurface("code")
-    setActiveActivity(PROJECT_WORKSPACE_CODE_ACTIVITY_ID)
+    setActiveActivity(activity?.id ?? PROJECT_WORKSPACE_CODE_ACTIVITY_ID)
     setSelectedCodeTarget(location.target)
     setSelectedCodePath(location.path)
     setCodeFileStatuses(location.fileStatuses)
@@ -722,6 +728,7 @@ export function AppShell() {
       projection.activeSurface === "code"
         ? {
             kind: "projectCode",
+            activeActivity: projection.activeActivity,
             repo: projection.repo,
             selectedReview: projection.selectedReview,
             target: ProjectHeadCodeWorkspaceTarget.make({ projectId: projection.repo.id }),
@@ -795,18 +802,27 @@ export function AppShell() {
       activityId,
       activity.surfacePolicy,
     )
+    const currentLocation = currentNavigationLocation(navigationHistoryRef.current)
     const location: AppNavigationLocation =
       selection.activeSurface === "code"
-        ? {
-            kind: "projectCode",
-            repo: selectedRepo,
-            selectedReview,
-            target: ProjectHeadCodeWorkspaceTarget.make({ projectId: selectedRepo.id }),
-            path: Option.none(),
-            revealRange: Option.none(),
-            fileStatuses: new Map(),
-            lineChanges: HashMap.empty(),
-          }
+        ? currentLocation.kind === "projectCode" && currentLocation.repo.id === selectedRepo.id
+          ? {
+              ...currentLocation,
+              activeActivity: selection.activeActivity,
+            }
+          : {
+              kind: "projectCode",
+              activeActivity: selection.activeActivity,
+              repo: selectedRepo,
+              selectedReview,
+              target:
+                selectedCodeTarget ??
+                ProjectHeadCodeWorkspaceTarget.make({ projectId: selectedRepo.id }),
+              path: selectedCodePath,
+              revealRange: Option.none(),
+              fileStatuses: codeFileStatuses,
+              lineChanges: codeLineChanges,
+            }
         : {
             kind: "projectReview",
             repo: selectedRepo,
@@ -840,6 +856,7 @@ export function AppShell() {
     if (selectedRepo === null) return
     const location: AppNavigationLocation = {
       kind: "projectCode",
+      activeActivity: PROJECT_WORKSPACE_CODE_ACTIVITY_ID,
       repo: selectedRepo,
       selectedReview,
       target: target ?? ProjectHeadCodeWorkspaceTarget.make({ projectId: selectedRepo.id }),
