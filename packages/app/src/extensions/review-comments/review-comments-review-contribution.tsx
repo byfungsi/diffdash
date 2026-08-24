@@ -12,7 +12,7 @@ import type {
   ReviewDiffContributionOutput,
   ReviewDiffContributionProps,
 } from "../extension-registry"
-import { useReviewDiffContributionRegistration } from "@/review/review-diff-contribution-host"
+import { useReviewDiffContributionRegistration } from "../review-diff-contribution-host"
 import {
   lineReviewAnchor,
   reviewThreadAnnotationContentId,

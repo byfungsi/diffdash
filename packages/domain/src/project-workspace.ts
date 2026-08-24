@@ -161,18 +161,6 @@ export const resolveProjectWorkspaceActivity = (
   }
 }
 
-/** Top-level project workspace section selected by the user. */
-export const ProjectWorkspaceRibbon = Schema.Literals([
-  "reviews",
-  "files",
-  "code",
-  "walkthrough",
-  "threads",
-])
-
-/** Top-level project workspace section selected by the user. */
-export type ProjectWorkspaceRibbon = typeof ProjectWorkspaceRibbon.Type
-
 /** Durable user-controlled workspace state for one review project. */
 export class ProjectWorkspaceStateInput extends Schema.Class<ProjectWorkspaceStateInput>(
   "ProjectWorkspaceStateInput",

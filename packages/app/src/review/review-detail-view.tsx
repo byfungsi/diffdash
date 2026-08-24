@@ -127,7 +127,7 @@ import {
 } from "@/walkthrough/walkthrough-panel"
 import { OpenDiffCard } from "./diff-card"
 import type { ReviewDiffAnnotationMetadata } from "./review-diff-annotation"
-import { useReviewDiffContributionHost } from "./review-diff-contribution-host"
+import { useReviewDiffContributionHost } from "@/extensions/review-diff-contribution-host"
 import {
   createDiffsWorker,
   DiffVirtualizer,
@@ -422,11 +422,21 @@ export const ReviewDetailView = ({
     baseRevision: manifest.baseRevision,
     headRevision: manifest.headRevision,
   })
-  const commentsContributionId = activities.find(
-    (activity) => activity.id === REVIEW_COMMENTS_ACTIVITY_ID,
-  )?.reviewDiffContributionId
+  const linkedReviewContributions = activities.flatMap((activity) => {
+    const contribution = reviewContributionHost.outputs.find(
+      ({ id }) => id === activity.reviewDiffContributionId,
+    )
+    return contribution === undefined
+      ? []
+      : [{ activityId: activity.id, output: contribution.output }]
+  })
   const reviewContribution =
-    reviewContributionHost.outputs.find(({ id }) => id === commentsContributionId)?.output ?? null
+    linkedReviewContributions.find(({ activityId }) => activityId === activeActivity)?.output ??
+    linkedReviewContributions.find(
+      ({ output }) =>
+        output.detailOpen || output.listOpen || output.loading || output.details.length > 0,
+    )?.output ??
+    null
   const walkthroughTarget = useMemo(
     () =>
       Match.valueTags(review, {

@@ -5,7 +5,12 @@ import {
   type ReviewThreadAnchor,
   type ReviewThreadDetails,
 } from "@diffdash/domain/review-thread"
-import type { DiffLineAnnotation } from "@/review/pierre"
+
+interface ReviewThreadLineAnnotation {
+  readonly lineNumber: number
+  readonly side: "additions" | "deletions"
+  readonly metadata: ReviewThreadAnnotation
+}
 
 /** Metadata rendered below one annotated diff line. */
 export type ReviewThreadAnnotation = {
@@ -20,8 +25,8 @@ export const reviewThreadAnnotations = (
   file: ParsedDiffFile,
   details: readonly ReviewThreadDetails[],
   expandedLineAnchor: ReviewThreadAnchor | null,
-): DiffLineAnnotation<ReviewThreadAnnotation>[] => {
-  const annotations: DiffLineAnnotation<ReviewThreadAnnotation>[] = []
+): ReviewThreadLineAnnotation[] => {
+  const annotations: ReviewThreadLineAnnotation[] = []
   for (const item of details) {
     const anchor = item.thread.activeAnchor
     if (anchor === null || !lineAnchorIsInFile(anchor, file)) {
@@ -129,7 +134,7 @@ export const sameReviewThreadLine = (left: ReviewThreadAnchor | null, right: Rev
 
 const annotationPosition = (
   anchor: ReviewThreadAnchor,
-): Pick<DiffLineAnnotation<ReviewThreadAnnotation>, "lineNumber" | "side"> => ({
+): Pick<ReviewThreadLineAnnotation, "lineNumber" | "side"> => ({
   lineNumber: anchor.lineNumber,
   side: anchor.side === "old" ? "deletions" : "additions",
 })

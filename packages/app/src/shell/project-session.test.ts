@@ -42,7 +42,7 @@ const repo = Repo.make({
 })
 
 const makeDependencies = () => ({
-  availableActivityIds: [
+  availableActivityIds: () => [
     PROJECT_WORKSPACE_REVIEWS_ACTIVITY_ID,
     PROJECT_WORKSPACE_FILES_ACTIVITY_ID,
     PROJECT_WORKSPACE_CODE_ACTIVITY_ID,
@@ -128,6 +128,45 @@ describe("ProjectSession", () => {
     release?.(Option.none())
 
     await expect(restoration).resolves.toEqual({ _tag: "stale" })
+  })
+
+  it("repairs Comments from the current activity registry when disposal races restoration", async () => {
+    let availableActivityIds = makeDependencies().availableActivityIds()
+    let release: ((state: Option.Option<ProjectWorkspaceState>) => void) | undefined
+    const saveWorkspace = vi.fn<() => Promise<void>>(async () => undefined)
+    const session = new ProjectSession({
+      ...makeDependencies(),
+      availableActivityIds: () => availableActivityIds,
+      loadWorkspace: () =>
+        new Promise((resolve) => {
+          release = resolve
+        }),
+      saveWorkspace,
+    })
+    const persisted = ProjectWorkspaceState.make({
+      projectId: repo.id,
+      activeSurface: "code",
+      activeActivity: REVIEW_COMMENTS_ACTIVITY_ID,
+      selectedReviewTarget: null,
+      updatedAt: "2026-08-20T00:00:00.000Z",
+    })
+
+    const restoration = session.restore(repo)
+    availableActivityIds = availableActivityIds.filter(
+      (activityId) => activityId !== REVIEW_COMMENTS_ACTIVITY_ID,
+    )
+    release?.(Option.some(persisted))
+    const restored = await restoration
+    if (!("projection" in restored)) throw new Error("Expected restored project session")
+    await restored.persistence
+
+    expect(restored.projection).toMatchObject({
+      activeSurface: "code",
+      activeActivity: PROJECT_WORKSPACE_CODE_ACTIVITY_ID,
+      notice:
+        "The saved workspace activity is unavailable. A built-in activity was restored instead.",
+    })
+    expect(saveWorkspace).toHaveBeenCalledOnce()
   })
 
   it("continues remote selection with the original intent and selected repository", async () => {
