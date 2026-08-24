@@ -1,5 +1,17 @@
 # DiffDash Changelog
 
+## 0.12.0
+
+### Minor Changes
+
+- [#90](https://github.com/byfungsi/diffdash/pull/90) [`fec316e`](https://github.com/byfungsi/diffdash/commit/fec316e9ee7a45cea220ca23b394978f3a626a9d) Thanks [@hanipcode](https://github.com/hanipcode)! - Connect review comments to project-scoped OpenCode sessions or DiffDash's built-in review agent.
+
+- [#91](https://github.com/byfungsi/diffdash/pull/91) [`f404d27`](https://github.com/byfungsi/diffdash/commit/f404d274e13094acdac8765469bb51d6a2355a81) Thanks [@hanipcode](https://github.com/hanipcode)! - Add repository code navigation with definition and reference lookup across projects and saved review snapshots.
+
+### Patch Changes
+
+- [#88](https://github.com/byfungsi/diffdash/pull/88) [`169ecd3`](https://github.com/byfungsi/diffdash/commit/169ecd37e9665b25a07b6d519a358df50cd71e47) Thanks [@hanipcode](https://github.com/hanipcode)! - Recover hosted repositories from surviving Git worktrees and improve diff navigation consistency.
+
 ## 0.11.0
 
 ### Minor Changes
