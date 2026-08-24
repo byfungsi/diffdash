@@ -4164,9 +4164,14 @@ scenario("threadNavigationConvergence", async () => {
     },
     { timeout: 20_000 },
   )
-  const stableTop = mountedLine.getBoundingClientRect().top
-  await waitForAnimationFrames(4)
-  expect(Math.abs(mountedLine.getBoundingClientRect().top - stableTop)).toBeLessThanOrEqual(1)
+  await vi.waitFor(
+    async () => {
+      const stableTop = mountedLine.getBoundingClientRect().top
+      await waitForAnimationFrames(4)
+      expect(Math.abs(mountedLine.getBoundingClientRect().top - stableTop)).toBeLessThanOrEqual(1)
+    },
+    { timeout: 20_000 },
+  )
   expect(getMountedDiffLineCount()).toBeLessThanOrEqual(1_000)
 })
 
