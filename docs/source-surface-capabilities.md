@@ -36,13 +36,33 @@ changing callback options.
 
 ## Built-In Capabilities
 
+Review Comments (`diffdash.builtin.review-comments`) is the first trusted built-in extension that
+spans project activities plus Code and Review source surfaces. The renderer registry publishes
+immutable snapshots and owns extension and contribution identity, deterministic ordering, and
+owner-scoped disposal. The project activity host owns selection, persistence, surface-preserving
+transitions, and fallback when a saved contribution is unavailable. Ordered project-provider
+contributions keep extension state scoped to the active project without hard-coding a feature at the
+application root.
+
+Trusted built-ins mount React adapters in-process. Those adapters are application implementation
+details, not public extension contracts. Their source contributions exchange semantic values:
+
+- Code supplies project, workspace revision, Git revision, repository path, line number, and line
+  content. The source host orders line actions and renders registered annotations.
+- Review supplies project, review target, exact base/head revisions, parsed files, and semantic
+  thread navigation. The Review host composes annotations and line actions while retaining
+  responsive pane layout and viewport navigation.
+- The source kernel alone adapts these values to Pierre callbacks, virtualized instances, DOM
+  anchors, and input events.
+
 The current built-in adoption is:
 
 | Capability ID | Provider or input | Governed contribution |
 | --- | --- | --- |
 | `diffdash.builtin.scm-line-changes` | Code workspace line-change provider | Protected SCM gutter decoration |
 | `diffdash.builtin.language-navigation` | Definition and reference providers | Modified-token interaction and Peek |
-| `diffdash.builtin.code-comments` | Comment submission controller | Plain line interaction |
+| `diffdash.builtin.review-comments.code-source` | Review Comments extension | Code line action and draft annotation |
+| `diffdash.builtin.review-comments.review-diff` | Review Comments extension | Review line actions and thread annotations |
 | `diffdash.builtin.code-search` | In-file search | Owner-scoped selection and text highlight |
 | `diffdash.builtin.review-virtualization` | Rendered review diff | Virtualizer registration and settlement |
 | `diffdash.builtin.review-search` | Review search manager | Search highlight reconciliation |
@@ -51,9 +71,9 @@ The current built-in adoption is:
 
 Review's side-aware gutter and line callbacks remain one private `DiffCard` Pierre adapter because
 Pierre supplies old/new-side metadata there that is not present on a bubbled DOM event. The adapter
-invokes only protected review-thread behavior; it is not an extension contribution lane. Render
-lifecycle, virtualization, search, navigation focus, and viewed-file behavior still flow through the
-shared runtime.
+converts Pierre values to the semantic Review contribution lane and renders host-composed
+annotations. Render lifecycle, virtualization, search, navigation focus, and viewed-file behavior
+still flow through the shared runtime.
 
 Language providers compute locations. The generic language-navigation capability owns Cmd-click,
 Alt-click, Cmd+Shift-click, cancellation, result policy, and Peek presentation. Git computes compact

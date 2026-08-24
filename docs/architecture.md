@@ -106,11 +106,20 @@ Electron, SQLite, and concrete-provider leakage.
 
 Code files, review diffs, and source previews are source surfaces. `@diffdash/app` owns one source
 surface kernel that is the sole integration point for Pierre render lifecycle, delegated
-interactions, line selection, decorations, and durable floating-pane anchors. A narrow private
-Review adapter retains Pierre's side-aware gutter payload for protected thread interactions; that
-payload is not exposed as a capability or extension contract. Built-in Git,
-language navigation, search, review navigation, and viewed-file behavior register named
-capabilities with that kernel instead of composing Pierre callbacks directly.
+interactions, line selection, decorations, and durable floating-pane anchors. Trusted built-in
+extensions register ordered project activities and semantic Code or Review contributions in one
+renderer registry that publishes immutable snapshots. The activity host owns selection,
+persistence, and missing-contribution fallback. Source hosts own contribution ordering and
+lifecycle; ordered project providers own extension state without feature-specific application-shell
+composition. The contributing extension owns its policy, state, and UI.
+
+Review Comments is the first trusted built-in spanning both source surfaces. Code exposes semantic
+project/revision/path/line values. Review exposes semantic review identity, exact revisions, parsed
+files, annotations, line actions, and thread-navigation requests. A narrow private Review adapter
+retains Pierre's side-aware gutter payload and converts it to those semantic contracts. Pierre,
+React host adapters, DOM values, and persistence objects are not contribution contracts. Built-in
+Git, language navigation, search, review navigation, and viewed-file behavior register named
+capabilities with the source kernel instead of composing Pierre callbacks directly.
 
 The same capability contracts are the intended boundary for future user-owned extensions, but the
 renderer runtime is not itself an extension sandbox. User code must eventually execute outside the
