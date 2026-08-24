@@ -1,9 +1,12 @@
 import type { ParsedDiffFile } from "@diffdash/domain/diff"
-import { CommentSubmissionReceipt } from "@diffdash/domain/comment"
+import type {
+  ReviewDiffContributionAnnotation,
+  ReviewDiffContributionOutput,
+} from "@/extensions/extension-registry"
+import type { ReviewThreadAnchor } from "@diffdash/domain/review-thread"
 import { isVeryLargeDiffFile } from "@diffdash/domain/large-diff-policy"
 import { makeReviewDiffIdentity } from "@diffdash/domain/review-identity"
-import type { ReviewThreadAnchor, ReviewThreadDetails } from "@diffdash/domain/review-thread"
-import { Check, ChevronDown, ChevronRight, Copy, MessageSquare } from "lucide-react"
+import { Check, ChevronDown, ChevronRight, Copy } from "lucide-react"
 import { ContextMenu } from "radix-ui"
 import { Effect, Option } from "effect"
 import { type RefObject, useId, useLayoutEffect, useMemo, useRef, useState } from "react"
@@ -16,13 +19,8 @@ import {
   useStableCallback,
   type VirtualFileMetrics,
 } from "./pierre"
-import {
-  lineReviewAnchor,
-  type ReviewThreadAnnotation,
-  reviewThreadAnnotationContentId,
-  reviewThreadAnnotations,
-} from "./thread-annotations"
 import { diffCardDomId } from "./viewed-file-viewport"
+import type { ReviewDiffAnnotationMetadata } from "./review-diff-annotation"
 import { Badge } from "@/shared/ui/badge"
 import { isHTMLElement } from "@/shared/dom"
 import { Button } from "@/shared/ui/button"
@@ -33,15 +31,12 @@ import {
   decodePierrePositiveInteger,
   type SourceSurfaceRuntime,
 } from "@/source-surface/source-surface-runtime"
-import {
-  ReviewThreadComposer,
-  ReviewThreadPanel,
-  type ReviewThreadsController,
-} from "@/threads/review-threads"
-import {
-  reviewLineLabel,
-  syncPinnedReviewThreadHistories,
-} from "@/threads/review-thread-presentation"
+
+type ReviewDiffCardAnnotation = {
+  readonly lineNumber: number
+  readonly side: "additions" | "deletions"
+  readonly metadata: ReviewDiffAnnotationMetadata
+}
 
 const REVIEW_DIFF_METRICS = {
   diffHeaderHeight: 0,
@@ -64,36 +59,38 @@ type DiffLineContextMenuState =
 export const OpenDiffCard = ({
   diffOptions,
   expanded,
-  expandedLineAnchor,
+  annotationProvider,
+  navigationAnchor,
   file,
   forceExpanded,
-  reviewThreads,
   selected,
   surfaceRuntime,
   viewed,
   onFileAnchorChange,
   onOpenFile,
-  onOpenThread,
+  onActivateLine,
+  onAnnotationsRendered,
   onSelect,
   onSetViewed,
-  onToggleLine,
   onToggleExpanded,
 }: {
-  readonly diffOptions: FileDiffOptions<ReviewThreadAnnotation>
+  readonly diffOptions: FileDiffOptions<ReviewDiffCardAnnotation["metadata"]>
+  readonly annotationProvider: ReviewDiffContributionOutput["annotations"]
+  readonly navigationAnchor: ReviewThreadAnchor | null
   readonly expanded: boolean
-  readonly expandedLineAnchor: ReviewThreadAnchor | null
   readonly file: ParsedDiffFile
   readonly forceExpanded: boolean
-  readonly reviewThreads: ReviewThreadsController
   readonly selected: boolean
-  readonly surfaceRuntime: SourceSurfaceRuntime<PierreFileDiff<ReviewThreadAnnotation>>
+  readonly surfaceRuntime: SourceSurfaceRuntime<
+    PierreFileDiff<ReviewDiffCardAnnotation["metadata"]>
+  >
   readonly viewed: boolean
   readonly onFileAnchorChange: (element: HTMLElement, focusElement: HTMLElement) => () => void
   readonly onOpenFile: () => void
-  readonly onOpenThread: (details: ReviewThreadDetails) => void
+  readonly onActivateLine: (side: "additions" | "deletions", lineNumber: number) => boolean
+  readonly onAnnotationsRendered: (card: HTMLElement) => void
   readonly onSelect: () => void
   readonly onSetViewed: (viewed: boolean) => void
-  readonly onToggleLine: (anchor: ReviewThreadAnchor) => void
   readonly onToggleExpanded: () => void
 }) => {
   const fileCardRef = useRef<HTMLElement>(null)
@@ -121,35 +118,40 @@ export const OpenDiffCard = ({
       }) satisfies FileDiffMetadata,
     [file.fileId, file.patch],
   )
-  const annotations = useMemo(
-    () => reviewThreadAnnotations(file, reviewThreads.details, expandedLineAnchor),
-    [expandedLineAnchor, file, reviewThreads.details],
+  const annotations = useMemo<readonly ReviewDiffCardAnnotation[]>(
+    () =>
+      annotationProvider(file, navigationAnchor).map(
+        ({ lineNumber, side, render }: ReviewDiffContributionAnnotation) => ({
+          lineNumber,
+          side,
+          metadata: { render },
+        }),
+      ),
+    [annotationProvider, file, navigationAnchor],
   )
   const onGutterUtilityClick = useStableCallback<
-    NonNullable<FileDiffOptions<ReviewThreadAnnotation>["onGutterUtilityClick"]>
+    NonNullable<FileDiffOptions<ReviewDiffCardAnnotation["metadata"]>["onGutterUtilityClick"]>
   >(({ side, start }) => {
     if (side === undefined) return
-    const anchor = lineReviewAnchor(file, side, start)
-    if (anchor !== null) onToggleLine(anchor)
+    onActivateLine(side, start)
   })
   const onLineClick = useStableCallback<
-    NonNullable<FileDiffOptions<ReviewThreadAnnotation>["onLineClick"]>
+    NonNullable<FileDiffOptions<ReviewDiffCardAnnotation["metadata"]>["onLineClick"]>
   >(({ annotationSide, event, lineNumber, numberColumn }) => {
     if (numberColumn) return
     if (
       isHTMLElement(event.target) &&
-      event.target.closest("[data-review-thread-annotation]") !== null
+      event.target.closest("[data-review-contribution-annotation]") !== null
     ) {
       return
     }
-    const anchor = lineReviewAnchor(file, annotationSide, lineNumber)
-    if (anchor !== null) onToggleLine(anchor)
+    onActivateLine(annotationSide, lineNumber)
   })
   const publishSurfaceRender = useMemo(
     () => surfaceRuntime.createRenderPublisher(file.reviewKey),
     [file.reviewKey, surfaceRuntime],
   )
-  const interactiveDiffOptions = useMemo<FileDiffOptions<ReviewThreadAnnotation>>(
+  const interactiveDiffOptions = useMemo<FileDiffOptions<ReviewDiffCardAnnotation["metadata"]>>(
     () =>
       renderAsPlainText
         ? {
@@ -177,11 +179,18 @@ export const OpenDiffCard = ({
           threadHistorySyncFrameRef.current = window.requestAnimationFrame(() => {
             threadHistorySyncFrameRef.current = null
             const card = document.getElementById(diffCardDomId(file.reviewKey))
-            if (card !== null) syncPinnedReviewThreadHistories(card)
+            if (card !== null) onAnnotationsRendered(card)
           })
         }),
       ),
-    [annotations.length, file.patch, file.reviewKey, renderObserverId, surfaceRuntime],
+    [
+      annotations.length,
+      file.patch,
+      file.reviewKey,
+      onAnnotationsRendered,
+      renderObserverId,
+      surfaceRuntime,
+    ],
   )
   useLayoutEffect(
     () => () => {
@@ -287,114 +296,13 @@ export const OpenDiffCard = ({
               }}
             >
               {diffReady ? null : <DiffLoadingSkeleton />}
-              <FileDiff<ReviewThreadAnnotation>
+              <FileDiff<ReviewDiffCardAnnotation["metadata"]>
                 className="block text-xs"
                 fileDiff={pierreFileDiff}
-                lineAnnotations={annotations}
+                lineAnnotations={[...annotations]}
                 metrics={REVIEW_DIFF_METRICS}
                 options={interactiveDiffOptions}
-                renderAnnotation={(annotation) => {
-                  const {
-                    anchor,
-                    details,
-                    draftAnchor,
-                    expanded: reviewExpanded,
-                  } = annotation.metadata
-                  const contentId = reviewThreadAnnotationContentId(anchor)
-                  const singleThreadDetails = details.length === 1 ? (details.at(0) ?? null) : null
-                  return (
-                    <div
-                      data-review-thread-annotation
-                      className="bg-diff-canvas box-border w-full min-w-0 max-w-full overflow-x-clip px-3 py-1.5 [overflow-wrap:anywhere]"
-                    >
-                      <section className="bg-card overflow-hidden rounded-lg border shadow-xs">
-                        <div className="flex min-w-0 items-center">
-                          <button
-                            type="button"
-                            className="text-muted-foreground hover:bg-muted/45 hover:text-foreground focus-visible:ring-ring flex min-h-9 min-w-0 flex-1 items-center gap-2 px-3 py-2 text-left text-xs transition-colors focus-visible:ring-2 focus-visible:ring-inset focus-visible:outline-none"
-                            aria-controls={contentId}
-                            aria-expanded={reviewExpanded}
-                            onClick={() => onToggleLine(anchor)}
-                          >
-                            {reviewExpanded ? (
-                              <ChevronDown className="size-3.5 shrink-0" />
-                            ) : (
-                              <ChevronRight className="size-3.5 shrink-0" />
-                            )}
-                            <span>
-                              Review on{" "}
-                              <strong className="text-foreground">{reviewLineLabel(anchor)}</strong>
-                            </span>
-                          </button>
-                          {singleThreadDetails === null ? null : (
-                            <div className="shrink-0 border-l px-1">
-                              <Button
-                                type="button"
-                                size="icon-xs"
-                                variant="ghost"
-                                aria-label={`Open ${reviewLineLabel(anchor)} thread details`}
-                                title="Open thread details"
-                                onClick={() => onOpenThread(singleThreadDetails)}
-                              >
-                                <MessageSquare />
-                              </Button>
-                            </div>
-                          )}
-                        </div>
-                        {reviewExpanded ? (
-                          <div
-                            id={contentId}
-                            data-review-thread-conversation
-                            className="flex min-h-0 flex-1 flex-col divide-y overflow-hidden border-t"
-                          >
-                            {details.map((threadDetails) => (
-                              <ReviewThreadPanel
-                                key={threadDetails.thread.id}
-                                embedded
-                                agentRunning={reviewThreads.runningThreadIds.includes(
-                                  threadDetails.thread.id,
-                                )}
-                                agentProgress={
-                                  reviewThreads.agentProgress.find(
-                                    (progress) => progress.threadId === threadDetails.thread.id,
-                                  )?.stage ?? null
-                                }
-                                agentError={
-                                  reviewThreads.agentErrors[threadDetails.thread.id] ?? null
-                                }
-                                details={threadDetails}
-                                orchestration={{ retryAgentMessage: reviewThreads.runAgent }}
-                                {...(details.length > 1
-                                  ? { onOpenDetail: () => onOpenThread(threadDetails) }
-                                  : {})}
-                                onAddUserMessage={reviewThreads.addUserMessage}
-                                onRefresh={reviewThreads.refreshThread}
-                              />
-                            ))}
-                            {draftAnchor === null ? null : (
-                              <div className="p-3">
-                                <ReviewThreadComposer
-                                  label="Line comment"
-                                  onCancel={() => onToggleLine(draftAnchor)}
-                                  onSubmit={async (bodyMarkdown) => {
-                                    const receipt = await reviewThreads.createThread(
-                                      draftAnchor,
-                                      bodyMarkdown,
-                                    )
-                                    CommentSubmissionReceipt.match(receipt, {
-                                      StoredLocally: () => undefined,
-                                      Forwarded: () => onToggleLine(draftAnchor),
-                                    })
-                                  }}
-                                />
-                              </div>
-                            )}
-                          </div>
-                        ) : null}
-                      </section>
-                    </div>
-                  )
-                }}
+                renderAnnotation={(annotation) => annotation.metadata.render()}
               />
             </div>
           </ContextMenu.Trigger>

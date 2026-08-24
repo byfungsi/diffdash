@@ -1,10 +1,10 @@
 import type { SelectionSide, VirtualizedFileDiff } from "./pierre"
-import type { ReviewThreadAnnotation } from "./thread-annotations"
+import type { ReviewDiffAnnotationMetadata } from "./review-diff-annotation"
 
 /** Finds a rendered Pierre content row without assuming unified or split DOM structure. */
 export const findRenderedDiffLine = (
   host: HTMLElement,
-  instance: VirtualizedFileDiff<ReviewThreadAnnotation>,
+  instance: VirtualizedFileDiff<ReviewDiffAnnotationMetadata>,
   lineNumber: number,
   side: SelectionSide,
 ): HTMLElement | null => {

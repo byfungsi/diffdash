@@ -191,7 +191,7 @@ export function AppShell() {
   const preferences = useRendererPreferences()
   const projectWorkspace = useProjectWorkspace()
   const repositories = useRepositories()
-  const { codeSourceContributions, projectActivities, titlebarActions } =
+  const { codeSourceContributions, projectActivities, reviewDiffContributions, titlebarActions } =
     useTrustedExtensionRegistry()
   const [screen, setScreen] = useState<Screen>("home")
   const [selectedRepo, setSelectedRepo] = useState<Repo | null>(null)
@@ -1475,6 +1475,7 @@ export function AppShell() {
                         <ReviewScreen
                           activeActivity={activeReviewActivity}
                           activities={projectActivities}
+                          reviewDiffContributions={reviewDiffContributions}
                           detailEnvironment={{
                             aiAgentAvailable:
                               agentRouteAvailable(
