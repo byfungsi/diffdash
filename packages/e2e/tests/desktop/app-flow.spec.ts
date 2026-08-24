@@ -480,6 +480,19 @@ test("covers finished Home to Review flow with fake CLI fixtures", async ({
     await expect(window.locator("[data-review-editor-header]")).toContainText("Request review flow")
 
     await window.getByRole("button", { name: "Back" }).click()
+    await expect(window.getByRole("button", { name: "Threads" })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    )
+
+    await window.getByRole("button", { name: "Back" }).click()
+    await expect(window.getByRole("button", { name: "Files" })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    )
+    await expect(window.locator("[data-review-editor-header]")).toContainText("Request review flow")
+
+    await window.getByRole("button", { name: "Back" }).click()
     await expect(window.getByRole("button", { name: "Reviews" })).toHaveAttribute(
       "aria-pressed",
       "true",
