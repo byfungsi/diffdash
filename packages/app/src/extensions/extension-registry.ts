@@ -7,6 +7,7 @@ import type { ParsedDiffFile } from "@diffdash/domain/diff"
 import type { ReviewProjectId } from "@diffdash/domain/review-identity"
 import type { ReviewRevision } from "@diffdash/domain/review-identity"
 import type { GitCommitSha } from "@diffdash/domain/repository-comparison"
+import type { RepositoryCheckoutPath } from "@diffdash/domain/repository"
 import type { RepositoryRelativePath } from "@diffdash/domain/repository-path"
 import type {
   ReviewThreadAnchor,
@@ -177,6 +178,20 @@ export interface ReviewDiffContribution {
   readonly component: ComponentType<ReviewDiffContributionProps>
 }
 
+/** Project scope supplied to one trusted extension state provider. */
+export interface TrustedProjectProviderProps {
+  readonly projectId: ReviewProjectId | null
+  readonly directory: RepositoryCheckoutPath | null
+  readonly children: ReactNode
+}
+
+/** One trusted project-scoped state provider composed around the workbench. */
+export interface TrustedProjectProviderContribution {
+  readonly id: TrustedExtensionContributionId
+  readonly order: number
+  readonly component: ComponentType<TrustedProjectProviderProps>
+}
+
 /** Project context supplied to one optional trusted titlebar action. */
 export interface TrustedTitlebarActionProps {
   readonly projectId: ReviewProjectId | null
@@ -198,6 +213,7 @@ export interface TrustedBuiltInExtension {
   readonly projectActivities?: readonly ProjectActivityContribution[]
   readonly codeSourceContributions?: readonly CodeSourceContribution[]
   readonly reviewDiffContributions?: readonly ReviewDiffContribution[]
+  readonly projectProviders?: readonly TrustedProjectProviderContribution[]
   readonly titlebarActions?: readonly TrustedTitlebarActionContribution[]
 }
 
@@ -211,6 +227,7 @@ export interface TrustedExtensionRegistrySnapshot {
   readonly projectActivities: readonly OwnedExtensionContribution<ProjectActivityContribution>[]
   readonly codeSourceContributions: readonly OwnedExtensionContribution<CodeSourceContribution>[]
   readonly reviewDiffContributions: readonly OwnedExtensionContribution<ReviewDiffContribution>[]
+  readonly projectProviders: readonly OwnedExtensionContribution<TrustedProjectProviderContribution>[]
   readonly titlebarActions: readonly OwnedExtensionContribution<TrustedTitlebarActionContribution>[]
 }
 
@@ -247,6 +264,7 @@ const EMPTY_REGISTRY_SNAPSHOT: TrustedExtensionRegistrySnapshot = Object.freeze(
   projectActivities: Object.freeze([]),
   codeSourceContributions: Object.freeze([]),
   reviewDiffContributions: Object.freeze([]),
+  projectProviders: Object.freeze([]),
   titlebarActions: Object.freeze([]),
 })
 
@@ -351,6 +369,15 @@ export class TrustedExtensionRegistry {
           ),
         ),
       ),
+      projectProviders: Object.freeze(
+        orderedContributions(
+          extensions.flatMap((extension) =>
+            (extension.projectProviders ?? []).map((contribution) =>
+              ownContribution(extension.id, contribution),
+            ),
+          ),
+        ),
+      ),
       titlebarActions: Object.freeze(
         orderedContributions(
           extensions.flatMap((extension) =>
@@ -387,6 +414,7 @@ const extensionContributions = (extension: TrustedBuiltInExtension) => [
   ...(extension.projectActivities ?? []),
   ...(extension.codeSourceContributions ?? []),
   ...(extension.reviewDiffContributions ?? []),
+  ...(extension.projectProviders ?? []),
   ...(extension.titlebarActions ?? []),
 ]
 
@@ -415,6 +443,11 @@ const freezeExtensionDefinition = (extension: TrustedBuiltInExtension): TrustedB
     ),
     reviewDiffContributions: Object.freeze(
       (extension.reviewDiffContributions ?? []).map((contribution) =>
+        Object.freeze(Object.assign({}, contribution)),
+      ),
+    ),
+    projectProviders: Object.freeze(
+      (extension.projectProviders ?? []).map((contribution) =>
         Object.freeze(Object.assign({}, contribution)),
       ),
     ),

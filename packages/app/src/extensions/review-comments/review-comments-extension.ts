@@ -6,7 +6,7 @@ import {
   TrustedExtensionContributionId,
   TrustedExtensionId,
 } from "../extension-registry"
-import { ReviewCommentsConnectionAction } from "./review-comments-provider"
+import { ReviewCommentsConnectionAction, ReviewCommentsProvider } from "./review-comments-provider"
 import {
   ReviewCommentsActivityPane,
   ReviewCommentsCodeSourceContribution,
@@ -26,6 +26,11 @@ export const REVIEW_COMMENTS_CODE_SOURCE_ID = TrustedExtensionContributionId.mak
 /** Stable identity for Review Comments behavior mounted into Review diffs. */
 export const REVIEW_COMMENTS_REVIEW_DIFF_ID = TrustedExtensionContributionId.make(
   "diffdash.builtin.review-comments.review-diff",
+)
+
+/** Stable identity for project-scoped Review Comments state. */
+export const REVIEW_COMMENTS_PROJECT_PROVIDER_ID = TrustedExtensionContributionId.make(
+  "diffdash.builtin.review-comments.project-provider",
 )
 
 /** Comments activity metadata shared by Code and Review workspace hosts. */
@@ -61,6 +66,13 @@ export const reviewCommentsExtension: TrustedBuiltInExtension = {
       id: REVIEW_COMMENTS_REVIEW_DIFF_ID,
       order: 500,
       component: ReviewCommentsReviewDiffContribution,
+    },
+  ],
+  projectProviders: [
+    {
+      id: REVIEW_COMMENTS_PROJECT_PROVIDER_ID,
+      order: 500,
+      component: ReviewCommentsProvider,
     },
   ],
   titlebarActions: [

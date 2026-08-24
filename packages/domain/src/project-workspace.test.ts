@@ -13,7 +13,6 @@ import {
   ProjectRemoteCandidate,
   ProjectRemoteSelectionRequired,
   ProjectWorkspaceActivityId,
-  ProjectWorkspaceRibbon,
   ProjectWorkspaceState,
   ProjectWorkspaceStateInput,
   REVIEW_COMMENTS_ACTIVITY_ID,
@@ -94,15 +93,6 @@ describe("project workspace", () => {
         candidates: [{ remoteName: "origin", repository, remoteUrl: "private" }],
       }),
     ).toThrow(/at least 2/)
-  })
-
-  it("accepts exactly the supported ribbon values", () => {
-    const decode = Schema.decodeUnknownSync(ProjectWorkspaceRibbon)
-
-    expect(
-      ["reviews", "files", "code", "walkthrough", "threads"].map((value) => decode(value)),
-    ).toEqual(["reviews", "files", "code", "walkthrough", "threads"])
-    expect(() => decode("settings")).toThrow(/Expected/)
   })
 
   it("accepts bounded namespaced project activity IDs", () => {

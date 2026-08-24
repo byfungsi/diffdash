@@ -19,6 +19,7 @@ import {
   REVIEW_COMMENTS_ACTIVITY,
   REVIEW_COMMENTS_CONNECTION_ACTION_ID,
   REVIEW_COMMENTS_EXTENSION_ID,
+  REVIEW_COMMENTS_PROJECT_PROVIDER_ID,
   REVIEW_COMMENTS_REVIEW_DIFF_ID,
   reviewCommentsExtension,
 } from "./review-comments/review-comments-extension"
@@ -134,6 +135,13 @@ describe("TrustedExtensionRegistry", () => {
           component: () => null,
         },
       ],
+      projectProviders: [
+        {
+          id: TrustedExtensionContributionId.make("example.full.provider"),
+          order: 1,
+          component: ({ children }) => children,
+        },
+      ],
       titlebarActions: [
         {
           id: TrustedExtensionContributionId.make("example.full.titlebar"),
@@ -151,6 +159,7 @@ describe("TrustedExtensionRegistry", () => {
       projectActivities: [],
       codeSourceContributions: [],
       reviewDiffContributions: [],
+      projectProviders: [],
       titlebarActions: [],
     })
 
@@ -159,6 +168,7 @@ describe("TrustedExtensionRegistry", () => {
     expect(registry.snapshot().projectActivities).toHaveLength(1)
     expect(registry.snapshot().codeSourceContributions).toHaveLength(1)
     expect(registry.snapshot().reviewDiffContributions).toHaveLength(1)
+    expect(registry.snapshot().projectProviders).toHaveLength(1)
     expect(registry.snapshot().titlebarActions).toHaveLength(1)
   })
 
@@ -212,6 +222,12 @@ describe("TrustedExtensionRegistry", () => {
     expect(snapshot.reviewDiffContributions).toEqual([
       expect.objectContaining({
         id: REVIEW_COMMENTS_REVIEW_DIFF_ID,
+        ownerExtensionId: REVIEW_COMMENTS_EXTENSION_ID,
+      }),
+    ])
+    expect(snapshot.projectProviders).toEqual([
+      expect.objectContaining({
+        id: REVIEW_COMMENTS_PROJECT_PROVIDER_ID,
         ownerExtensionId: REVIEW_COMMENTS_EXTENSION_ID,
       }),
     ])

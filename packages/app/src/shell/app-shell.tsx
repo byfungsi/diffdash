@@ -48,7 +48,7 @@ import { HashMap, Match, Option } from "effect"
 import { AsyncResult } from "effect/unstable/reactivity"
 import { useDeferredValue, useEffect, useRef, useState } from "react"
 import { useTrustedExtensionRegistry } from "@/extensions/extension-registry-context"
-import { ReviewCommentsProvider } from "@/extensions/review-comments/review-comments-provider"
+import { TrustedProjectProviders } from "@/extensions/trusted-project-providers"
 import { TrustedTitlebarActions } from "@/extensions/trusted-titlebar-actions"
 import { HomeScreen, hostedRepositoryLabel } from "@/home/home-screen"
 import { diagnosticsAtom } from "@/onboarding/atoms"
@@ -136,8 +136,15 @@ export function AppShell() {
   const preferences = useRendererPreferences()
   const projectWorkspace = useProjectWorkspace()
   const repositories = useRepositories()
-  const { codeSourceContributions, projectActivities, reviewDiffContributions, titlebarActions } =
-    useTrustedExtensionRegistry()
+  const {
+    codeSourceContributions,
+    projectActivities,
+    projectProviders,
+    reviewDiffContributions,
+    titlebarActions,
+  } = useTrustedExtensionRegistry()
+  const projectActivitiesRef = useRef(projectActivities)
+  projectActivitiesRef.current = projectActivities
   const [screen, setScreen] = useState<Screen>("home")
   const [selectedRepo, setSelectedRepo] = useState<Repo | null>(null)
   const [selectedReview, setSelectedReview] = useState<SelectedReviewTarget | null>(null)
@@ -165,7 +172,7 @@ export function AppShell() {
   const [projectSession] = useState(
     () =>
       new ProjectSession({
-        availableActivityIds: projectActivities.map((activity) => activity.id),
+        availableActivityIds: () => projectActivitiesRef.current.map((activity) => activity.id),
         loadWorkspace: (projectId) => runRendererPromise(preferences.loadWorkspace(projectId)),
         openProject: (localPath, selectedRepository) =>
           runRendererPromise(repositories.openProject(localPath, selectedRepository)),
@@ -1066,9 +1073,10 @@ export function AppShell() {
   }
 
   return (
-    <ReviewCommentsProvider
+    <TrustedProjectProviders
       directory={selectedRepo?.localPath ?? null}
       projectId={selectedRepo?.id ?? null}
+      providers={projectProviders}
     >
       <WorkbenchContextActionsProvider host={contextActionsHost}>
         <div
@@ -1360,7 +1368,7 @@ export function AppShell() {
           )}
         </div>
       </WorkbenchContextActionsProvider>
-    </ReviewCommentsProvider>
+    </TrustedProjectProviders>
   )
 }
 

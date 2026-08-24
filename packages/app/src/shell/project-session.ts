@@ -74,7 +74,7 @@ export type ProjectSessionRestoreResult =
   | { readonly _tag: "stale" }
 
 type ProjectSessionDependencies = {
-  readonly availableActivityIds: readonly ProjectWorkspaceActivityId[]
+  readonly availableActivityIds: () => readonly ProjectWorkspaceActivityId[]
   readonly loadWorkspace: (
     projectId: ReviewProjectId,
   ) => Promise<Option.Option<ProjectWorkspaceState>>
@@ -122,7 +122,7 @@ export class ProjectSession {
       const restored = resolveProjectWorkspaceState(
         repo,
         persisted,
-        this.dependencies.availableActivityIds,
+        this.dependencies.availableActivityIds(),
       )
       const projection = projectProjection(
         repo,
