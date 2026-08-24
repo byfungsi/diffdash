@@ -3,7 +3,6 @@ import type { CodeLineChangeRange } from "@diffdash/domain/code-line-change"
 import {
   LanguagePosition,
   type LanguageRange,
-  type RepositoryLanguageLocationLink,
   type RepositoryLanguageLocationResult,
 } from "@diffdash/domain/language"
 import type { RepositoryRelativePath } from "@diffdash/domain/repository-path"
@@ -42,6 +41,7 @@ import {
 } from "@/source-surface/code-search-highlight-capability"
 import {
   isLanguageNavigationInteraction,
+  type LanguageNavigationDestination,
   useLanguageNavigationCapability,
 } from "@/source-surface/language-navigation-capability"
 import {
@@ -97,7 +97,7 @@ export const CodeFileViewer = ({
     path: RepositoryRelativePath,
     signal: AbortSignal,
   ) => Promise<Option.Option<string>>
-  readonly onNavigateToDefinition?: (location: RepositoryLanguageLocationLink) => void
+  readonly onNavigateToDefinition?: (destination: LanguageNavigationDestination) => void
   readonly onRequestDefinitions?: (
     position: LanguagePosition,
     signal: AbortSignal,
@@ -521,7 +521,7 @@ export const CodeFileViewer = ({
                 onNavigate={(location) => {
                   languageNavigation.closePeek()
                   Option.map(Option.fromNullishOr(onNavigateToDefinition), (navigate) =>
-                    navigate(location),
+                    navigate({ location, origin: peek.origin }),
                   )
                 }}
               />

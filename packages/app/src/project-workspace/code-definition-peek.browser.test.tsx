@@ -68,6 +68,13 @@ describe("CodeDefinitionPeek", () => {
                   }),
                 }),
                 id: 1,
+                origin: {
+                  surfaceId: "src/source.ts",
+                  range: new LanguageRange({
+                    start: new LanguagePosition({ line: 0, character: 0 }),
+                    end: new LanguagePosition({ line: 0, character: 6 }),
+                  }),
+                },
               }}
               onClose={() => undefined}
               onLoadSource={onLoadSource}

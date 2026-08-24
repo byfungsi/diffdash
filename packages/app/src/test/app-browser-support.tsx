@@ -6411,11 +6411,38 @@ scenario("shortcutReferenceTitlebarReview", async () => {
 
 scenario("homeToReview", async () => {
   const appPath = RepositoryRelativePath.make("src/app.tsx")
+  const definitionPath = RepositoryRelativePath.make("src/definition.ts")
+  const definitionPosition = new LanguagePosition({ line: 0, character: 13 })
+  const definitionRange = new LanguageRange({
+    start: definitionPosition,
+    end: definitionPosition,
+  })
   const calls = installDiffDashApi({
     selectLocalFolder: "/workspace/diffdash",
-    listLocalCheckoutFiles: async () => LocalCheckoutFileList.make({ paths: [appPath] }),
+    listLocalCheckoutFiles: async () =>
+      LocalCheckoutFileList.make({ paths: [appPath, definitionPath] }),
     readLocalCheckoutFile: async (_projectId, path) =>
-      LocalCheckoutFileContent.make({ path, content: 'export const app = "DiffDash"\n' }),
+      LocalCheckoutFileContent.make({
+        path,
+        content:
+          path === appPath
+            ? 'export const app = "DiffDash"\n'
+            : 'export const definition = "target"\n',
+      }),
+    codeWorkspaceDefinitions: async () =>
+      RepositoryLanguageLocationResult.make({
+        locations: [
+          new RepositoryLanguageLocationLink({
+            originSelectionRange: Option.none(),
+            target: new RepositoryLanguageLocation({
+              path: definitionPath,
+              range: definitionRange,
+            }),
+            targetSelectionRange: definitionRange,
+          }),
+        ],
+        truncated: false,
+      }),
   })
   renderApp()
 
@@ -6980,21 +7007,61 @@ scenario("homeToReview", async () => {
     )
   })
 
+  const definitionToken = await vi.waitFor(() => {
+    const tokens = document
+      .querySelector("diffs-container")
+      ?.shadowRoot?.querySelectorAll<HTMLElement>("[data-char]")
+    const token = [...(tokens ?? [])].find((candidate) => candidate.textContent === "app")
+    expect(token).toBeDefined()
+    return token
+  })
+  definitionToken?.dispatchEvent(
+    new MouseEvent("click", {
+      bubbles: true,
+      composed: true,
+      button: 0,
+      ctrlKey: true,
+      metaKey: true,
+    }),
+  )
+  await vi.waitFor(() => {
+    expect(calls.codeWorkspaceDefinitions).toHaveBeenCalled()
+    expect(calls.readLocalCheckoutFile).toHaveBeenCalledWith(repo.id, definitionPath)
+    expect(document.querySelector("diffs-container")?.shadowRoot?.textContent).toContain(
+      'export const definition = "target"',
+    )
+  })
+
   dispatchSideMouseButton(3)
 
   await vi.waitFor(() => {
-    expect(document.body.textContent).toContain("Pinned projects")
-    expect(document.body.textContent).not.toContain("Recently Reviewed")
-    expect(document.body.textContent).not.toContain("PR Preview")
-    expect(document.body.textContent).not.toContain("Opened PR #51")
+    expect(calls.readLocalCheckoutFile).toHaveBeenLastCalledWith(repo.id, appPath)
+    expect(document.querySelector("diffs-container")?.shadowRoot?.textContent).toContain(
+      'export const app = "DiffDash"',
+    )
+  })
+
+  dispatchSideMouseButton(3)
+  await vi.waitFor(() => {
+    expect(document.body.textContent).toContain("Opened PR #51")
+    expect(document.querySelector('button[aria-label="Files"][aria-pressed="true"]')).not.toBeNull()
+  })
+
+  dispatchSideMouseButton(4)
+  await vi.waitFor(() => {
+    expect(document.querySelector('button[aria-label="Code"][aria-pressed="true"]')).not.toBeNull()
+    expect(document.querySelector("diffs-container")?.shadowRoot?.textContent).toContain(
+      'export const app = "DiffDash"',
+    )
   })
 
   dispatchSideMouseButton(4)
 
   await vi.waitFor(() => {
-    expect(document.body.textContent).toContain("Pinned projects")
-    expect(document.body.textContent).not.toContain("Opened PR #51")
-    expect(document.querySelector('button[aria-label="Back"]')).toBeNull()
+    expect(document.querySelector("diffs-container")?.shadowRoot?.textContent).toContain(
+      'export const definition = "target"',
+    )
+    expect(document.querySelector('button[aria-label="Forward"]')).toBeNull()
   })
 })
 

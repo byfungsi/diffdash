@@ -1,4 +1,11 @@
-import { ArrowLeft, Keyboard, PanelLeftClose, PanelLeftOpen, Search } from "lucide-react"
+import {
+  ArrowLeft,
+  ArrowRight,
+  Keyboard,
+  PanelLeftClose,
+  PanelLeftOpen,
+  Search,
+} from "lucide-react"
 import type { ReactNode } from "react"
 import { Button } from "@/shared/ui/button"
 import { cn } from "@/shared/utils"
@@ -7,11 +14,13 @@ import { isMacPlatform, keyboardShortcutModifierLabel } from "./keyboard-shortcu
 /** Application-level window chrome shared by every renderer screen. */
 export const WorkbenchTitlebar = ({
   canNavigateBack,
+  canNavigateForward,
   commandLabel,
   commandNavigationDisabled,
   showSidebarToggle,
   sidebarExpanded,
   onNavigateBack,
+  onNavigateForward,
   onOpenKeyboardShortcuts,
   onOpenQuickNavigation,
   onContextActionsHostChange,
@@ -19,11 +28,13 @@ export const WorkbenchTitlebar = ({
   aiConnectionControl,
 }: {
   readonly canNavigateBack: boolean
+  readonly canNavigateForward: boolean
   readonly commandLabel: string
   readonly commandNavigationDisabled: boolean
   readonly showSidebarToggle: boolean
   readonly sidebarExpanded: boolean
   readonly onNavigateBack: () => void
+  readonly onNavigateForward: () => void
   readonly onOpenKeyboardShortcuts: () => void
   readonly onOpenQuickNavigation: () => void
   readonly onContextActionsHostChange: (host: HTMLDivElement | null) => void
@@ -71,19 +82,37 @@ export const WorkbenchTitlebar = ({
       </div>
 
       <div className="workbench-titlebar-interactive absolute left-1/2 -translate-x-1/2">
-        {canNavigateBack ? (
-          <Button
-            type="button"
-            size="icon-sm"
-            variant="ghost"
-            aria-label="Back"
-            title="Back"
-            data-workbench-back
-            className="workbench-titlebar-interactive text-shell-titlebar-muted hover:bg-shell-titlebar-control-hover hover:text-shell-titlebar-fg absolute top-0 right-full mr-1"
-            onClick={onNavigateBack}
-          >
-            <ArrowLeft className="size-4" />
-          </Button>
+        {canNavigateBack || canNavigateForward ? (
+          <div className="absolute top-0 right-full mr-1 flex gap-0.5">
+            {canNavigateBack ? (
+              <Button
+                type="button"
+                size="icon-sm"
+                variant="ghost"
+                aria-label="Back"
+                title="Back"
+                data-workbench-back
+                className="workbench-titlebar-interactive text-shell-titlebar-muted hover:bg-shell-titlebar-control-hover hover:text-shell-titlebar-fg"
+                onClick={onNavigateBack}
+              >
+                <ArrowLeft className="size-4" />
+              </Button>
+            ) : null}
+            {canNavigateForward ? (
+              <Button
+                type="button"
+                size="icon-sm"
+                variant="ghost"
+                aria-label="Forward"
+                title="Forward"
+                data-workbench-forward
+                className="workbench-titlebar-interactive text-shell-titlebar-muted hover:bg-shell-titlebar-control-hover hover:text-shell-titlebar-fg"
+                onClick={onNavigateForward}
+              >
+                <ArrowRight className="size-4" />
+              </Button>
+            ) : null}
+          </div>
         ) : null}
         <button
           type="button"

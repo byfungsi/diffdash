@@ -21,6 +21,7 @@ import "../styles.css"
 import { isMacPlatform } from "@/shell/keyboard-shortcut-platform"
 import { isHTMLElement } from "@/shared/dom"
 import { FloatingPaneWorkspace } from "@/shared/ui/floating-pane"
+import type { LanguageNavigationDestination } from "@/source-surface/language-navigation-capability"
 import { CodeFileViewer } from "./code-file-viewer"
 
 let root: Root | null = null
@@ -375,7 +376,7 @@ describe("CodeFileViewer", () => {
     const request = vi.fn<
       (position: LanguagePosition, signal: AbortSignal) => Promise<RepositoryLanguageLocationResult>
     >(() => pendingRequest)
-    const navigate = vi.fn<(location: RepositoryLanguageLocationLink) => void>()
+    const navigate = vi.fn<(destination: LanguageNavigationDestination) => void>()
     flushSync(() => {
       root?.render(
         <CodeFileViewer
@@ -420,7 +421,12 @@ describe("CodeFileViewer", () => {
       expect(request.mock.calls[0]?.[0]).toEqual(
         new LanguagePosition({ line: 0, character: Number(token.dataset.char) }),
       )
-      expect(navigate).toHaveBeenCalledWith(target)
+      expect(navigate).toHaveBeenCalledWith(
+        expect.objectContaining({
+          location: target,
+          origin: expect.objectContaining({ surfaceId: "src/greeting.ts" }),
+        }),
+      )
       expect(document.body.textContent).not.toContain("Code comments in DiffDash")
     })
   })
@@ -432,7 +438,7 @@ describe("CodeFileViewer", () => {
     document.body.append(container)
     root = createRoot(container)
     const target = definition("src/target.ts", 4, 7)
-    const navigate = vi.fn<(location: RepositoryLanguageLocationLink) => void>()
+    const navigate = vi.fn<(destination: LanguageNavigationDestination) => void>()
     let resolveRequest = (_result: RepositoryLanguageLocationResult): void => undefined
     const request = new Promise<RepositoryLanguageLocationResult>((resolve) => {
       resolveRequest = resolve
@@ -623,7 +629,7 @@ describe("CodeFileViewer", () => {
               }
               return Option.some("zero\none\ntwo\nexport const second = 2")
             }}
-            onNavigateToDefinition={vi.fn<(location: RepositoryLanguageLocationLink) => void>()}
+            onNavigateToDefinition={vi.fn<(destination: LanguageNavigationDestination) => void>()}
             onRequestDefinitions={async () =>
               new RepositoryLanguageLocationResult({
                 locations: [first, second],
