@@ -4,9 +4,12 @@ import type {
   ProjectWorkspaceSurface,
 } from "@diffdash/domain/project-workspace"
 import type { ReviewProjectId } from "@diffdash/domain/review-identity"
+import type { ReviewRevision } from "@diffdash/domain/review-identity"
+import type { GitCommitSha } from "@diffdash/domain/repository-comparison"
+import type { RepositoryRelativePath } from "@diffdash/domain/repository-path"
 import type { ReviewThreadTarget } from "@diffdash/domain/review-thread"
-import { Array as EffectArray, Order, Result, Schema } from "effect"
-import type { ComponentType } from "react"
+import { Array as EffectArray, Option, Order, Result, Schema } from "effect"
+import type { ComponentType, ReactNode } from "react"
 
 const trustedExtensionIdPattern = /^[a-z][a-z0-9-]*(?:\.[a-z][a-z0-9-]*){2,}$/u
 
@@ -41,6 +44,25 @@ export type TrustedExtensionContributionId = typeof TrustedExtensionContribution
 /** Closed renderer-owned icon token for project activity contributions. */
 export type ProjectActivityIcon = "reviews" | "files" | "code" | "walkthrough" | "comments"
 
+/** Code-surface context supplied to a trusted project activity pane. */
+export interface CodeProjectActivityPaneProps {
+  readonly surface: "code"
+  readonly projectId: ReviewProjectId
+  readonly workspaceRevision: ReviewRevision | null
+  readonly selectedPath: RepositoryRelativePath | null
+  readonly selectPath: (path: RepositoryRelativePath) => void
+}
+
+/** Review-surface context supplied to a trusted project activity pane. */
+export interface ReviewProjectActivityPaneProps {
+  readonly surface: "review"
+  readonly projectId: ReviewProjectId
+  readonly target: ReviewThreadTarget
+}
+
+/** Closed semantic context supplied to a trusted project activity pane. */
+export type ProjectActivityPaneProps = CodeProjectActivityPaneProps | ReviewProjectActivityPaneProps
+
 /** Trusted project activity metadata rendered by the shared workspace host. */
 export interface ProjectActivityContribution {
   readonly id: ProjectWorkspaceActivityId
@@ -49,11 +71,35 @@ export interface ProjectActivityContribution {
   readonly order: number
   readonly supportedSurfaces: readonly ProjectWorkspaceSurface[]
   readonly surfacePolicy: ProjectWorkspaceActivitySurfacePolicy
+  readonly paneComponent?: ComponentType<ProjectActivityPaneProps>
+}
+
+/** Active Code file identity supplied to trusted source contributions. */
+export interface CodeSourceContext {
+  readonly projectId: ReviewProjectId
+  readonly workspaceRevision: ReviewRevision
+  readonly gitRevision: Option.Option<GitCommitSha>
+  readonly path: RepositoryRelativePath
+}
+
+/** Exact semantic Code line supplied to an ordered source action. */
+export interface CodeSourceLineTarget extends CodeSourceContext {
+  readonly lineNumber: number
+  readonly lineContent: string
+}
+
+/** Output registered by one mounted trusted Code source contribution. */
+export interface CodeSourceContributionOutput {
+  readonly handleLineAction: (target: CodeSourceLineTarget) => boolean
+  readonly annotation: Option.Option<{
+    readonly lineNumber: number
+    readonly render: () => ReactNode
+  }>
 }
 
 /** Project context supplied to one trusted Code source contribution. */
 export interface CodeSourceContributionProps {
-  readonly projectId: ReviewProjectId
+  readonly source: CodeSourceContext
 }
 
 /** One trusted component mounted for each active Code source host. */

@@ -136,7 +136,8 @@ export function AppShell() {
   const preferences = useRendererPreferences()
   const projectWorkspace = useProjectWorkspace()
   const repositories = useRepositories()
-  const { projectActivities, titlebarActions } = useTrustedExtensionRegistry()
+  const { codeSourceContributions, projectActivities, titlebarActions } =
+    useTrustedExtensionRegistry()
   const [screen, setScreen] = useState<Screen>("home")
   const [selectedRepo, setSelectedRepo] = useState<Repo | null>(null)
   const [selectedReview, setSelectedReview] = useState<SelectedReviewTarget | null>(null)
@@ -1191,6 +1192,7 @@ export function AppShell() {
                         activeActivity={activeActivity}
                         activities={projectActivities}
                         codeThemes={aiSettings.codeThemes}
+                        codeSourceContributions={codeSourceContributions}
                         colorScheme={THEME_DEFINITIONS[resolvedTheme].colorScheme}
                         contextWidth={aiSettings.layout.review.contextWidth}
                         fileStatuses={codeFileStatuses}

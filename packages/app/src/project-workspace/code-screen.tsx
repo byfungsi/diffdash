@@ -9,7 +9,10 @@ import {
   ProjectHeadCodeWorkspaceTarget,
 } from "@diffdash/domain/code-workspace"
 import type { DiffFileStatus } from "@diffdash/domain/diff"
-import type { ProjectWorkspaceActivityId } from "@diffdash/domain/project-workspace"
+import {
+  PROJECT_WORKSPACE_CODE_ACTIVITY_ID,
+  type ProjectWorkspaceActivityId,
+} from "@diffdash/domain/project-workspace"
 import {
   LanguagePosition,
   LanguageRange,
@@ -20,7 +23,11 @@ import { RepositoryRelativePath } from "@diffdash/domain/repository-path"
 import { HashMap, Match, Option, Schema } from "effect"
 import { useEffect, useEffectEvent, useRef, useState } from "react"
 
-import type { ProjectActivityContribution } from "@/extensions/extension-registry"
+import type {
+  CodeSourceContribution,
+  OwnedExtensionContribution,
+  ProjectActivityContribution,
+} from "@/extensions/extension-registry"
 import { runRendererPromise, useCodeWorkspace } from "@/platform/renderer-runtime"
 import { formatError } from "@/shared/errors"
 import { Button } from "@/shared/ui/button"
@@ -57,6 +64,8 @@ const DIRECTORY_PAGE_SIZE = 500
 const SEARCH_LIMIT = 100
 const HEARTBEAT_INTERVAL_MS = 20 * 60 * 1_000
 const EMPTY_LINE_CHANGES = HashMap.empty<RepositoryRelativePath, readonly CodeLineChangeRange[]>()
+const EMPTY_CODE_SOURCE_CONTRIBUTIONS: readonly OwnedExtensionContribution<CodeSourceContribution>[] =
+  []
 
 /** Managed exact-revision Code browser with lazy directory and filename loading. */
 export const CodeScreen = ({
@@ -64,6 +73,7 @@ export const CodeScreen = ({
   activeActivity,
   activities,
   codeThemes,
+  codeSourceContributions = EMPTY_CODE_SOURCE_CONTRIBUTIONS,
   colorScheme,
   contextWidth,
   fileStatuses,
@@ -84,6 +94,7 @@ export const CodeScreen = ({
   readonly activeActivity: ProjectWorkspaceActivityId
   readonly activities: readonly ProjectActivityContribution[]
   readonly codeThemes: CodeThemePreferences
+  readonly codeSourceContributions?: readonly OwnedExtensionContribution<CodeSourceContribution>[]
   readonly colorScheme: ColorScheme
   readonly contextWidth: number
   readonly fileStatuses: Iterable<readonly [RepositoryRelativePath, DiffFileStatus]>
@@ -446,7 +457,7 @@ export const CodeScreen = ({
     if (!isExpanded && !directories.has(path)) void loadDirectory(readyWorkspace.lease, path)
   }
 
-  const context =
+  const codeTreeContext =
     readyWorkspace !== null ? (
       <div className="flex h-full min-h-0 flex-col">
         <div className="flex h-9 shrink-0 items-center justify-end border-b px-2">
@@ -484,6 +495,26 @@ export const CodeScreen = ({
     ) : (
       <div className="p-3 text-xs text-muted-foreground">Preparing repository files...</div>
     )
+  const activeActivityContribution = activities.find((activity) => activity.id === activeActivity)
+  const ActivityPane = activeActivityContribution?.paneComponent
+  const context =
+    activeActivity === PROJECT_WORKSPACE_CODE_ACTIVITY_ID ? (
+      codeTreeContext
+    ) : ActivityPane === undefined ? (
+      <ProjectWorkspaceStatePanel
+        title="Activity unavailable"
+        description="This activity does not provide a pane for Code."
+        tone="warning"
+      />
+    ) : (
+      <ActivityPane
+        surface="code"
+        projectId={repo.id}
+        workspaceRevision={readyWorkspace?.lease.revision ?? null}
+        selectedPath={selectedPath}
+        selectPath={onSelectedPathChange}
+      />
+    )
 
   const main = Match.valueTags(workspace, {
     loading: () => (
@@ -520,6 +551,7 @@ export const CodeScreen = ({
             key={`${ready.path}:${workspaceState.lease.revision}`}
             codeThemes={codeThemes}
             colorScheme={colorScheme}
+            contributions={codeSourceContributions}
             contents={ready.content}
             lineChanges={Option.getOrElse(
               Option.orElse(HashMap.get(lineChanges, ready.path), () =>
