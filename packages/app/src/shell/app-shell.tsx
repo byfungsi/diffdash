@@ -8,6 +8,7 @@ import {
   ProjectHeadCodeWorkspaceTarget,
 } from "@diffdash/domain/code-workspace"
 import type { DiffFileStatus } from "@diffdash/domain/diff"
+import type { LanguageRange } from "@diffdash/domain/language"
 import {
   type GitProviderDescriptor,
   GitProviderId,
@@ -38,9 +39,9 @@ import type { AppUpdateState } from "@diffdash/protocol/app-update"
 import type { CliNavigationCommand } from "@diffdash/protocol/cli-navigation"
 import { EMPTY_APP_PREREQUISITES } from "@diffdash/protocol/prerequisites"
 import { useAtomRefresh, useAtomSet, useAtomValue } from "@effect/atom-react"
-import { HashMap, Match, Option } from "effect"
+import { Equal, HashMap, Match, Option } from "effect"
 import { AsyncResult } from "effect/unstable/reactivity"
-import { useDeferredValue, useEffect, useRef, useState } from "react"
+import { useDeferredValue, useEffect, useEffectEvent, useRef, useState } from "react"
 import { HomeScreen, hostedRepositoryLabel } from "@/home/home-screen"
 import { diagnosticsAtom } from "@/onboarding/atoms"
 import { OnboardingScreen } from "@/onboarding/onboarding-screen"
@@ -106,6 +107,19 @@ import { KeyboardShortcutReference } from "./keyboard-shortcut-reference"
 import { useKeyboardShortcut } from "./keyboard-shortcuts"
 import { WorkbenchContextActionsProvider } from "./workbench-context-actions"
 import { WorkbenchTitlebar } from "./workbench-titlebar"
+import type { LanguageNavigationDestination } from "@/source-surface/language-navigation-capability"
+import {
+  canNavigateHistoryBack,
+  canNavigateHistoryForward,
+  currentNavigationLocation,
+  makeNavigationHistory,
+  navigateHistoryBack,
+  navigateHistoryForward,
+  pushNavigationLocation,
+  removeNavigationLocations,
+  replaceNavigationLocation,
+  type NavigationHistory,
+} from "./app-navigation-history"
 
 import {
   type PendingProjectRemoteSelection,
@@ -117,12 +131,54 @@ import {
 type Screen = "home" | "project"
 type ReviewWorkspaceRibbon = Exclude<ProjectWorkspaceRibbon, "code">
 
+type AppNavigationLocation =
+  | { readonly kind: "home" }
+  | {
+      readonly kind: "projectReview"
+      readonly activeRibbon: ReviewWorkspaceRibbon
+      readonly repo: Repo
+      readonly selectedReview: SelectedReviewTarget | null
+    }
+  | {
+      readonly kind: "projectCode"
+      readonly fileStatuses: ReadonlyMap<RepositoryRelativePath, DiffFileStatus>
+      readonly lineChanges: HashMap.HashMap<RepositoryRelativePath, readonly CodeLineChangeRange[]>
+      readonly path: Option.Option<RepositoryRelativePath>
+      readonly repo: Repo
+      readonly revealRange: Option.Option<LanguageRange>
+      readonly selectedReview: SelectedReviewTarget | null
+      readonly target: CodeWorkspaceTarget
+    }
+
 const MOUSE_BUTTON_BACK = 3
+const MOUSE_BUTTON_FORWARD = 4
 const EMPTY_PROVIDER_DESCRIPTORS: readonly GitProviderDescriptor[] = []
 const EMPTY_REPOSITORY_SEARCH_SCOPES: readonly RepositorySearchScope[] = []
 const EMPTY_REPOS: readonly Repo[] = []
 const EMPTY_HOSTED_REPOSITORIES: readonly HostedRepository[] = []
 const EMPTY_HOSTED_REVIEWS: readonly HostedReviewSummary[] = []
+
+const sameAppNavigationLocation = (
+  left: AppNavigationLocation,
+  right: AppNavigationLocation,
+): boolean => {
+  if (left.kind !== right.kind) return false
+  if (left.kind === "home" || right.kind === "home") return true
+  if (left.repo.id !== right.repo.id || !Equal.equals(left.selectedReview, right.selectedReview)) {
+    return false
+  }
+  if (left.kind === "projectReview" && right.kind === "projectReview") {
+    return left.activeRibbon === right.activeRibbon
+  }
+  if (left.kind === "projectCode" && right.kind === "projectCode") {
+    return (
+      Equal.equals(left.path, right.path) &&
+      Equal.equals(left.target, right.target) &&
+      Equal.equals(left.revealRange, right.revealRange)
+    )
+  }
+  return false
+}
 
 /** Application shell coordinating navigation and feature composition. */
 export function AppShell() {
@@ -146,6 +202,18 @@ export function AppShell() {
   const [codeLineChanges, setCodeLineChanges] = useState<
     HashMap.HashMap<RepositoryRelativePath, readonly CodeLineChangeRange[]>
   >(HashMap.empty())
+  const [codeDefinitionNavigation, setCodeDefinitionNavigation] = useState<
+    Option.Option<{
+      readonly id: number
+      readonly path: RepositoryRelativePath
+      readonly range: LanguageRange
+    }>
+  >(Option.none())
+  const codeDefinitionNavigationSequence = useRef(0)
+  const initialNavigationHistory = makeNavigationHistory<AppNavigationLocation>({ kind: "home" })
+  const navigationHistoryRef =
+    useRef<NavigationHistory<AppNavigationLocation>>(initialNavigationHistory)
+  const [navigationHistory, setNavigationHistory] = useState(initialNavigationHistory)
   const [workspaceNotice, setWorkspaceNotice] = useState<string | null>(null)
   const [pendingRemoteSelection, setPendingRemoteSelection] =
     useState<PendingProjectRemoteSelection | null>(null)
@@ -389,21 +457,97 @@ export function AppShell() {
           `Could not search ${selectedProvider?.displayName ?? "hosted"} repositories`,
         )
       : null
-  const navigateBack = () => {
-    if (screen === "home") return
-    projectSession.cancelRestore()
-    setScreen("home")
-    setSelectedRepo(null)
-    setSelectedCodeTarget(null)
-    setCodeWorkspaceMounted(false)
-    setCodeFileStatuses(new Map())
-    setCodeLineChanges(HashMap.empty())
-    setSelectedReview(null)
-    setSelectedCodePath(Option.none())
-    setActiveRibbon("reviews")
-    setWorkspaceNotice(null)
-    setAIConnection(Option.none())
+  const applyNavigationLocation = (location: AppNavigationLocation) => {
+    if (location.kind === "home") {
+      setScreen("home")
+      setSelectedRepo(null)
+      setSelectedCodeTarget(null)
+      setCodeWorkspaceMounted(false)
+      setCodeFileStatuses(new Map())
+      setCodeLineChanges(HashMap.empty())
+      setSelectedReview(null)
+      setSelectedCodePath(Option.none())
+      setCodeDefinitionNavigation(Option.none())
+      setActiveRibbon("reviews")
+      setWorkspaceNotice(null)
+      setAIConnection(Option.none())
+      return
+    }
+
+    setAIConnection((current) =>
+      Option.filter(current, (connection) => connection.projectId === location.repo.id),
+    )
+    setScreen("project")
+    setSelectedRepo(location.repo)
+    setSelectedReview(location.selectedReview)
+    if (location.kind === "projectReview") {
+      setActiveRibbon(location.activeRibbon)
+      setCodeDefinitionNavigation(Option.none())
+      if (selectedRepo?.id !== location.repo.id) {
+        setSelectedCodeTarget(ProjectHeadCodeWorkspaceTarget.make({ projectId: location.repo.id }))
+        setSelectedCodePath(Option.none())
+        setCodeFileStatuses(new Map())
+        setCodeLineChanges(HashMap.empty())
+        setCodeWorkspaceMounted(false)
+      }
+      return
+    }
+
+    setActiveRibbon("code")
+    setSelectedCodeTarget(location.target)
+    setSelectedCodePath(location.path)
+    setCodeFileStatuses(location.fileStatuses)
+    setCodeLineChanges(location.lineChanges)
+    setCodeWorkspaceMounted(true)
+    setCodeDefinitionNavigation(
+      Option.flatMap(location.path, (path) =>
+        Option.map(location.revealRange, (range) => {
+          const id = codeDefinitionNavigationSequence.current + 1
+          codeDefinitionNavigationSequence.current = id
+          return { id, path, range }
+        }),
+      ),
+    )
   }
+
+  const setHistory = (history: NavigationHistory<AppNavigationLocation>) => {
+    navigationHistoryRef.current = history
+    setNavigationHistory(history)
+  }
+  const pushAppNavigationLocation = (location: AppNavigationLocation) => {
+    const next = pushNavigationLocation(
+      navigationHistoryRef.current,
+      location,
+      sameAppNavigationLocation,
+    )
+    setHistory(next)
+    applyNavigationLocation(currentNavigationLocation(next))
+  }
+  const replaceAppNavigationLocation = (location: AppNavigationLocation, apply = true) => {
+    const next = replaceNavigationLocation(navigationHistoryRef.current, location)
+    setHistory(next)
+    if (apply) applyNavigationLocation(location)
+  }
+  const navigateBack = () => {
+    projectSession.cancelRestore()
+    const current = navigationHistoryRef.current
+    const next = navigateHistoryBack(current)
+    if (next === current) return
+    setHistory(next)
+    const location = currentNavigationLocation(next)
+    applyNavigationLocation(location)
+  }
+  const navigateForward = () => {
+    projectSession.cancelRestore()
+    const current = navigationHistoryRef.current
+    const next = navigateHistoryForward(current)
+    if (next === current) return
+    setHistory(next)
+    const location = currentNavigationLocation(next)
+    applyNavigationLocation(location)
+  }
+  const navigateBackFromEffect = useEffectEvent(navigateBack)
+  const navigateForwardFromEffect = useEffectEvent(navigateForward)
 
   useEffect(() => {
     refreshRepositories()
@@ -494,15 +638,16 @@ export function AppShell() {
 
   useEffect(() => {
     const navigateFromMouseButton = (event: MouseEvent) => {
-      if (event.button !== MOUSE_BUTTON_BACK) return
+      if (event.button !== MOUSE_BUTTON_BACK && event.button !== MOUSE_BUTTON_FORWARD) return
 
       event.preventDefault()
       event.stopPropagation()
       handledMouseNavigationButtonRef.current = event.button
-      navigateBack()
+      if (event.button === MOUSE_BUTTON_BACK) navigateBackFromEffect()
+      else navigateForwardFromEffect()
     }
     const suppressHandledAuxClick = (event: MouseEvent) => {
-      if (event.button !== MOUSE_BUTTON_BACK) return
+      if (event.button !== MOUSE_BUTTON_BACK && event.button !== MOUSE_BUTTON_FORWARD) return
 
       event.preventDefault()
       event.stopPropagation()
@@ -517,7 +662,7 @@ export function AppShell() {
       window.removeEventListener("mousedown", navigateFromMouseButton, true)
       window.removeEventListener("auxclick", suppressHandledAuxClick, true)
     }
-  })
+  }, [])
 
   useKeyboardShortcut("shortcuts.open", () => setShortcutReferenceOpen(true))
   useKeyboardShortcut(
@@ -541,21 +686,32 @@ export function AppShell() {
     enabled: screen !== "project",
   })
 
-  const applyProjectProjection = (projection: ProjectSessionProjection) => {
-    setAIConnection((current) =>
-      Option.filter(current, (connection) => connection.projectId === projection.repo.id),
-    )
-    setSelectedRepo(projection.repo)
-    setSelectedCodeTarget(ProjectHeadCodeWorkspaceTarget.make({ projectId: projection.repo.id }))
-    setCodeWorkspaceMounted(projection.activeRibbon === "code")
-    setCodeFileStatuses(new Map())
-    setCodeLineChanges(HashMap.empty())
-    setSelectedReview(projection.selectedReview)
-    setSelectedCodePath(Option.none())
-    setActiveRibbon(projection.activeRibbon)
+  const applyProjectProjection = (
+    projection: ProjectSessionProjection,
+    mode: "push" | "replace" = "push",
+  ) => {
+    const location: AppNavigationLocation =
+      projection.activeRibbon === "code"
+        ? {
+            kind: "projectCode",
+            repo: projection.repo,
+            selectedReview: projection.selectedReview,
+            target: ProjectHeadCodeWorkspaceTarget.make({ projectId: projection.repo.id }),
+            path: Option.none(),
+            revealRange: Option.none(),
+            fileStatuses: new Map(),
+            lineChanges: HashMap.empty(),
+          }
+        : {
+            kind: "projectReview",
+            repo: projection.repo,
+            selectedReview: projection.selectedReview,
+            activeRibbon: projection.activeRibbon,
+          }
+    if (mode === "replace") replaceAppNavigationLocation(location)
+    else pushAppNavigationLocation(location)
     setWorkspaceNotice(projection.notice)
     setReviewSidebarExpanded(true)
-    setScreen("project")
     setActionStatus(`Opened project ${projection.repo.displayIdentity}.`)
     if (projection.repo.hostedLocator !== null) {
       refreshPullRequestsForRepo(
@@ -584,7 +740,7 @@ export function AppShell() {
         restored: (value) => value,
       })
       if (restoredProjection === null) return
-      applyProjectProjection(restoredProjection.projection)
+      applyProjectProjection(restoredProjection.projection, "replace")
       if (restoredProjection.persistence !== null)
         observeWorkspacePersistence(restoredProjection.persistence)
     } catch (error) {
@@ -595,19 +751,33 @@ export function AppShell() {
           null,
           formatError(error, "Saved workspace state could not be restored"),
         ),
+        "replace",
       )
     }
   }
 
   const updateProjectRibbon = (ribbon: ProjectWorkspaceRibbon) => {
     projectSession.cancelRestore()
-    setActiveRibbon(ribbon)
-    if (ribbon === "code" && selectedRepo !== null) {
-      setCodeWorkspaceMounted(true)
-      setSelectedCodeTarget(ProjectHeadCodeWorkspaceTarget.make({ projectId: selectedRepo.id }))
-      setCodeFileStatuses(new Map())
-      setCodeLineChanges(HashMap.empty())
-    }
+    if (selectedRepo === null) return
+    const location: AppNavigationLocation =
+      ribbon === "code"
+        ? {
+            kind: "projectCode",
+            repo: selectedRepo,
+            selectedReview,
+            target: ProjectHeadCodeWorkspaceTarget.make({ projectId: selectedRepo.id }),
+            path: Option.none(),
+            revealRange: Option.none(),
+            fileStatuses: new Map(),
+            lineChanges: HashMap.empty(),
+          }
+        : {
+            kind: "projectReview",
+            repo: selectedRepo,
+            selectedReview,
+            activeRibbon: ribbon,
+          }
+    pushAppNavigationLocation(location)
     if (selectedRepo !== null) {
       observeWorkspacePersistence(
         projectSession.persist(projectSession.project(selectedRepo, ribbon, selectedReview)),
@@ -625,20 +795,52 @@ export function AppShell() {
     > = HashMap.empty(),
   ) => {
     if (selectedRepo === null) return
-    updateProjectRibbon("code")
-    setSelectedCodePath(Option.some(path))
-    setSelectedCodeTarget(
-      target ?? ProjectHeadCodeWorkspaceTarget.make({ projectId: selectedRepo.id }),
-    )
-    setCodeFileStatuses(
-      new Map(
+    const location: AppNavigationLocation = {
+      kind: "projectCode",
+      repo: selectedRepo,
+      selectedReview,
+      target: target ?? ProjectHeadCodeWorkspaceTarget.make({ projectId: selectedRepo.id }),
+      path: Option.some(path),
+      revealRange: Option.none(),
+      fileStatuses: new Map(
         files
           .filter((file) => file.status !== "deleted")
           .map((file) => [file.path, file.status] as const),
       ),
-    )
-    setCodeLineChanges(lineChanges)
+      lineChanges,
+    }
+    pushAppNavigationLocation(location)
     setReviewSidebarExpanded(true)
+    observeWorkspacePersistence(
+      projectSession.persist(projectSession.project(selectedRepo, "code", selectedReview)),
+    )
+  }
+
+  const navigateToCodePath = (path: RepositoryRelativePath | null) => {
+    const current = currentNavigationLocation(navigationHistoryRef.current)
+    if (current.kind !== "projectCode") return
+    pushAppNavigationLocation({
+      ...current,
+      path: Option.fromNullishOr(path),
+      revealRange: Option.none(),
+    })
+  }
+
+  const navigateToDefinition = (destination: LanguageNavigationDestination) => {
+    const current = currentNavigationLocation(navigationHistoryRef.current)
+    if (current.kind !== "projectCode" || Option.isNone(current.path)) return
+    replaceAppNavigationLocation(
+      {
+        ...current,
+        revealRange: Option.some(destination.origin.range),
+      },
+      false,
+    )
+    pushAppNavigationLocation({
+      ...current,
+      path: Option.some(destination.location.target.path),
+      revealRange: Option.some(destination.location.targetSelectionRange),
+    })
   }
 
   const selectProjectReview = (selection: SelectedReviewTarget) => {
@@ -666,8 +868,14 @@ export function AppShell() {
         )
       },
     })
-    setSelectedReview(selection)
-    setActiveRibbon("files")
+    if (selectedRepo !== null) {
+      pushAppNavigationLocation({
+        kind: "projectReview",
+        repo: selectedRepo,
+        selectedReview: selection,
+        activeRibbon: "files",
+      })
+    }
     setReviewSidebarExpanded(true)
     setWorkspaceNotice(null)
     if (selectedRepo !== null) {
@@ -765,6 +973,13 @@ export function AppShell() {
   const forgetRepository = async (repo: Repo) => {
     try {
       await repositoryMutations.forget(repo.id)
+      const shouldRemove = (location: AppNavigationLocation) =>
+        location.kind !== "home" && location.repo.id === repo.id
+      const nextHistory = navigationHistoryRef.current.entries.every(shouldRemove)
+        ? makeNavigationHistory<AppNavigationLocation>({ kind: "home" })
+        : removeNavigationLocations(navigationHistoryRef.current, shouldRemove)
+      setHistory(nextHistory)
+      applyNavigationLocation(currentNavigationLocation(nextHistory))
       setActionStatus(`Forgot ${repo.displayIdentity} from Home. Review artifacts were kept.`)
     } catch (error) {
       setActionStatus(formatError(error, "Could not forget project"))
@@ -893,6 +1108,17 @@ export function AppShell() {
           }),
       }),
     )
+    Option.map(linkingProjectId, (projectId) => {
+      const entries = navigationHistoryRef.current.entries.map((location) => {
+        if (location.kind === "home" || location.repo.id !== projectId) return location
+        return RepositorySource.match(linked.source, {
+          local: () => location,
+          hosted: ({ locator }) =>
+            location.repo.matchesHosted(locator) ? { ...location, repo: linked } : location,
+        })
+      })
+      setHistory({ ...navigationHistoryRef.current, entries })
+    })
     setActionStatus(`Linked ${linked.displayIdentity} to ${linked.localPath ?? localPath}.`)
     captureAnalytics({ event: "repository_linked" })
     return true
@@ -1015,7 +1241,10 @@ export function AppShell() {
       none: () => false,
     })
   const commandLabel = workbenchCommandLabel(selectedRepo, selectedReview, reviewSelection)
-  const canNavigateBack = appState?.onboardingCompleted === true && screen !== "home"
+  const canNavigateBack =
+    appState?.onboardingCompleted === true && canNavigateHistoryBack(navigationHistory)
+  const canNavigateForward =
+    appState?.onboardingCompleted === true && canNavigateHistoryForward(navigationHistory)
   const reviewRibbon = Option.liftPredicate(
     activeRibbon,
     (ribbon): ribbon is ReviewWorkspaceRibbon => ribbon !== "code",
@@ -1045,12 +1274,14 @@ export function AppShell() {
               />
             }
             canNavigateBack={canNavigateBack}
+            canNavigateForward={canNavigateForward}
             commandLabel={commandLabel}
             commandNavigationDisabled={appState?.onboardingCompleted !== true}
             showSidebarToggle={showProjectShell}
             sidebarExpanded={reviewSidebarExpanded}
             onContextActionsHostChange={setContextActionsHost}
             onNavigateBack={navigateBack}
+            onNavigateForward={navigateForward}
             onOpenKeyboardShortcuts={() => setShortcutReferenceOpen(true)}
             onOpenQuickNavigation={openQuickNavigation}
             onToggleSidebar={() => setReviewSidebarExpanded((expanded) => !expanded)}
@@ -1155,6 +1386,7 @@ export function AppShell() {
                         colorScheme={THEME_DEFINITIONS[resolvedTheme].colorScheme}
                         contextWidth={aiSettings.layout.review.contextWidth}
                         fileStatuses={codeFileStatuses}
+                        historyDefinitionNavigation={codeDefinitionNavigation}
                         lineChanges={codeLineChanges}
                         repo={selectedRepo}
                         selectedPath={Option.getOrNull(selectedCodePath)}
@@ -1165,10 +1397,14 @@ export function AppShell() {
                         }
                         threadDetailWidth={aiSettings.layout.review.threadDetailWidth}
                         onActiveRibbonChange={updateProjectRibbon}
-                        onLinkRepository={linkSelectedProjectRepository}
-                        onSelectedPathChange={(path) =>
-                          setSelectedCodePath(path === null ? Option.none : Option.some(path))
+                        onHistoryDefinitionNavigationHandled={(id) =>
+                          setCodeDefinitionNavigation((current) =>
+                            Option.filter(current, (navigation) => navigation.id !== id),
+                          )
                         }
+                        onLinkRepository={linkSelectedProjectRepository}
+                        onNavigateToDefinition={navigateToDefinition}
+                        onSelectedPathChange={navigateToCodePath}
                         onSidebarExpandedChange={setReviewSidebarExpanded}
                         onSidebarWidthChange={updateReviewContextWidth}
                         onThreadDetailWidthChange={updateReviewThreadDetailWidth}

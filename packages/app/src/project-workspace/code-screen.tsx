@@ -10,11 +10,7 @@ import {
 } from "@diffdash/domain/code-workspace"
 import type { DiffFileStatus } from "@diffdash/domain/diff"
 import type { ProjectWorkspaceRibbon } from "@diffdash/domain/project-workspace"
-import {
-  LanguagePosition,
-  LanguageRange,
-  type RepositoryLanguageLocationLink,
-} from "@diffdash/domain/language"
+import { LanguagePosition, LanguageRange } from "@diffdash/domain/language"
 import type { Repo } from "@diffdash/domain/repository"
 import { RepositoryRelativePath } from "@diffdash/domain/repository-path"
 import { HashMap, Match, Option, Schema } from "effect"
@@ -28,6 +24,7 @@ import { ProjectWorkspaceStatePanel } from "@/shared/ui/project-workspace-state-
 import type { ColorScheme } from "@/settings/theme"
 import { CommandPaletteDialog, type CommandPaletteItem } from "@/shell/command-palette"
 import { useKeyboardShortcut } from "@/shell/keyboard-shortcuts"
+import type { LanguageNavigationDestination } from "@/source-surface/language-navigation-capability"
 
 import { CodeFileViewer } from "./code-file-viewer"
 import { CodeWorkspaceTree } from "./code-workspace-tree"
@@ -64,6 +61,7 @@ export const CodeScreen = ({
   colorScheme,
   contextWidth,
   fileStatuses,
+  historyDefinitionNavigation = Option.none(),
   lineChanges = EMPTY_LINE_CHANGES,
   repo,
   selectedPath,
@@ -71,7 +69,9 @@ export const CodeScreen = ({
   target,
   threadDetailWidth,
   onActiveRibbonChange,
+  onHistoryDefinitionNavigationHandled,
   onLinkRepository,
+  onNavigateToDefinition,
   onSelectedPathChange,
   onSidebarExpandedChange,
   onSidebarWidthChange,
@@ -82,6 +82,7 @@ export const CodeScreen = ({
   readonly colorScheme: ColorScheme
   readonly contextWidth: number
   readonly fileStatuses: Iterable<readonly [RepositoryRelativePath, DiffFileStatus]>
+  readonly historyDefinitionNavigation?: Option.Option<DefinitionNavigation>
   readonly lineChanges?: HashMap.HashMap<RepositoryRelativePath, readonly CodeLineChangeRange[]>
   readonly repo: Repo
   readonly selectedPath: RepositoryRelativePath | null
@@ -89,7 +90,9 @@ export const CodeScreen = ({
   readonly target: CodeWorkspaceTarget
   readonly threadDetailWidth: number
   readonly onActiveRibbonChange: (ribbon: ProjectWorkspaceRibbon) => void
+  readonly onHistoryDefinitionNavigationHandled?: (id: number) => void
   readonly onLinkRepository: () => void
+  readonly onNavigateToDefinition?: (destination: LanguageNavigationDestination) => void
   readonly onSelectedPathChange: (path: RepositoryRelativePath | null) => void
   readonly onSidebarExpandedChange: (expanded: boolean) => void
   readonly onSidebarWidthChange: (width: number) => void
@@ -416,7 +419,12 @@ export const CodeScreen = ({
     })
   }
 
-  const navigateToDefinition = (location: RepositoryLanguageLocationLink) => {
+  const navigateToDefinition = (destination: LanguageNavigationDestination) => {
+    if (onNavigateToDefinition !== undefined) {
+      onNavigateToDefinition(destination)
+      return
+    }
+    const location = destination.location
     const id = definitionNavigationSequence.current + 1
     definitionNavigationSequence.current = id
     setDefinitionNavigation(
@@ -527,10 +535,11 @@ export const CodeScreen = ({
             revision={workspaceState.lease.revision}
             gitRevision={workspaceState.lease.gitRevision}
             definitionNavigation={Option.filter(
-              definitionNavigation,
+              Option.orElse(historyDefinitionNavigation, () => definitionNavigation),
               (navigation) => navigation.path === ready.path,
             ).pipe(Option.map(({ id, range }) => ({ id, range })))}
             onDefinitionNavigationHandled={(id) => {
+              onHistoryDefinitionNavigationHandled?.(id)
               setDefinitionNavigation((current) =>
                 Option.filter(current, (navigation) => navigation.id !== id),
               )

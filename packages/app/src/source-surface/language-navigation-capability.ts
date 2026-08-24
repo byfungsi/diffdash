@@ -1,5 +1,6 @@
 import {
   LanguagePosition,
+  LanguageRange,
   type RepositoryLanguageLocationLink,
   RepositoryLanguageLocationResult,
 } from "@diffdash/domain/language"
@@ -61,6 +62,19 @@ export interface LanguageNavigationPeekState {
   readonly anchor: FloatingPaneAnchor
   readonly content: LanguageNavigationPeekContent
   readonly id: number
+  readonly origin: LanguageNavigationOrigin
+}
+
+/** Semantic source location retained while resolving or selecting a language destination. */
+export interface LanguageNavigationOrigin {
+  readonly range: LanguageRange
+  readonly surfaceId: string
+}
+
+/** Reversible source and target pair produced by language navigation. */
+export interface LanguageNavigationDestination {
+  readonly location: RepositoryLanguageLocationLink
+  readonly origin: LanguageNavigationOrigin
 }
 
 /** Definition and reference providers consumed by generic source-surface navigation. */
@@ -89,7 +103,7 @@ export const useLanguageNavigationCapability = <Instance>({
   runtime,
   surfaceId,
 }: {
-  readonly navigate: Option.Option<(location: RepositoryLanguageLocationLink) => void>
+  readonly navigate: Option.Option<(destination: LanguageNavigationDestination) => void>
   readonly providers: LanguageNavigationProviders
   readonly rootRef: RefObject<HTMLElement | null>
   readonly runtime: SourceSurfaceRuntime<Instance>
@@ -164,6 +178,7 @@ export const useLanguageNavigationCapability = <Instance>({
           tokenElement: token.tokenElement,
         })
       }
+      const origin = languageNavigationOrigin(token)
       try {
         const result = await providerRequest.value(
           new LanguagePosition({ line: token.lineNumber - 1, character: token.lineCharStart }),
@@ -193,7 +208,7 @@ export const useLanguageNavigationCapability = <Instance>({
         if (intent === "goToDefinition" && result.locations.length === 1) {
           const target = Option.fromNullishOr(result.locations[0])
           if (Option.isSome(target) && Option.isSome(navigate)) {
-            navigate.value(target.value)
+            navigate.value({ location: target.value, origin })
           }
           return
         }
@@ -205,6 +220,7 @@ export const useLanguageNavigationCapability = <Instance>({
               result,
             }),
             id: sequence,
+            origin,
           }),
         )
       } catch (error) {
@@ -227,6 +243,7 @@ export const useLanguageNavigationCapability = <Instance>({
                 message: formatError(error, "Language locations could not be loaded."),
               }),
               id: sequence,
+              origin,
             }),
           )
         }
@@ -328,6 +345,17 @@ export const useLanguageNavigationCapability = <Instance>({
     onTokenEnter,
     onTokenLeave,
     peek,
+  }
+}
+
+const languageNavigationOrigin = (token: SourceSurfaceTokenTarget): LanguageNavigationOrigin => {
+  const line = token.lineNumber - 1
+  return {
+    surfaceId: token.surfaceId,
+    range: new LanguageRange({
+      start: new LanguagePosition({ line, character: token.lineCharStart }),
+      end: new LanguagePosition({ line, character: token.lineCharEnd }),
+    }),
   }
 }
 

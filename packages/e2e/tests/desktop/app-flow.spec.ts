@@ -473,8 +473,36 @@ test("covers finished Home to Review flow with fake CLI fixtures", async ({
     await expect(window.getByText("CRITICAL")).toBeVisible()
 
     await window.getByRole("button", { name: "Back" }).click()
+    await expect(window.getByRole("button", { name: "Files" })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    )
+    await expect(window.locator("[data-review-editor-header]")).toContainText("Request review flow")
+
+    await window.getByRole("button", { name: "Back" }).click()
+    await expect(window.getByRole("button", { name: "Threads" })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    )
+
+    await window.getByRole("button", { name: "Back" }).click()
+    await expect(window.getByRole("button", { name: "Files" })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    )
+    await expect(window.locator("[data-review-editor-header]")).toContainText("Request review flow")
+
+    await window.getByRole("button", { name: "Back" }).click()
+    await expect(window.getByRole("button", { name: "Reviews" })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    )
+    await expect(window.getByRole("button", { name: /Open review #51/ })).toBeVisible()
+
+    await window.getByRole("button", { name: "Back" }).click()
     await expect(window.getByText("Pinned projects").first()).toBeVisible()
     await expect(window.getByRole("button", { name: "Back" })).toHaveCount(0)
+    await expect(window.getByRole("button", { name: "Forward" })).toBeVisible()
 
     await app.close()
     const beforeRestart = readReviewPersistenceSnapshot(join(userData, "diffdash.sqlite"))
