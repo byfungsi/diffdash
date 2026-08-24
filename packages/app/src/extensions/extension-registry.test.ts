@@ -19,6 +19,7 @@ import {
   REVIEW_COMMENTS_ACTIVITY,
   REVIEW_COMMENTS_CONNECTION_ACTION_ID,
   REVIEW_COMMENTS_EXTENSION_ID,
+  REVIEW_COMMENTS_REVIEW_DIFF_ID,
   reviewCommentsExtension,
 } from "./review-comments/review-comments-extension"
 
@@ -205,6 +206,12 @@ describe("TrustedExtensionRegistry", () => {
     expect(snapshot.titlebarActions).toEqual([
       expect.objectContaining({
         id: REVIEW_COMMENTS_CONNECTION_ACTION_ID,
+        ownerExtensionId: REVIEW_COMMENTS_EXTENSION_ID,
+      }),
+    ])
+    expect(snapshot.reviewDiffContributions).toEqual([
+      expect.objectContaining({
+        id: REVIEW_COMMENTS_REVIEW_DIFF_ID,
         ownerExtensionId: REVIEW_COMMENTS_EXTENSION_ID,
       }),
     ])

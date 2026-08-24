@@ -3,11 +3,17 @@ import type {
   ProjectWorkspaceActivitySurfacePolicy,
   ProjectWorkspaceSurface,
 } from "@diffdash/domain/project-workspace"
+import type { ParsedDiffFile } from "@diffdash/domain/diff"
 import type { ReviewProjectId } from "@diffdash/domain/review-identity"
 import type { ReviewRevision } from "@diffdash/domain/review-identity"
 import type { GitCommitSha } from "@diffdash/domain/repository-comparison"
 import type { RepositoryRelativePath } from "@diffdash/domain/repository-path"
-import type { ReviewThreadTarget } from "@diffdash/domain/review-thread"
+import type {
+  ReviewThreadAnchor,
+  ReviewThreadDetails,
+  ReviewThreadId,
+  ReviewThreadTarget,
+} from "@diffdash/domain/review-thread"
 import { Array as EffectArray, Option, Order, Result, Schema } from "effect"
 import type { ComponentType, ReactNode } from "react"
 
@@ -72,6 +78,7 @@ export interface ProjectActivityContribution {
   readonly supportedSurfaces: readonly ProjectWorkspaceSurface[]
   readonly surfacePolicy: ProjectWorkspaceActivitySurfacePolicy
   readonly paneComponent?: ComponentType<ProjectActivityPaneProps>
+  readonly reviewDiffContributionId?: TrustedExtensionContributionId
 }
 
 /** Active Code file identity supplied to trusted source contributions. */
@@ -113,6 +120,54 @@ export interface CodeSourceContribution {
 export interface ReviewDiffContributionProps {
   readonly projectId: ReviewProjectId
   readonly target: ReviewThreadTarget
+  readonly baseRevision: ReviewRevision
+  readonly headRevision: ReviewRevision
+}
+
+/** Generic annotation projected by a review contribution into the host-owned diff renderer. */
+export interface ReviewDiffContributionAnnotation {
+  readonly lineNumber: number
+  readonly side: "additions" | "deletions"
+  readonly render: () => ReactNode
+}
+
+/** Host callbacks supplied while a contribution renders its context pane. */
+export interface ReviewDiffContributionContextPaneProps {
+  readonly navigableThreadIds: ReadonlySet<ReviewThreadId>
+  readonly settings: ReactNode
+  readonly onCollapse: () => void
+}
+
+/** Host callbacks supplied while a contribution renders its detail pane. */
+export interface ReviewDiffContributionDetailPaneProps {
+  readonly navigableThreadIds: ReadonlySet<ReviewThreadId>
+  readonly onClose: () => void
+  readonly onGoToDiff: (details: ReviewThreadDetails) => void
+}
+
+/** Live semantic output registered by one mounted review diff contribution. */
+export interface ReviewDiffContributionOutput {
+  readonly activeLineAnchor: ReviewThreadAnchor | null
+  readonly details: readonly ReviewThreadDetails[]
+  readonly loading: boolean
+  readonly listOpen: boolean
+  readonly detailOpen: boolean
+  readonly annotations: (
+    file: ParsedDiffFile,
+    navigationAnchor: ReviewThreadAnchor | null,
+  ) => readonly ReviewDiffContributionAnnotation[]
+  readonly activateLine: (
+    file: ParsedDiffFile,
+    side: "additions" | "deletions",
+    lineNumber: number,
+  ) => boolean
+  readonly annotationsRendered: (card: HTMLElement) => void
+  readonly openDetail: (details: ReviewThreadDetails) => void
+  readonly revealLine: (anchor: ReviewThreadAnchor) => void
+  readonly showList: () => void
+  readonly collapse: () => void
+  readonly renderContextPane: (props: ReviewDiffContributionContextPaneProps) => ReactNode
+  readonly renderDetailPane: (props: ReviewDiffContributionDetailPaneProps) => ReactNode
 }
 
 /** One trusted component mounted for the active review diff host. */

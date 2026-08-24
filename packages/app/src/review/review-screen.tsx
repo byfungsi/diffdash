@@ -10,7 +10,11 @@ import type { ReactNode } from "react"
 import { useEffect, useState } from "react"
 import { Match } from "effect"
 
-import type { ProjectActivityContribution } from "@/extensions/extension-registry"
+import type {
+  OwnedExtensionContribution,
+  ProjectActivityContribution,
+  ReviewDiffContribution,
+} from "@/extensions/extension-registry"
 import { ProjectWorkspaceFrame } from "@/project-workspace/project-workspace-frame"
 import { Button } from "@/shared/ui/button"
 import { ProjectWorkspaceStatePanel } from "@/shared/ui/project-workspace-state-panel"
@@ -33,6 +37,7 @@ export const ReviewScreen = ({
   detailEnvironment,
   reviewsContext,
   reviewsMain,
+  reviewDiffContributions,
   selection,
   sourceOperations,
   workspaceNotice,
@@ -44,6 +49,7 @@ export const ReviewScreen = ({
   readonly detailEnvironment: ReviewDetailEnvironment
   readonly reviewsContext: ReactNode
   readonly reviewsMain: ReactNode
+  readonly reviewDiffContributions: readonly OwnedExtensionContribution<ReviewDiffContribution>[]
   readonly selection: ReviewSelectionProjection
   readonly sourceOperations: ReviewSourceOperationProjection
   readonly workspaceNotice: string | null
@@ -69,6 +75,7 @@ export const ReviewScreen = ({
         activities={activities}
         detailEnvironment={detailEnvironment}
         reviewsContext={reviewsContext}
+        reviewDiffContributions={reviewDiffContributions}
         selection={readySelection}
         operations={readyOperations.operations}
         onActiveActivityChange={onActiveActivityChange}
@@ -118,6 +125,7 @@ const ReadyReviewScreen = ({
   activities,
   detailEnvironment,
   reviewsContext,
+  reviewDiffContributions,
   selection,
   operations,
   onActiveActivityChange,
@@ -126,6 +134,7 @@ const ReadyReviewScreen = ({
   readonly activities: readonly ProjectActivityContribution[]
   readonly detailEnvironment: ReviewDetailEnvironment
   readonly reviewsContext: ReactNode
+  readonly reviewDiffContributions: readonly OwnedExtensionContribution<ReviewDiffContribution>[]
   readonly selection: Extract<ReviewSelectionProjection, { readonly _tag: "ready" }>
   readonly operations: ReadyReviewDetailState["sourceOperations"]
   readonly onActiveActivityChange: (activityId: ProjectWorkspaceActivityId) => void
@@ -188,6 +197,7 @@ const ReadyReviewScreen = ({
       environment={detailEnvironment}
       ready={ready}
       reviewsContext={reviewsContext}
+      reviewDiffContributions={reviewDiffContributions}
       onActiveActivityChange={onActiveActivityChange}
     />
   )

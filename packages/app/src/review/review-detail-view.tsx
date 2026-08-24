@@ -37,10 +37,10 @@ import {
   ThreadReviewNavigationTarget,
   FileReviewNavigationTarget,
 } from "@diffdash/domain/review-navigation"
-import type {
-  ReviewThreadAnchor,
-  ReviewThreadDetails,
-  ReviewThreadId,
+import {
+  HostedReviewTarget,
+  type ReviewThreadDetails,
+  type ReviewThreadId,
 } from "@diffdash/domain/review-thread"
 import {
   buildWalkthroughHunkDigest,
@@ -78,7 +78,11 @@ import {
   useRef,
   useState,
 } from "react"
-import type { ProjectActivityContribution } from "@/extensions/extension-registry"
+import type {
+  OwnedExtensionContribution,
+  ProjectActivityContribution,
+  ReviewDiffContribution,
+} from "@/extensions/extension-registry"
 import {
   runRendererPromise,
   useDesktopRuntime,
@@ -107,12 +111,6 @@ import { CommandPaletteDialog, type CommandPaletteItem } from "@/shell/command-p
 import { WorkbenchContextActions } from "@/shell/workbench-context-actions"
 import { ProjectActivityNavigation } from "@/project-workspace/project-activity-navigation"
 import {
-  ReviewThreadDetailPane,
-  ReviewThreadListPane,
-  type ReviewThreadSidebarState,
-} from "@/threads/review-thread-sidebar"
-import { useReviewThreads } from "@/threads/review-threads"
-import {
   SourceSurfaceContributionId,
   type SourceSurfaceRenderObserver,
   useSourceSurfaceRuntime,
@@ -128,6 +126,8 @@ import {
   walkthroughReviewSteps,
 } from "@/walkthrough/walkthrough-panel"
 import { OpenDiffCard } from "./diff-card"
+import type { ReviewDiffAnnotationMetadata } from "./review-diff-annotation"
+import { useReviewDiffContributionHost } from "./review-diff-contribution-host"
 import {
   createDiffsWorker,
   DiffVirtualizer,
@@ -163,8 +163,7 @@ import {
   type ReviewDiffRegistration,
   ReviewViewportNavigationBridge,
 } from "./review-viewport-navigation"
-import { reviewThreadScope, reviewWalkthroughScope } from "./review-subject"
-import { type ReviewThreadAnnotation, sameReviewThreadLine } from "./thread-annotations"
+import { reviewWalkthroughScope } from "./review-subject"
 import type { ProgressiveReviewContent } from "./use-progressive-review-content"
 import { diffCardDomId, useViewedFileViewport, type ViewedFileUpdate } from "./viewed-file-viewport"
 
@@ -325,7 +324,7 @@ const REVIEW_DIFF_OPTIONS = {
       color: var(--review-search-active-foreground);
     }
   `,
-} satisfies FileDiffOptions<ReviewThreadAnnotation>
+} satisfies FileDiffOptions<ReviewDiffAnnotationMetadata>
 
 const REVIEW_DIFF_VIRTUALIZER_CONFIG = {
   intersectionObserverMargin: 1_500,
@@ -358,6 +357,7 @@ export const ReviewDetailView = ({
   activities,
   environment,
   ready,
+  reviewDiffContributions,
   reviewsContext,
   onActiveActivityChange,
 }: {
@@ -365,6 +365,7 @@ export const ReviewDetailView = ({
   readonly activities: readonly ProjectActivityContribution[]
   readonly environment: ReviewDetailEnvironment
   readonly ready: ReadyReviewDetailState
+  readonly reviewDiffContributions: readonly OwnedExtensionContribution<ReviewDiffContribution>[]
   readonly reviewsContext: ReactNode
   readonly onActiveActivityChange: (activityId: ProjectWorkspaceActivityId) => void
 }) => {
@@ -405,6 +406,27 @@ export const ReviewDetailView = ({
   } = ready
   const review = selection.review
   const manifest = review.manifest
+  const reviewContributionTarget = useMemo(
+    () =>
+      Match.valueTags(review, {
+        hosted: (hostedReview) =>
+          HostedReviewTarget.make({ kind: "hosted", review: hostedReview.target }),
+        local: (localReview) => localReview.target,
+        repositoryComparison: (comparisonReview) => comparisonReview.target,
+      }),
+    [review],
+  )
+  const reviewContributionHost = useReviewDiffContributionHost(reviewDiffContributions, {
+    projectId: manifest.projectId,
+    target: reviewContributionTarget,
+    baseRevision: manifest.baseRevision,
+    headRevision: manifest.headRevision,
+  })
+  const commentsContributionId = activities.find(
+    (activity) => activity.id === REVIEW_COMMENTS_ACTIVITY_ID,
+  )?.reviewDiffContributionId
+  const reviewContribution =
+    reviewContributionHost.outputs.find(({ id }) => id === commentsContributionId)?.output ?? null
   const walkthroughTarget = useMemo(
     () =>
       Match.valueTags(review, {
@@ -441,7 +463,6 @@ export const ReviewDetailView = ({
   const treeActivityButtonRef = useRef<HTMLButtonElement>(null)
   const walkthroughActivityButtonRef = useRef<HTMLButtonElement>(null)
   const threadsActivityButtonRef = useRef<HTMLButtonElement>(null)
-  const threadButtonRefs = useRef<Map<ReviewThreadId, HTMLButtonElement>>(new Map())
   const previousSidebarExpandedRef = useRef(sidebarExpanded)
   const quickNavigationRequestRef = useRef(quickNavigationRequest)
   const previousReviewSearchFocusRef = useRef<HTMLElement | null>(null)
@@ -451,7 +472,8 @@ export const ReviewDetailView = ({
   } | null>(null)
   const reviewDiffRegistrationsRef = useRef<Map<string, ReviewDiffRegistration>>(new Map())
   const diffSettlementFramesRef = useRef<Map<string, number>>(new Map())
-  const reviewSurfaceRuntime = useSourceSurfaceRuntime<PierreFileDiff<ReviewThreadAnnotation>>()
+  const reviewSurfaceRuntime =
+    useSourceSurfaceRuntime<PierreFileDiff<ReviewDiffAnnotationMetadata>>()
   const [diffVirtualizer] = useState(() => new DiffVirtualizer(REVIEW_DIFF_VIRTUALIZER_CONFIG))
   const [reviewNavigationAnchors] = useState(() => new ReviewNavigationAnchorRegistry())
   const [reviewNavigator] = useState(() => new ReviewNavigatorController(atomRegistry))
@@ -484,10 +506,6 @@ export const ReviewDetailView = ({
   const reviewSearchOccurrences = useAtomValue(reviewSearchController.retainedMatchesAtom)
   const [fileOpenStatus, setFileOpenStatus] = useState<string | null>(null)
   const [approvalState, setApprovalState] = useState<PullRequestApprovalState>("checking")
-  const [expandedLineAnchor, setExpandedLineAnchor] = useState<ReviewThreadAnchor | null>(null)
-  const [threadSidebarState, setThreadSidebarState] = useState<ReviewThreadSidebarState>({
-    _tag: "collapsed",
-  })
   const [activePane, setActivePane] = useState<ReviewActivePane>("diff")
   const [repositoryBannerDismissed, setRepositoryBannerDismissed] = useState(false)
   const [repositoryLinking, setRepositoryLinking] = useState(false)
@@ -509,19 +527,29 @@ export const ReviewDetailView = ({
     quickNavigationRequestRef.current = quickNavigationRequest
     setGoToPaletteOpen(true)
   }, [quickNavigationRequest])
+  const openContributionDetailPane = useEffectEvent(() => {
+    setSidebarTab("threads")
+    onSidebarExpandedChange(true)
+    setActivePane("thread-detail")
+  })
+  const collapseReviewContributionForReset = useEffectEvent(() => reviewContribution?.collapse())
 
   useEffect(() => {
     const previouslyExpanded = previousSidebarExpandedRef.current
     previousSidebarExpandedRef.current = sidebarExpanded
     if (previouslyExpanded === sidebarExpanded) return
     if (!sidebarExpanded) {
-      setThreadSidebarState({ _tag: "collapsed" })
+      reviewContribution?.collapse()
       setActivePane("diff")
       return
     }
     setActivePane("context")
-    if (sidebarTab === "threads") setThreadSidebarState({ _tag: "list" })
-  }, [sidebarExpanded, sidebarTab])
+    if (sidebarTab === "threads") reviewContribution?.showList()
+  }, [reviewContribution, sidebarExpanded, sidebarTab])
+  useEffect(() => {
+    if (reviewContribution?.detailOpen !== true) return
+    openContributionDetailPane()
+  }, [reviewContribution?.detailOpen])
   const {
     files: snapshotFiles,
     fileErrors,
@@ -611,7 +639,7 @@ export const ReviewDetailView = ({
   const reviewBaseSha = review.baseRevision
   const reviewHeadSha = review.headRevision
   const reviewIdentity = review.identity
-  const reviewThreads = useReviewThreads(reviewThreadScope(review))
+  const reviewThreadDetails = reviewContributionHost.semantic.details
   const navigationTarget = navigationPresentation.activeTarget
   const navigationThreadAnchor =
     navigationTarget === null
@@ -623,28 +651,9 @@ export const ReviewDetailView = ({
           line: () => null,
           range: () => null,
           thread: (target) =>
-            reviewThreads.details.find((details) => details.thread.id === target.threadId)?.thread
+            reviewThreadDetails.find((details) => details.thread.id === target.threadId)?.thread
               .activeAnchor ?? null,
         })
-  useEffect(() => {
-    const detailThreadId = Match.valueTags(threadSidebarState, {
-      collapsed: () => null,
-      list: () => null,
-      detail: (state) => state.threadId,
-    })
-    if (
-      Match.valueTags(threadSidebarState, {
-        collapsed: () => false,
-        list: () => false,
-        detail: () => true,
-      }) &&
-      !reviewThreads.loading &&
-      detailThreadId !== null &&
-      !reviewThreads.details.some((details) => details.thread.id === detailThreadId)
-    ) {
-      setThreadSidebarState({ _tag: "list" })
-    }
-  }, [reviewThreads.details, reviewThreads.loading, threadSidebarState])
   const changedFiles = progressiveInventory
   const loadedFilesById = new Map(snapshotFiles.map((file) => [file.fileId, file]))
   const loadedChangedFiles = changedFiles.flatMap((file) => {
@@ -765,7 +774,8 @@ export const ReviewDetailView = ({
   const forceExpandedFileKeys = useMemo(() => {
     const keys = new Set<string>()
     if (activeSearchReviewKey !== null) keys.add(activeSearchReviewKey)
-    const activeLineAnchor = navigationThreadAnchor ?? expandedLineAnchor
+    const activeLineAnchor =
+      navigationThreadAnchor ?? reviewContributionHost.semantic.activeLineAnchor
     if (activeLineAnchor !== null) {
       const file = changedFiles.find((candidate) => candidate.fileId === activeLineAnchor.fileId)
       if (file !== undefined) keys.add(file.reviewKey)
@@ -778,9 +788,9 @@ export const ReviewDetailView = ({
   }, [
     activeSearchReviewKey,
     changedFiles,
-    expandedLineAnchor,
     navigationPresentation.forceExpandedFileIds,
     navigationThreadAnchor,
+    reviewContributionHost.semantic.activeLineAnchor,
   ])
   const lastRenderedFileId = renderedChangedFiles.at(-1)?.fileId ?? null
   useLayoutEffect(() => {
@@ -835,7 +845,7 @@ export const ReviewDetailView = ({
     activeStepFiles.every((file) => viewedFileKeys.has(file.reviewKey))
   const resolvedDiffViewMode =
     aiSettings.diffViewMode === "auto" ? autoDiffViewMode : aiSettings.diffViewMode
-  const reviewDiffOptions: FileDiffOptions<ReviewThreadAnnotation> = {
+  const reviewDiffOptions: FileDiffOptions<ReviewDiffAnnotationMetadata> = {
     ...REVIEW_DIFF_OPTIONS,
     diffStyle: resolvedDiffViewMode,
     theme: aiSettings.codeThemes,
@@ -858,7 +868,7 @@ export const ReviewDetailView = ({
     return () => window.cancelAnimationFrame(frame)
   }, [diffVirtualizer, resolvedDiffViewMode])
   const navigableThreadIds = new Set<ReviewThreadId>(
-    reviewThreads.details.flatMap((details) => {
+    reviewThreadDetails.flatMap((details) => {
       const anchor = details.thread.activeAnchor
       return anchor !== null &&
         changedFiles.some((file) => file.fileId === anchor.fileId && file.path === anchor.filePath)
@@ -880,9 +890,9 @@ export const ReviewDetailView = ({
     visibleFiles: visibleChangedFiles,
   })
   const reconcileReviewDiffRegistration = useStableCallback<
-    SourceSurfaceRenderObserver<PierreFileDiff<ReviewThreadAnnotation>>
+    SourceSurfaceRenderObserver<PierreFileDiff<ReviewDiffAnnotationMetadata>>
   >(({ generation, host: node, instance, phase, surfaceId: reviewKey }) => {
-    if (isVirtualizedFileDiff<ReviewThreadAnnotation>(instance)) {
+    if (isVirtualizedFileDiff<ReviewDiffAnnotationMetadata>(instance)) {
       const phaseHandlers = {
         unmount: () => {
           Option.match(Option.fromNullishOr(diffSettlementFramesRef.current.get(reviewKey)), {
@@ -948,17 +958,17 @@ export const ReviewDetailView = ({
     }
   })
   const reconcileReviewSearchHighlights = useStableCallback<
-    SourceSurfaceRenderObserver<PierreFileDiff<ReviewThreadAnnotation>>
+    SourceSurfaceRenderObserver<PierreFileDiff<ReviewDiffAnnotationMetadata>>
   >(({ host, instance, phase, surfaceId }) => {
     reviewSearchHighlights.handlePostRender(surfaceId, host, instance, phase)
   })
   const reconcileReviewNavigationFocus = useStableCallback<
-    SourceSurfaceRenderObserver<PierreFileDiff<ReviewThreadAnnotation>>
+    SourceSurfaceRenderObserver<PierreFileDiff<ReviewDiffAnnotationMetadata>>
   >(({ phase, surfaceId }) => {
     if (phase !== "unmount") reviewViewportBridge.reconcileRenderedFocus(surfaceId)
   })
   const reconcileViewedFile = useStableCallback<
-    SourceSurfaceRenderObserver<PierreFileDiff<ReviewThreadAnnotation>>
+    SourceSurfaceRenderObserver<PierreFileDiff<ReviewDiffAnnotationMetadata>>
   >(({ phase, surfaceId }) => {
     handleViewedDiffRendered(surfaceId, phase)
   })
@@ -1096,7 +1106,7 @@ export const ReviewDetailView = ({
     },
   )
   const submitThreadNavigation = useStableCallback((threadId: ReviewThreadId) => {
-    setThreadSidebarState({ _tag: "collapsed" })
+    reviewContribution?.collapse()
     setActivePane("diff")
     void reviewNavigator.navigate(
       ReviewNavigationInput.make({
@@ -1128,13 +1138,13 @@ export const ReviewDetailView = ({
         range: () => null,
       })
       if (threadId !== null) {
-        const anchor = reviewThreads.details.find((details) => details.thread.id === threadId)
-          ?.thread.activeAnchor
-        if (anchor !== null && anchor !== undefined) setExpandedLineAnchor(anchor)
+        const anchor = reviewThreadDetails.find((details) => details.thread.id === threadId)?.thread
+          .activeAnchor
+        if (anchor !== null && anchor !== undefined) reviewContribution?.revealLine(anchor)
       }
       setActivePane("diff")
       if (input.origin === "thread-detail") {
-        setThreadSidebarState({ _tag: "collapsed" })
+        reviewContribution?.collapse()
         setSidebarTab("tree")
         onSidebarExpandedChange(true)
       }
@@ -1155,7 +1165,7 @@ export const ReviewDetailView = ({
     diffVirtualizer,
     searchHighlights: reviewSearchHighlights,
     searchOccurrences: reviewSearchOccurrences,
-    threads: reviewThreads.details,
+    threads: reviewThreadDetails,
     requestReconciliation: requestReviewDiffReconciliation,
     prepareFile: prepareNavigationFile,
     activateWindow: () => runRendererPromise(desktop.navigation.activateWindow()),
@@ -1277,7 +1287,7 @@ export const ReviewDetailView = ({
     setGoToPaletteOpen(false)
     setActionPaletteOpen(false)
     setNavigationSelectedFileId(null)
-    setThreadSidebarState({ _tag: "collapsed" })
+    collapseReviewContributionForReset()
     setRepositoryBannerDismissed(false)
     setRepositoryLinking(false)
     setRepositoryLinkError(null)
@@ -1331,30 +1341,16 @@ export const ReviewDetailView = ({
         }
         return
       }
-      if (
-        Match.valueTags(threadSidebarState, {
-          collapsed: () => false,
-          list: () => false,
-          detail: () => true,
-        })
-      )
-        return
+      if (reviewContribution?.detailOpen === true) return
       if (navigationLocked && isViewportScrollKey(key) && !isEditableTarget(event.target)) {
         event.preventDefault()
         event.stopPropagation()
         return
       }
-      if (
-        key === "escape" &&
-        Match.valueTags(threadSidebarState, {
-          collapsed: () => false,
-          list: () => true,
-          detail: () => false,
-        })
-      ) {
+      if (key === "escape" && reviewContribution?.listOpen === true) {
         event.preventDefault()
         event.stopPropagation()
-        setThreadSidebarState({ _tag: "collapsed" })
+        reviewContribution.collapse()
         onSidebarExpandedChange(false)
         setActivePane("diff")
         window.requestAnimationFrame(() => threadsActivityButtonRef.current?.focus())
@@ -1447,7 +1443,7 @@ export const ReviewDetailView = ({
     reviewSearchOpen,
     selectedVisiblePath,
     setViewedPreservingViewport,
-    threadSidebarState,
+    reviewContribution,
     reviewNavigator,
     viewedFileKeys,
     visibleChangedFiles,
@@ -1553,7 +1549,8 @@ export const ReviewDetailView = ({
     setSidebarTab(tab)
     onSidebarExpandedChange(true)
     setActivePane("context")
-    setThreadSidebarState(tab === "threads" ? { _tag: "list" } : { _tag: "collapsed" })
+    if (tab === "threads") reviewContribution?.showList()
+    else reviewContribution?.collapse()
   }
   const toggleSidebarTab = (tab: ReviewSidebarTab, placement: "rail" | "bottom") => {
     if (placement === "bottom" && tab === sidebarTab && activePane === "thread-detail") {
@@ -1565,7 +1562,7 @@ export const ReviewDetailView = ({
       sidebarExpanded &&
       (placement === "rail" || activePane === "context")
     ) {
-      setThreadSidebarState({ _tag: "collapsed" })
+      reviewContribution?.collapse()
       onSidebarExpandedChange(false)
       setActivePane("diff")
       return
@@ -1583,26 +1580,18 @@ export const ReviewDetailView = ({
             : threadsActivityButtonRef.current
     window.requestAnimationFrame(() => button?.focus())
   }
-  const updateThreadSidebarState = (state: ReviewThreadSidebarState) => {
-    setThreadSidebarState(state)
-    Match.valueTags(state, {
-      collapsed: () => {
-        cancelFileNavigation()
-        onSidebarExpandedChange(false)
-        setActivePane("diff")
-        focusActiveSidebarTab()
-      },
-      detail: () => {
-        setSidebarTab("threads")
-        onSidebarExpandedChange(true)
-        setActivePane("thread-detail")
-      },
-      list: () => {
-        setSidebarTab("threads")
-        onSidebarExpandedChange(true)
-        setActivePane("context")
-      },
-    })
+  const collapseThreadSidebar = () => {
+    reviewContribution?.collapse()
+    cancelFileNavigation()
+    onSidebarExpandedChange(false)
+    setActivePane("diff")
+    focusActiveSidebarTab()
+  }
+  const showThreadList = () => {
+    reviewContribution?.showList()
+    setSidebarTab("threads")
+    onSidebarExpandedChange(true)
+    setActivePane("context")
   }
   const toggleVisibleDiffCard = (reviewKey: string) => {
     const container = diffScrollContainerRef.current
@@ -1668,20 +1657,11 @@ export const ReviewDetailView = ({
     )
     if (file === undefined) return
 
-    setExpandedLineAnchor(anchor)
-    setThreadSidebarState({ _tag: "collapsed" })
+    reviewContribution?.revealLine(anchor)
+    reviewContribution?.collapse()
     setSidebarTab("tree")
     setActivePane("diff")
     submitThreadNavigation(details.thread.id)
-  }
-  const toggleExpandedLine = (anchor: ReviewThreadAnchor) => {
-    setExpandedLineAnchor((current) => (sameReviewThreadLine(current, anchor) ? null : anchor))
-  }
-  const openReviewThreadDetail = (details: ReviewThreadDetails) => {
-    setSidebarTab("threads")
-    onSidebarExpandedChange(true)
-    setThreadSidebarState({ _tag: "detail", threadId: details.thread.id })
-    setActivePane("thread-detail")
   }
   const selectWalkthroughStepAndFocus = (index: number) => {
     selectSidebarTab("walkthrough")
@@ -1813,18 +1793,15 @@ export const ReviewDetailView = ({
     !repositoryBannerDismissed
   const reviewContent = (
     <>
+      {reviewContributionHost.mounts}
       <ReviewWorkbenchLayout
         activePane={activePane}
-        detailOpen={Match.valueTags(threadSidebarState, {
-          collapsed: () => false,
-          list: () => false,
-          detail: () => true,
-        })}
+        detailOpen={reviewContribution?.detailOpen ?? false}
         preferences={{ contextWidth: sidebarWidth, threadDetailWidth }}
         sidebarRequestedOpen={sidebarExpanded}
         onContextCollapsedByUser={() => onSidebarExpandedChange(false)}
         onContextWidthCommit={onSidebarWidthChange}
-        onDetailCollapsedByUser={() => updateThreadSidebarState({ _tag: "list" })}
+        onDetailCollapsedByUser={showThreadList}
         onDetailWidthCommit={onThreadDetailWidthChange}
         renderActivityNavigation={(placement) => (
           <ProjectActivityNavigation
@@ -1858,20 +1835,17 @@ export const ReviewDetailView = ({
             sidebarTab === "reviews" ? (
               reviewsContext
             ) : sidebarTab === "threads" ? (
-              <ReviewThreadListPane
-                buttonRefs={threadButtonRefs}
-                controller={reviewThreads}
-                navigableThreadIds={navigableThreadIds}
-                state={threadSidebarState}
-                onCollapse={() => updateThreadSidebarState({ _tag: "collapsed" })}
-                onOpenDetail={(threadId) => updateThreadSidebarState({ _tag: "detail", threadId })}
-              >
-                <WalkthroughSettingsMenu
-                  catalog={agentProviderCatalog}
-                  settings={aiSettings}
-                  onChange={onAISettingsChange}
-                />
-              </ReviewThreadListPane>
+              (reviewContribution?.renderContextPane({
+                navigableThreadIds,
+                onCollapse: collapseThreadSidebar,
+                settings: (
+                  <WalkthroughSettingsMenu
+                    catalog={agentProviderCatalog}
+                    settings={aiSettings}
+                    onChange={onAISettingsChange}
+                  />
+                ),
+              }) ?? null)
             ) : (
               <aside
                 data-review-context-panel
@@ -1989,14 +1963,11 @@ export const ReviewDetailView = ({
           ) : null
         }
         detail={
-          <ReviewThreadDetailPane
-            buttonRefs={threadButtonRefs}
-            controller={reviewThreads}
-            navigableThreadIds={navigableThreadIds}
-            state={threadSidebarState}
-            onClose={() => updateThreadSidebarState({ _tag: "list" })}
-            onGoToDiff={goToReviewThread}
-          />
+          reviewContribution?.renderDetailPane({
+            navigableThreadIds,
+            onClose: showThreadList,
+            onGoToDiff: goToReviewThread,
+          }) ?? null
         }
         diff={
           <div
@@ -2235,16 +2206,16 @@ export const ReviewDetailView = ({
                       ) : (
                         <OpenDiffCard
                           key={file.reviewKey}
+                          annotationProvider={reviewContributionHost.semantic.annotations}
+                          navigationAnchor={navigationThreadAnchor}
                           diffOptions={reviewDiffOptions}
                           expanded={
                             sidebarTab === "walkthrough" && activeWalkthroughStep !== null
                               ? !collapsedWalkthroughFileKeys.has(file.reviewKey)
                               : expandedFileKeys.has(file.reviewKey)
                           }
-                          expandedLineAnchor={navigationThreadAnchor ?? expandedLineAnchor}
                           file={parsedFile}
                           forceExpanded={forceExpandedFileKeys.has(file.reviewKey)}
-                          reviewThreads={reviewThreads}
                           selected={
                             activeSearchReviewKey === file.reviewKey ||
                             selectedVisiblePath === file.path
@@ -2255,12 +2226,20 @@ export const ReviewDetailView = ({
                             registerFileNavigationAnchor(file.fileId, element, focusElement)
                           }
                           onOpenFile={() => openRepositoryFile(file.path)}
-                          onOpenThread={openReviewThreadDetail}
+                          onActivateLine={(side, lineNumber) =>
+                            reviewContributionHost.semantic.activateLine(
+                              parsedFile,
+                              side,
+                              lineNumber,
+                            )
+                          }
+                          onAnnotationsRendered={
+                            reviewContributionHost.semantic.annotationsRendered
+                          }
                           onSelect={() => selectPathAndScroll(file.path)}
                           onSetViewed={(viewed) =>
                             setViewedPreservingViewport(file.reviewKey, viewed)
                           }
-                          onToggleLine={toggleExpandedLine}
                           onToggleExpanded={() => toggleVisibleDiffCard(file.reviewKey)}
                         />
                       )
