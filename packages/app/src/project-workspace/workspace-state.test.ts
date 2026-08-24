@@ -20,8 +20,12 @@ import {
 } from "@diffdash/domain/repository-comparison"
 import { ReviewProjectId } from "@diffdash/domain/review-identity"
 import { HostedReviewTarget } from "@diffdash/domain/review-thread"
+import { Result } from "effect"
 import { describe, expect, it } from "vitest"
 
+import { TrustedExtensionRegistry } from "@/extensions/extension-registry"
+import { coreWorkspaceExtension } from "@/extensions/core-workspace/core-workspace-extension"
+import { reviewCommentsExtension } from "@/extensions/review-comments/review-comments-extension"
 import {
   resolveProjectWorkspaceState as resolveWorkspaceState,
   selectedReviewTargetForPersistence,
@@ -190,5 +194,45 @@ describe("project workspace state", () => {
         "The saved workspace activity is unavailable. A built-in activity was restored instead.",
       selectedReview: null,
     })
+  })
+
+  it("repairs an active disposed Comments contribution once without changing Code", () => {
+    const registry = new TrustedExtensionRegistry()
+    Result.getOrThrow(registry.register(coreWorkspaceExtension))
+    const disposeComments = Result.getOrThrow(registry.register(reviewCommentsExtension))
+    const persisted = ProjectWorkspaceState.make({
+      projectId: repo.id,
+      activeSurface: "code",
+      activeActivity: REVIEW_COMMENTS_ACTIVITY_ID,
+      selectedReviewTarget: null,
+      updatedAt: "2026-08-20T00:00:00.000Z",
+    })
+
+    disposeComments()
+    const repaired = resolveWorkspaceState(
+      repo,
+      persisted,
+      registry.snapshot().projectActivities.map(({ id }) => id),
+    )
+    const restored = resolveWorkspaceState(
+      repo,
+      ProjectWorkspaceState.make({
+        projectId: repo.id,
+        activeSurface: repaired.activeSurface,
+        activeActivity: repaired.activeActivity,
+        selectedReviewTarget: null,
+        updatedAt: "2026-08-20T00:00:01.000Z",
+      }),
+      registry.snapshot().projectActivities.map(({ id }) => id),
+    )
+
+    expect(repaired).toEqual({
+      activeSurface: "code",
+      activeActivity: PROJECT_WORKSPACE_CODE_ACTIVITY_ID,
+      notice:
+        "The saved workspace activity is unavailable. A built-in activity was restored instead.",
+      selectedReview: null,
+    })
+    expect(restored).toEqual({ ...repaired, notice: null })
   })
 })

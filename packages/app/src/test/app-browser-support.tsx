@@ -226,7 +226,7 @@ import {
 } from "@/review/review-search-highlights"
 import { isMacPlatform } from "@/shell/keyboard-shortcut-platform"
 import { App } from "../app"
-import { lineReviewAnchor } from "../review/thread-annotations"
+import { lineReviewAnchor } from "@/extensions/review-comments/thread-annotations"
 import "../styles.css"
 
 interface ReviewSearchFixtureRequest {

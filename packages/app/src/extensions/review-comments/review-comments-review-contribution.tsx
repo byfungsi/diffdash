@@ -18,23 +18,20 @@ import {
   reviewThreadAnnotationContentId,
   reviewThreadAnnotations,
   sameReviewThreadLine,
-} from "@/review/thread-annotations"
+} from "./thread-annotations"
 import { Button } from "@/shared/ui/button"
 import {
   ReviewThreadDetailPane,
   ReviewThreadListPane,
   type ReviewThreadSidebarState,
-} from "@/threads/review-thread-sidebar"
+} from "./review-thread-sidebar"
 import {
   ReviewThreadComposer,
   ReviewThreadPanel,
   type ReviewThreadScope,
   useReviewThreads,
-} from "@/threads/review-threads"
-import {
-  reviewLineLabel,
-  syncPinnedReviewThreadHistories,
-} from "@/threads/review-thread-presentation"
+} from "./review-threads"
+import { reviewLineLabel, syncPinnedReviewThreadHistories } from "./review-thread-presentation"
 
 /** Review Comments behavior mounted into one active Review diff host. */
 export const ReviewCommentsReviewDiffContribution = (props: ReviewDiffContributionProps) => {
