@@ -528,15 +528,6 @@ export function AppShell() {
     setHistory(next)
     if (apply) applyNavigationLocation(location)
   }
-  const persistNavigationLocation = (location: AppNavigationLocation) => {
-    if (location.kind === "home") return
-    const ribbon = location.kind === "projectCode" ? "code" : location.activeRibbon
-    void projectSession
-      .persist(projectSession.project(location.repo, ribbon, location.selectedReview))
-      .catch((error) => {
-        setWorkspaceNotice(formatError(error, "Could not save project workspace"))
-      })
-  }
   const navigateBack = () => {
     projectSession.cancelRestore()
     const current = navigationHistoryRef.current
@@ -545,7 +536,6 @@ export function AppShell() {
     setHistory(next)
     const location = currentNavigationLocation(next)
     applyNavigationLocation(location)
-    persistNavigationLocation(location)
   }
   const navigateForward = () => {
     projectSession.cancelRestore()
@@ -555,7 +545,6 @@ export function AppShell() {
     setHistory(next)
     const location = currentNavigationLocation(next)
     applyNavigationLocation(location)
-    persistNavigationLocation(location)
   }
   const navigateBackFromEffect = useEffectEvent(navigateBack)
   const navigateForwardFromEffect = useEffectEvent(navigateForward)
