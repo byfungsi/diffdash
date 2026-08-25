@@ -1,4 +1,5 @@
 import { type DiffFileStatus, DiffFileVisibility } from "@diffdash/domain/diff"
+import { prepareFileTreeInput } from "@pierre/trees"
 
 /** Git-style status values supported by @pierre/trees. */
 type FileTreeGitStatus = "added" | "deleted" | "modified" | "renamed" | "untracked"
@@ -32,14 +33,25 @@ type ReviewFileTreeFile = {
   readonly visibility: typeof DiffFileVisibility.Type
 }
 
+/** Orders review files using the same canonical path ordering as the file tree. */
+export const orderReviewFilesAsTree = <T extends { readonly path: string }>(
+  files: readonly T[],
+): readonly T[] => {
+  const filesByPath = new Map(files.map((file) => [file.path, file]))
+  return prepareFileTreeInput(files.map((file) => file.path)).paths.flatMap((path) => {
+    const file = filesByPath.get(path)
+    return file === undefined ? [] : [file]
+  })
+}
+
 /** Builds path-first tree input from parsed diff files and hidden-file preference. */
 export const buildReviewFileTreeInput = (
   files: readonly ReviewFileTreeFile[],
   showHidden: boolean,
 ): ReviewFileTreeInput => {
-  const visibleFiles = showHidden
-    ? files
-    : files.filter((file) => DiffFileVisibility.guards.Visible(file.visibility))
+  const visibleFiles = orderReviewFilesAsTree(
+    showHidden ? files : files.filter((file) => DiffFileVisibility.guards.Visible(file.visibility)),
+  )
   const fileStatuses = visibleFiles.map((file) => ({
     path: file.path,
     status: toTreeGitStatus(file),

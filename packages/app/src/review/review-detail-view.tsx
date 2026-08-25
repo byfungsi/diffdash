@@ -94,7 +94,6 @@ import {
   type FileDiffOptions,
   type PierreFileDiff,
   type PostRenderPhase,
-  prepareFileTreeInput,
   useStableCallback,
   useWorkerPool,
   VirtualizerContext,
@@ -114,6 +113,7 @@ import { ReviewPagePlaceholder } from "./review-page-placeholder"
 import { ReviewSearchHighlightManager } from "./review-search-highlights"
 import { ReviewSearchController } from "./review-search-state"
 import { ReviewSearchToolbar } from "./review-search-toolbar"
+import { orderReviewFilesAsTree } from "./file-tree-adapter"
 import type { ReviewSelectionProjection } from "./review-selection"
 import type { ReviewSourceOperations } from "./use-review-source-operations"
 import type { ReviewActivePane } from "./review-sidebar-layout"
@@ -2258,17 +2258,6 @@ const DiffViewSettingsMenuItem = ({
     </button>
   </DropdownMenu.RadioItem>
 )
-
-const orderReviewFilesAsTree = (
-  files: readonly ReviewSnapshotFileInventory[],
-): readonly ReviewSnapshotFileInventory[] => {
-  const filesByPath = HashMap.fromIterable<string, ReviewSnapshotFileInventory>(
-    files.map((file) => [file.path, file]),
-  )
-  return prepareFileTreeInput([...HashMap.keys(filesByPath)]).paths.flatMap((path) =>
-    Option.toArray(HashMap.get(filesByPath, path)),
-  )
-}
 
 const matchesReviewFileFilter = (
   file: Pick<ReviewSnapshotFileInventory, "path" | "oldPath">,
