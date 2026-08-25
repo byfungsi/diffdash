@@ -7,6 +7,7 @@ import {
 } from "@diffdash/protocol/code-workspace-stream"
 import { StreamChannel } from "@diffdash/protocol/channels"
 import { assertJsonPayloadWithinBudget } from "@diffdash/protocol/payload-budget"
+import type { TransportError } from "@diffdash/protocol/transport-error"
 import { LocalCheckoutFileReadError } from "@diffdash/core-rpc/code-workspace-rpc"
 import { Option, Schema } from "effect"
 import type { IpcMain, MessagePortMain } from "electron"
@@ -14,7 +15,7 @@ import { ipcMain } from "electron"
 
 import type { ApplicationRuntime } from "../../application-runtime"
 import type { RendererSecurityPolicy } from "../../electron-policy"
-import { toPublicIpcError, type TransportFailure } from "../public-error"
+import { toPublicIpcError } from "../public-error"
 
 /** Installs the pull-driven MessagePort bridge for streamed Code workspace files. */
 export const installCodeWorkspaceFileStreamController = (
@@ -39,7 +40,7 @@ export const installCodeWorkspaceFileStreamController = (
       )
       request = Schema.decodeUnknownSync(CodeWorkspaceFileStreamRequest)(rawRequest)
     } catch (error) {
-      sendFailure(port, toStreamFailure(error))
+      sendFailure(port, toPublicIpcError(error, StreamChannel.readCodeWorkspaceFile))
       port.close()
       return
     }
@@ -89,7 +90,7 @@ const streamFile = (
             }),
           )
         } else {
-          sendFailure(port, toStreamFailure(error))
+          sendFailure(port, toPublicIpcError(error, StreamChannel.readCodeWorkspaceFile))
         }
       }
       close()
@@ -102,7 +103,13 @@ const streamFile = (
     const control = Schema.decodeUnknownOption(CodeWorkspaceFileStreamControl)(message.data)
     Option.match(control, {
       onNone: () => {
-        sendFailure(port, new Error("Invalid Code workspace file stream control message"))
+        sendFailure(
+          port,
+          toPublicIpcError(
+            new Error("Invalid Code workspace file stream control message"),
+            StreamChannel.readCodeWorkspaceFile,
+          ),
+        )
         cancel()
       },
       onSome: (value) =>
@@ -119,14 +126,11 @@ const streamFile = (
   port.start()
 }
 
-const toStreamFailure = <Failure>(error: Failure): TransportFailure =>
-  Schema.is(Schema.Json)(error) || Schema.is(Schema.ErrorInstance())(error) ? error : undefined
-
-const sendFailure = (port: MessagePortMain, error: TransportFailure) =>
+const sendFailure = (port: MessagePortMain, error: TransportError) =>
   send(
     port,
     CodeWorkspaceFileStreamMessage.cases.Failure.make({
-      error: toPublicIpcError(error, StreamChannel.readCodeWorkspaceFile),
+      error,
     }),
   )
 
