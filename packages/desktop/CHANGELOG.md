@@ -1,5 +1,15 @@
 # DiffDash Changelog
 
+## 0.13.0
+
+### Minor Changes
+
+- [#92](https://github.com/byfungsi/diffdash/pull/92) [`76d3c38`](https://github.com/byfungsi/diffdash/commit/76d3c38e0179dcef0de2ffdefb205c85ce8e9d58) Thanks [@hanipcode](https://github.com/hanipcode)! - Add global back and forward navigation across reviews, code files, and definition jumps.
+
+- [#101](https://github.com/byfungsi/diffdash/pull/101) [`12836c7`](https://github.com/byfungsi/diffdash/commit/12836c7773a98c6b2d6957d56d96f8daabbc33c0) Thanks [@hanipcode](https://github.com/hanipcode)! - Make Review, Code, Walkthrough, and Review Comments independently removable trusted built-in
+  extensions with registry-owned surfaces, ribbon activities, pane slots, lifecycle providers, and
+  schema-encoded navigation repair.
+
 ## 0.12.0
 
 ### Minor Changes
