@@ -47,6 +47,11 @@ describe("App shell browser interactions", () => {
     await appBrowserScenario("codeRibbonShortcuts")()
   })
 
+  it("selects project ribbon activities by their rendered ordinal", async () => {
+    expect.hasAssertions()
+    await appBrowserScenario("ribbonShortcuts")()
+  })
+
   it("restores a selected review while keeping Reviews active", async () => {
     expect.hasAssertions()
     await appBrowserScenario("projectStateRestoration")()

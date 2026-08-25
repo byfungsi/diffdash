@@ -10,6 +10,7 @@ export const KeyboardShortcutToken = Schema.Literals([
   "enter",
   "escape",
   "slash",
+  "digit",
   "b",
   "d",
   "f",
@@ -17,6 +18,7 @@ export const KeyboardShortcutToken = Schema.Literals([
   "f12",
   "g",
   "k",
+  "r",
   "v",
 ])
 
@@ -27,6 +29,7 @@ export type KeyboardShortcutToken = typeof KeyboardShortcutToken.Type
 export const KeyboardShortcutCommandId = Schema.Literals([
   "shortcuts.open",
   "navigation.goAnywhere",
+  "navigation.selectRibbonActivity",
   "review.toggleSidebar",
   "review.openActions",
   "review.toggleViewedFile",
@@ -38,6 +41,7 @@ export const KeyboardShortcutCommandId = Schema.Literals([
   "code.peek.goTo",
   "code.peek.next",
   "code.peek.previous",
+  "code.reload",
 ])
 
 /** Stable IDs for commands that can be registered in an active UI context. */
@@ -67,6 +71,11 @@ export const KEYBOARD_SHORTCUT_SECTIONS: readonly KeyboardShortcutSection[] = [
     shortcuts: [
       { id: "shortcuts.open", label: "Keyboard shortcuts", keys: [["mod", "slash"]] },
       { id: "navigation.goAnywhere", label: "Go anywhere", keys: [["mod", "k"]] },
+      {
+        id: "navigation.selectRibbonActivity",
+        label: "Open ribbon item",
+        keys: [["mod", "digit"]],
+      },
     ],
   },
   {
@@ -96,6 +105,7 @@ export const KEYBOARD_SHORTCUT_SECTIONS: readonly KeyboardShortcutSection[] = [
   {
     label: "Code Navigation",
     shortcuts: [
+      { id: "code.reload", label: "Refresh repository files", keys: [["mod", "r"]] },
       { id: "code.peek.goTo", label: "Go to selected Peek result", keys: [["mod", "d"]] },
       { id: "code.peek.next", label: "Next Peek result", keys: [["f12"], ["f4"]] },
       {
@@ -117,6 +127,7 @@ export const KEYBOARD_SHORTCUT_SECTIONS: readonly KeyboardShortcutSection[] = [
 const TOKEN_LABELS: Readonly<Record<Exclude<KeyboardShortcutToken, "mod">, string>> = {
   b: "B",
   d: "D",
+  digit: "1-9",
   enter: "Enter",
   escape: "Esc",
   f: "F",
@@ -124,6 +135,7 @@ const TOKEN_LABELS: Readonly<Record<Exclude<KeyboardShortcutToken, "mod">, strin
   f12: "F12",
   g: "G",
   k: "K",
+  r: "R",
   shift: "Shift",
   slash: "/",
   v: "V",
@@ -256,6 +268,7 @@ export function keyboardShortcutTokenLabel(token: KeyboardShortcutToken): string
     enter: () => TOKEN_LABELS.enter,
     escape: () => TOKEN_LABELS.escape,
     slash: () => TOKEN_LABELS.slash,
+    digit: () => TOKEN_LABELS.digit,
     b: () => TOKEN_LABELS.b,
     d: () => TOKEN_LABELS.d,
     f: () => TOKEN_LABELS.f,
@@ -263,6 +276,7 @@ export function keyboardShortcutTokenLabel(token: KeyboardShortcutToken): string
     f12: () => TOKEN_LABELS.f12,
     g: () => TOKEN_LABELS.g,
     k: () => TOKEN_LABELS.k,
+    r: () => TOKEN_LABELS.r,
     v: () => TOKEN_LABELS.v,
   } satisfies Readonly<Record<KeyboardShortcutToken, () => string>>
   return labels[token]()
@@ -305,6 +319,7 @@ const matchesBinding = (event: KeyboardEvent, binding: readonly KeyboardShortcut
   return Option.exists(key, (token) => {
     let expectedKey: string = token
     if (token === "slash") expectedKey = "/"
+    if (token === "digit") return /^[1-9]$/.test(event.key)
     return event.key.toLowerCase() === expectedKey
   })
 }

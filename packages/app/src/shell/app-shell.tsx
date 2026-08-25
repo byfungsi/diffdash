@@ -1115,6 +1115,14 @@ export function AppShell() {
   const effectiveActiveActivity = effectiveProjectLocation?.activityId ?? null
   const showProjectShell =
     appState?.onboardingCompleted === true && effectiveProjectLocation !== null
+  useKeyboardShortcut(
+    "navigation.selectRibbonActivity",
+    (event) => {
+      const activity = projectActivitiesRef.current[Number.parseInt(event.key, 10) - 1]
+      if (activity !== undefined) updateProjectActivity(activity.id)
+    },
+    { enabled: showProjectShell },
+  )
   const commandLabel = effectiveSelectedRepo?.displayIdentity ?? "DiffDash"
   const canNavigateBack =
     appState?.onboardingCompleted === true && canNavigateHistoryBack(navigationHistory)
