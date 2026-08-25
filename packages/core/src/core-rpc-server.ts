@@ -29,6 +29,7 @@ import {
   coreStateDeliveryRpcHandlersWithRuntimeLayer,
 } from "./core-state-delivery-rpc-handlers"
 import { coreApplicationRpcHandlersLayer } from "./core-application-rpc-handlers"
+import { coreCodeWorkspaceFileRpcHandlersLayer } from "./core-code-workspace-file-rpc-handlers"
 import { coreProgressiveReviewRpcHandlersWithRuntimeLayer } from "./core-review-session-rpc-handlers"
 import { coreProgressiveReviewRpcAdmissionLayer } from "./core-review-session-rpc-admission"
 import { coreRpcAdmissionLayer } from "./core-rpc-admission"
@@ -57,6 +58,7 @@ export const coreApplicationRpcServerLayer = (
       Layer.mergeAll(
         coreControlRpcHandlersLayer,
         coreApplicationRpcHandlersLayer,
+        coreCodeWorkspaceFileRpcHandlersLayer,
         coreBusinessRpcHandlersWithRuntimeLayer,
         coreAppStateUpdateRpcHandlersWithRuntimeLayer,
         coreWalkthroughRpcHandlersWithRuntimeLayer,

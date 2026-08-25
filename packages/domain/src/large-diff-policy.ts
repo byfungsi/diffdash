@@ -6,6 +6,9 @@ export const VERY_LARGE_DIFF_CHANGED_LINE_THRESHOLD = 20_000
 /** Patch-text threshold after which a diff is treated as very large. */
 export const VERY_LARGE_DIFF_CHARACTER_THRESHOLD = 2_000_000
 
+/** Source-text threshold after which Code avoids whole-file syntax highlighting. */
+export const VERY_LARGE_SOURCE_FILE_CHARACTER_THRESHOLD = 2_000_000
+
 /** Returns the added-plus-deleted line count represented by a parsed file. */
 export const changedLineCount = (file: Pick<ParsedDiffFile, "additions" | "deletions">) =>
   file.additions + file.deletions
@@ -16,6 +19,10 @@ export const isVeryLargeDiffFile = (
 ) =>
   changedLineCount(file) > VERY_LARGE_DIFF_CHANGED_LINE_THRESHOLD ||
   file.patch.length > VERY_LARGE_DIFF_CHARACTER_THRESHOLD
+
+/** Determines whether one source file should avoid whole-file syntax highlighting. */
+export const isVeryLargeSourceFile = (contents: string) =>
+  contents.length > VERY_LARGE_SOURCE_FILE_CHARACTER_THRESHOLD
 
 /** Determines whether aggregate review size requires sampled walkthrough generation. */
 export const isVeryLargeDiff = (

@@ -90,6 +90,7 @@ export const REVIEW_PROJECT_SURFACE: ProjectSurfaceContribution = {
     order: 100,
     component: ProjectedActivityMainPane,
   },
+  keepMountedAfterVisit: true,
   component: ReviewExtensionSurface,
 }
 

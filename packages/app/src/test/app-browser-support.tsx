@@ -7405,14 +7405,21 @@ scenario("homeToReview", async () => {
     expect(button).toBeDefined()
     return button
   })
+  const retainedReviewPane = document.querySelector<HTMLElement>(
+    "[data-review-diff-scroll-container]",
+  )
+  expect(retainedReviewPane).not.toBeNull()
+  if (retainedReviewPane !== null) retainedReviewPane.scrollTop = 137
+  const retainedReviewScrollTop = retainedReviewPane?.scrollTop ?? 0
+  const reviewSnapshotCount = calls.getHostedReviewSnapshot.mock.calls.length
   openCodeButton?.click()
   await vi.waitFor(() => {
     expect(calls.openRepositoryFile).not.toHaveBeenCalled()
     expect(document.querySelector('button[aria-label="Code"][aria-pressed="true"]')).not.toBeNull()
     expect(calls.readLocalCheckoutFile).toHaveBeenCalledWith(repo.id, appPath)
-    expect(document.querySelector("diffs-container")?.shadowRoot?.textContent).toContain(
-      'export const app = "DiffDash"',
-    )
+    expect(
+      document.querySelector("[data-code-render-mode] diffs-container")?.shadowRoot?.textContent,
+    ).toContain('export const app = "DiffDash"')
     const persisted = calls.saveProjectWorkspace.mock.calls.at(-1)?.[0]
     expect(persisted?.navigation.contributionId).toBe(codeNavigationContribution.id)
     expect(
@@ -7425,7 +7432,7 @@ scenario("homeToReview", async () => {
 
   const definitionToken = await vi.waitFor(() => {
     const tokens = document
-      .querySelector("diffs-container")
+      .querySelector("[data-code-render-mode] diffs-container")
       ?.shadowRoot?.querySelectorAll<HTMLElement>("[data-char]")
     const token = [...(tokens ?? [])].find((candidate) => candidate.textContent === "app")
     expect(token).toBeDefined()
@@ -7443,9 +7450,9 @@ scenario("homeToReview", async () => {
   await vi.waitFor(() => {
     expect(calls.codeWorkspaceDefinitions).toHaveBeenCalled()
     expect(calls.readLocalCheckoutFile).toHaveBeenCalledWith(repo.id, definitionPath)
-    expect(document.querySelector("diffs-container")?.shadowRoot?.textContent).toContain(
-      'export const definition = "target"',
-    )
+    expect(
+      document.querySelector("[data-code-render-mode] diffs-container")?.shadowRoot?.textContent,
+    ).toContain('export const definition = "target"')
     expect(calls.saveProjectWorkspace).toHaveBeenCalledTimes(persistenceCountBeforeDefinition + 1)
     const persisted = calls.saveProjectWorkspace.mock.calls.at(-1)?.[0]
     expect(persisted?.navigation.contributionId).toBe(codeNavigationContribution.id)
@@ -7460,31 +7467,40 @@ scenario("homeToReview", async () => {
 
   await vi.waitFor(() => {
     expect(calls.readLocalCheckoutFile).toHaveBeenLastCalledWith(repo.id, appPath)
-    expect(document.querySelector("diffs-container")?.shadowRoot?.textContent).toContain(
-      'export const app = "DiffDash"',
-    )
+    expect(
+      document.querySelector("[data-code-render-mode] diffs-container")?.shadowRoot?.textContent,
+    ).toContain('export const app = "DiffDash"')
   })
 
   dispatchSideMouseButton(3)
   await vi.waitFor(() => {
-    expect(document.body.textContent).toContain("Opened PR #51")
+    expect(document.body.textContent).toContain("Approved review #51.")
     expect(document.querySelector('button[aria-label="Files"][aria-pressed="true"]')).not.toBeNull()
+    expect(calls.getHostedReviewSnapshot).toHaveBeenCalledTimes(reviewSnapshotCount)
+    expect(document.querySelector('[data-diff-card-path="src/app.tsx"]')).toHaveAttribute(
+      "data-diff-selected",
+    )
+    expect(
+      document.querySelector<HTMLElement>("[data-review-diff-scroll-container]")?.scrollTop,
+    ).toBe(retainedReviewScrollTop)
   })
 
+  const codeReadCount = calls.readLocalCheckoutFile.mock.calls.length
   dispatchSideMouseButton(4)
   await vi.waitFor(() => {
     expect(document.querySelector('button[aria-label="Code"][aria-pressed="true"]')).not.toBeNull()
-    expect(document.querySelector("diffs-container")?.shadowRoot?.textContent).toContain(
-      'export const app = "DiffDash"',
-    )
+    expect(
+      document.querySelector("[data-code-render-mode] diffs-container")?.shadowRoot?.textContent,
+    ).toContain('export const app = "DiffDash"')
+    expect(calls.readLocalCheckoutFile).toHaveBeenCalledTimes(codeReadCount)
   })
 
   dispatchSideMouseButton(4)
 
   await vi.waitFor(() => {
-    expect(document.querySelector("diffs-container")?.shadowRoot?.textContent).toContain(
-      'export const definition = "target"',
-    )
+    expect(
+      document.querySelector("[data-code-render-mode] diffs-container")?.shadowRoot?.textContent,
+    ).toContain('export const definition = "target"')
     expect(document.querySelector('button[aria-label="Forward"]')).toBeNull()
   })
 

@@ -698,6 +698,16 @@ export const createExternalApplicationRuntime = (
   return {
     start,
     core,
+    codeWorkspaceFiles: {
+      stream: (request) => ({
+        async *[Symbol.asyncIterator]() {
+          const client = await requireClient()
+          yield* Stream.toAsyncIterable(
+            client.streamCodeWorkspaceFile({ ...requestContext(), ...request }),
+          )
+        },
+      }),
+    },
     walkthroughOperations: {
       start: async (input: WalkthroughBridgeStartRequest) => {
         const current = session

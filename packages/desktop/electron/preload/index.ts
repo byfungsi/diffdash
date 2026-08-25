@@ -8,6 +8,7 @@ import {
   type DiffDashE2eDiagnosticsBridgeApi,
 } from "./e2e-review-lifecycle"
 import { createRendererTransport } from "./transport"
+import { readCodeWorkspaceFileStream } from "./code-workspace-file-stream"
 
 const transport = createRendererTransport({
   invoke: (channel, request) => ipcRenderer.invoke(channel, request),
@@ -86,7 +87,8 @@ const api: DiffDashBridgeApi = {
     release: (request) => transport.invoke(InvokeChannel.releaseCodeWorkspace, request),
     listDirectory: (request) => transport.invoke(InvokeChannel.listCodeWorkspaceDirectory, request),
     search: (request) => transport.invoke(InvokeChannel.searchCodeWorkspace, request),
-    readFile: (request) => transport.invoke(InvokeChannel.readCodeWorkspaceFile, request),
+    readFile: (request, registerCancellation) =>
+      readCodeWorkspaceFileStream(ipcRenderer, request, registerCancellation),
     definitions: (request) => transport.invoke(InvokeChannel.codeWorkspaceDefinitions, request),
     references: (request) => transport.invoke(InvokeChannel.codeWorkspaceReferences, request),
     changes: (request) => transport.invoke(InvokeChannel.codeWorkspaceChanges, request),

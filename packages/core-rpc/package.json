@@ -8,6 +8,7 @@
     "./admission": "./src/admission.ts",
     "./application-rpc": "./src/application-rpc.ts",
     "./business": "./src/business.ts",
+    "./code-workspace-rpc": "./src/code-workspace-rpc.ts",
     "./control": "./src/control.ts",
     "./event": "./src/event.ts",
     "./event-rpc": "./src/event-rpc.ts",

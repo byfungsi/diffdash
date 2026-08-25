@@ -332,9 +332,10 @@ export const CodeScreen = ({
     }
     const ready = readyWorkspace.value
     let requestActive = true
+    const fileRead = new AbortController()
     setFile(FileState.loading({ path: selectedPath }))
     setWorkspaceLineChanges(HashMap.empty())
-    void runRendererPromise(workspaces.readFile(ready.lease.id, selectedPath))
+    void runRendererPromise(workspaces.readFile(ready.lease.id, selectedPath), fileRead.signal)
       .then((result) => {
         if (requestActive) {
           setFile(
@@ -375,6 +376,7 @@ export const CodeScreen = ({
     }
     return () => {
       requestActive = false
+      fileRead.abort()
     }
   }, [readyWorkspace, requiresLocalCheckout, selectedPath, workspaces])
 

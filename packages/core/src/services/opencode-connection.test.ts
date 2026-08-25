@@ -30,6 +30,16 @@ const directory = RepositoryCheckoutPath.make("/workspace")
 const projectId = ReviewProjectId.make("project")
 const sessionResponse = JSON.stringify({ data: { id: sessionId, location: { directory } } })
 const unavailablePlan = JSON.stringify({ _tag: "AgentNotFoundError" })
+const promptResponse = JSON.stringify({
+  data: {
+    id: "msg_example",
+    sessionID: sessionId,
+    timeCreated: 1,
+    type: "user",
+    payload: { text: "accepted" },
+    delivery: "queue",
+  },
+})
 const timestamp = "2026-08-22T00:00:00.000Z"
 const repositoryAt = (path: RepositoryCheckoutPath, id = projectId) =>
   Repo.make({
@@ -187,7 +197,7 @@ describe("OpenCodeConnectionService", () => {
                 "- Is this safe?",
               ].join("\n"),
             })
-            return JSON.stringify({ data: { id: "msg_example", sessionID: sessionId } })
+            return promptResponse
           },
           Get: ({ path }) => (path.startsWith("/api/session/") ? sessionResponse : unavailablePlan),
         }),
@@ -340,7 +350,7 @@ describe("OpenCodeConnectionService", () => {
             expect(decoded.text).toContain('"kind": "local"')
             expect(decoded.text).toContain('"hunkHeader": "@@ -2 +2 @@"')
             expect(decoded.text).toContain('"lineContent": "return value"')
-            return JSON.stringify({ data: { id: "msg_example", sessionID: sessionId } })
+            return promptResponse
           },
         }),
       ),

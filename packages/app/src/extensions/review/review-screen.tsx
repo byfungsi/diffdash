@@ -28,6 +28,7 @@ import { ReviewActivityPaneProvider } from "./review-activity-panes"
 
 /** Inputs supplied by the project host to the trusted Review extension surface. */
 export interface ReviewScreenProps {
+  readonly active: boolean
   readonly activeActivity: ProjectWorkspaceActivityId
   readonly activities: readonly OwnedExtensionContribution<ProjectActivityContribution>[]
   readonly detailEnvironment: ReviewDetailEnvironment
@@ -45,6 +46,7 @@ export interface ReviewScreenProps {
 
 /** Branches once over normalized selection and directly composes ready review detail. */
 export const ReviewScreen = ({
+  active,
   activeActivity,
   activities,
   detailEnvironment,
@@ -83,6 +85,7 @@ export const ReviewScreen = ({
     return (
       <ReadyReviewScreen
         key={readySelection.value.sourceKey}
+        active={active}
         activeActivity={activeActivity}
         activities={activities}
         detailEnvironment={detailEnvironment}
@@ -154,6 +157,7 @@ export const ReviewScreen = ({
 }
 
 const ReadyReviewScreen = ({
+  active,
   activeActivity,
   activities,
   detailEnvironment,
@@ -164,6 +168,7 @@ const ReadyReviewScreen = ({
   operations,
   onActiveActivityChange,
 }: {
+  readonly active: boolean
   readonly activeActivity: ProjectWorkspaceActivityId
   readonly activities: readonly OwnedExtensionContribution<ProjectActivityContribution>[]
   readonly detailEnvironment: ReviewDetailEnvironment
@@ -237,6 +242,7 @@ const ReadyReviewScreen = ({
 
   return (
     <ReviewDetailView
+      active={active}
       activeActivity={activeActivity}
       activities={activities}
       environment={detailEnvironment}

@@ -108,6 +108,10 @@ const RawPromptResponse = Schema.Struct({
   data: Schema.Struct({
     id: Schema.String.pipe(Schema.check(Schema.isPattern(/^msg_/u))),
     sessionID: OpenCodeSessionSummary.fields.id,
+    timeCreated: Schema.Number,
+    type: Schema.Literal("user"),
+    payload: Schema.Struct({ text: Schema.String }),
+    delivery: Schema.Literals(["steer", "queue"]),
   }),
 })
 const AgentSwitchBody = Schema.Struct({ agent: Schema.Literal("plan") })

@@ -47,6 +47,7 @@ import type {
 } from "./ai-connection"
 import type { AnalyticsEvent } from "./analytics"
 import type { AppUpdateState } from "./app-update"
+import type { CodeWorkspaceFileStreamCancellationRegistrar } from "./code-workspace-stream"
 import type { CliNavigationCommand } from "./cli-navigation"
 import type {
   CodeWorkspaceDirectoryPage,
@@ -295,7 +296,16 @@ type BridgeApiMember<Value> = Value extends (
         ? { readonly [Key in keyof Value]: BridgeApiMember<Value[Key]> }
         : Value
 
-/** Electron bridge variant wrapping invoke results and event notifications. */
-export type DiffDashBridgeApi = {
+type MappedDiffDashBridgeApi = {
   readonly [Key in keyof DiffDashApi]: BridgeApiMember<DiffDashApi[Key]>
+}
+
+/** Electron bridge variant wrapping invoke results and exposing stream cancellation. */
+export type DiffDashBridgeApi = Omit<MappedDiffDashBridgeApi, "codeWorkspace"> & {
+  readonly codeWorkspace: Omit<MappedDiffDashBridgeApi["codeWorkspace"], "readFile"> & {
+    readonly readFile: (
+      request: ReadCodeWorkspaceFileRequest,
+      registerCancellation?: CodeWorkspaceFileStreamCancellationRegistrar,
+    ) => Promise<RendererBridgeResult<CodeWorkspaceFileReadResult>>
+  }
 }

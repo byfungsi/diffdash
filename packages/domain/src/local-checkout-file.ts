@@ -2,8 +2,11 @@ import { Schema } from "effect"
 
 import { RepositoryRelativePath } from "./repository-path"
 
-/** Maximum source-file bytes returned through the renderer bridge. */
-export const LOCAL_CHECKOUT_FILE_MAX_BYTES = 256 * 1_024
+/** Maximum source-file bytes accepted by the Code viewer. */
+export const LOCAL_CHECKOUT_FILE_MAX_BYTES = 16 * 1_024 * 1_024
+
+/** Maximum bytes emitted by one streamed checkout-file chunk. */
+export const LOCAL_CHECKOUT_FILE_CHUNK_BYTES = 256 * 1_024
 
 /** Maximum aggregate Git filename bytes accepted from one checkout listing. */
 export const LOCAL_CHECKOUT_FILE_LIST_MAX_BYTES = 384 * 1_024
@@ -65,6 +68,20 @@ export const LocalCheckoutFileReadRejectionReason = Schema.Literals([
 
 /** Recoverable reason a checkout file was not returned. */
 export type LocalCheckoutFileReadRejectionReason = typeof LocalCheckoutFileReadRejectionReason.Type
+
+/** Expected failure while securely streaming one local checkout file. */
+export class LocalCheckoutFileReadError extends Schema.TaggedError<LocalCheckoutFileReadError>()(
+  "LocalCheckoutFileReadError",
+  { path: RepositoryRelativePath, reason: LocalCheckoutFileReadRejectionReason },
+) {}
+
+/** One bounded binary chunk from a validated local checkout file. */
+export class LocalCheckoutFileChunk extends Schema.Class<LocalCheckoutFileChunk>(
+  "LocalCheckoutFileChunk",
+)({
+  path: RepositoryRelativePath,
+  bytes: Schema.Uint8Array,
+}) {}
 
 /** Result of reading one repository-relative path from a local checkout. */
 export const LocalCheckoutFileReadResult = Schema.TaggedUnion({

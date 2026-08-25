@@ -1516,6 +1516,11 @@ const testRuntime = (message: string): ApplicationRuntime => {
   return {
     start: async () => undefined,
     dispose: async () => undefined,
+    codeWorkspaceFiles: {
+      stream: () => ({
+        async *[Symbol.asyncIterator]() {},
+      }),
+    },
     core: {
       analyticsCapture: reject,
       analyticsStart: reject,

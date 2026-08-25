@@ -14,7 +14,7 @@ import { InvokeChannel } from "@diffdash/protocol/channels"
 import { Context, Effect, Layer } from "effect"
 
 import { PreloadClient } from "./preload-client"
-import { invokePreload, type RendererApiError } from "./renderer-api-error"
+import { invokePreload, invokePreloadCancelable, type RendererApiError } from "./renderer-api-error"
 
 /** Renderer capability for one leased, isolated project Code workspace. */
 export class CodeWorkspace extends Context.Service<
@@ -94,8 +94,8 @@ export const codeWorkspaceLayer = Layer.effect(
         ),
       ),
       readFile: Effect.fn("CodeWorkspace.readFile")((leaseId, path) =>
-        invokePreload(InvokeChannel.readCodeWorkspaceFile, () =>
-          api.codeWorkspace.readFile({ leaseId, path }),
+        invokePreloadCancelable(InvokeChannel.readCodeWorkspaceFile, (registerCancellation) =>
+          api.codeWorkspace.readFile({ leaseId, path }, registerCancellation),
         ),
       ),
       definitions: Effect.fn("CodeWorkspace.definitions")((leaseId, path, position) =>

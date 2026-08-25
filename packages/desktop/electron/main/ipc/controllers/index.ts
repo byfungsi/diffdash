@@ -16,6 +16,7 @@ import { defineSettingsHandlers } from "./settings"
 import { defineThreadHandlers } from "./threads"
 import { defineUpdateHandlers } from "./updates"
 import { defineWalkthroughHandlers } from "./walkthroughs"
+import { installCodeWorkspaceFileStreamController } from "./code-workspace-file-stream"
 
 /** Defines the complete protocol handler set before one atomic registry installation. */
 export const defineIpcHandlers = (
@@ -71,6 +72,7 @@ export const installIpcControllers = (
     configuration,
   )
   handlers.install()
+  installCodeWorkspaceFileStreamController(runtime, rendererSecurityPolicy)
   startUpdaterLifecycle(
     updater,
     electronUpdaterLifecycleHost,

@@ -47,6 +47,7 @@ import {
 import { AnalyticsEvent } from "./analytics"
 import { AppUpdateState } from "./app-update"
 import { EventChannel, InvokeChannel } from "./channels"
+import { CODE_WORKSPACE_FILE_STREAM_MAX_BYTES } from "./code-workspace-stream"
 import { E2eReviewLifecycleDiagnostics, E2eReviewLifecycleHold } from "./e2e-review-lifecycle"
 import { CliNavigationCommand, NAVIGATION_COMMAND_DRAIN_LIMIT } from "./cli-navigation"
 import {
@@ -504,7 +505,10 @@ export const InvokeContract = {
     InvokeChannel.readCodeWorkspaceFile,
     ReadCodeWorkspaceFileRequest,
     CodeWorkspaceFileReadResult,
-    { maxRequestBytes: 8 * KIB, maxResponseBytes: 640 * KIB },
+    {
+      maxRequestBytes: 8 * KIB,
+      maxResponseBytes: 2 * CODE_WORKSPACE_FILE_STREAM_MAX_BYTES + 32 * KIB,
+    },
   ),
   [InvokeChannel.codeWorkspaceDefinitions]: defineInvoke(
     InvokeChannel.codeWorkspaceDefinitions,

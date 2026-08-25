@@ -23,6 +23,7 @@ import { CoreLifecycle, coreLifecycleLayer } from "./core-lifecycle"
 import { CoreRuntimeServices } from "./core-runtime-services"
 import { ReviewLifecycleDiagnostics } from "./review-lifecycle-diagnostics"
 import { ReviewContextError } from "./services/git-provider"
+import { OpenCodeConnectionError } from "./services/opencode-connection"
 
 const identity = {
   applicationInstanceId: ApplicationInstanceId.make("app-application-rpc"),
@@ -133,6 +134,29 @@ describe("Core application RPC handlers admission", () => {
     })
     expect(JSON.stringify(failure)).not.toContain("Sensitive process output")
     expect(JSON.stringify(failure)).not.toContain("Internal fallback detail")
+  })
+
+  it("preserves safe OpenCode failure details without exposing the cause", () => {
+    const failure = makeCoreApplicationOperationFailure(
+      CoreMethod.submitComment,
+      request,
+      OpenCodeConnectionError.make({
+        operation: "forwardComment",
+        code: "OPENCODE_CONNECTION_FAILED",
+        safeMessage: "Reconnect this OpenCode session before forwarding comments.",
+        cause: new Error("Sensitive OpenCode service output"),
+      }),
+    )
+
+    expect(failure).toMatchObject({
+      _tag: "CoreApplicationFailure",
+      ...request,
+      method: "CommentSubmission.submit",
+      code: "OPENCODE_CONNECTION_FAILED",
+      retryClass: "userAction",
+      safeMessage: "Reconnect this OpenCode session before forwarding comments.",
+    })
+    expect(JSON.stringify(failure)).not.toContain("Sensitive OpenCode service output")
   })
 
   it.effect("rejects requests until Core is ready without invoking the method", () =>

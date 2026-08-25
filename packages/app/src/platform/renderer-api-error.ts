@@ -7,6 +7,10 @@ import {
 import { Cause, Effect, Queue, Result, Schema, Stream } from "effect"
 
 import type { EventChannel, InvokeChannel } from "@diffdash/protocol/channels"
+import type {
+  CodeWorkspaceFileStreamCancellation,
+  CodeWorkspaceFileStreamCancellationRegistrar,
+} from "@diffdash/protocol/code-workspace-stream"
 import {
   bridgeResultSchema,
   eventPayloadSchema,
@@ -25,15 +29,35 @@ export const invokePreload = <Channel extends InvokeChannel, Value>(
   channel: Channel,
   invoke: () => Promise<Value>,
 ): Effect.Effect<InvokeResponse<Channel>, RendererApiError> =>
-  Effect.tryPromise({
-    try: invoke,
-    catch: (error) => rendererApiError(channel, error),
-  }).pipe(
-    Effect.flatMap((response) =>
-      Schema.decodeUnknownEffect(boundaryBridgeResultSchema)(response).pipe(
-        Effect.mapError(() => invalidRendererResponse(channel)),
-      ),
-    ),
+  invokePreloadCancelable(channel, () => invoke())
+
+/** Invokes one preload operation and runs its registered cancellation on Effect interruption. */
+export const invokePreloadCancelable = <Channel extends InvokeChannel, Value>(
+  channel: Channel,
+  invoke: (registerCancellation: CodeWorkspaceFileStreamCancellationRegistrar) => Promise<Value>,
+): Effect.Effect<InvokeResponse<Channel>, RendererApiError> =>
+  Effect.callback<InvokeResponse<Channel>, RendererApiError>((resume) => {
+    let cancel: CodeWorkspaceFileStreamCancellation = () => undefined
+    const registerCancellation: CodeWorkspaceFileStreamCancellationRegistrar = (current) => {
+      cancel = current
+    }
+    try {
+      void invoke(registerCancellation).then(
+        (response) => resume(decodeInvokeResponse(channel, response)),
+        (error) => resume(Effect.fail(rendererApiError(channel, error))),
+      )
+    } catch (error) {
+      resume(Effect.fail(rendererApiError(channel, error)))
+    }
+    return Effect.sync(() => cancel())
+  })
+
+const decodeInvokeResponse = <Channel extends InvokeChannel, Value>(
+  channel: Channel,
+  response: Value,
+): Effect.Effect<InvokeResponse<Channel>, RendererApiError> =>
+  Schema.decodeUnknownEffect(boundaryBridgeResultSchema)(response).pipe(
+    Effect.mapError(() => invalidRendererResponse(channel)),
     Effect.flatMap((result) =>
       boundaryBridgeResultSchema.match(result, {
         Failure: (failure) => {
