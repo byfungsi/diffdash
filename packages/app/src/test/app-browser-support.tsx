@@ -1135,6 +1135,7 @@ type AppBrowserScenarioId =
   | "projectStateRestoration"
   | "ribbonShortcuts"
   | "cleanProjectReviews"
+  | "cleanSelectedLocalReview"
   | "failedProjectReviews"
   | "reviewNavigationLifecycle"
   | "reviewCommentsConnectionScope"
@@ -2751,6 +2752,53 @@ scenario("cleanProjectReviews", async () => {
   await vi.waitFor(() => {
     expect(document.querySelector('button[aria-label="Files"][aria-pressed="true"]')).not.toBeNull()
     expect(document.body.textContent).toContain("No changed files in this review")
+  })
+})
+
+scenario("cleanSelectedLocalReview", async () => {
+  const localRepo = linkedRepo(staleLocalFavoriteRepo, localReview.rootPath)
+  const persisted = ProjectWorkspaceState.make({
+    projectId: localRepo.id,
+    activeSurface: "review",
+    activeActivity: PROJECT_WORKSPACE_REVIEWS_ACTIVITY_ID,
+    navigation: {
+      contributionId: reviewNavigationContribution.id,
+      location: encodeReviewNavigationState({
+        selectedReview: Option.some({
+          kind: "localDiff",
+          target: workingTreeReviewTarget(localReview.rootPath),
+        }),
+      }),
+    },
+    updatedAt: "2026-08-25T00:00:00.000Z",
+  })
+  const calls = installDiffDashApi({
+    projectWorkspaceState: persisted,
+    repositories: [localRepo],
+    pullRequests: [],
+    localReviewDiff: LocalReviewDiff.make({
+      ...localDiff,
+      diff: "",
+      diffHash: ReviewDiffIdentity.make(
+        "0000000000000000000000000000000000000000000000000000000000000000",
+      ),
+    }),
+  })
+  renderApp()
+
+  const projectButton = await vi.waitFor(() => {
+    const button = document.querySelector<HTMLButtonElement>('button[aria-label^="Open project "]')
+    expect(button).not.toBeNull()
+    return button
+  })
+  projectButton?.click()
+  await vi.waitFor(() => {
+    expect(document.body.textContent).toContain("No changed files in this review")
+    expect(document.body.textContent).toContain("Clean working tree")
+    expect(document.body.textContent).toContain("This is a local-only project")
+    expect(document.body.textContent).not.toContain("Checking working tree...")
+    expect(document.body.textContent).not.toContain("One review source is still loading")
+    expect(calls.acquireLocalReviewSnapshot).toHaveBeenCalledOnce()
   })
 })
 

@@ -77,6 +77,11 @@ describe("App shell browser interactions", () => {
     await appBrowserScenario("cleanProjectReviews")()
   })
 
+  it("settles the working-tree source when restoring a clean selected local review", async () => {
+    expect.hasAssertions()
+    await appBrowserScenario("cleanSelectedLocalReview")()
+  })
+
   it("does not render an empty hosted state when the provider fails", async () => {
     expect.hasAssertions()
     await appBrowserScenario("failedProjectReviews")()

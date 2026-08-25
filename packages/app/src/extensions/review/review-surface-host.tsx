@@ -37,10 +37,7 @@ import { agentRouteAvailable } from "@/settings/agent-selection"
 import { useCaptureAnalytics } from "@/shared/analytics"
 import { useKeyboardShortcut } from "@/shell/keyboard-shortcuts"
 import { createCodeFileNavigationState } from "../code/code-navigation"
-import {
-  PROJECT_WORKSPACE_FILES_ACTIVITY_ID,
-  PROJECT_WORKSPACE_REVIEWS_ACTIVITY_ID,
-} from "./review-identities"
+import { PROJECT_WORKSPACE_FILES_ACTIVITY_ID } from "./review-identities"
 
 /** Registered Review surface entrypoint resolved from the trusted extension registry. */
 export const ReviewExtensionSurface = () => {
@@ -80,9 +77,7 @@ export const ReviewExtensionSurface = () => {
   const pullRequestsResult = useAtomValue(repoPullRequestsAtom)
   const refreshPullRequests = useAtomRefresh(repoPullRequestsAtom)
   const workingTreeAtom = localReviewManifestAtom(
-    !host.workspaceRestoring &&
-      host.activeActivity === PROJECT_WORKSPACE_REVIEWS_ACTIVITY_ID &&
-      Option.isNone(selectedReview)
+    active && !host.workspaceRestoring
       ? Option.match(Option.fromNullishOr(host.repo.localPath), {
           onNone: () => "",
           onSome: (localPath) => serializeLocalReviewAtomKey(workingTreeReviewTarget(localPath)),
