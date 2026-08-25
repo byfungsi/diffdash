@@ -403,6 +403,9 @@ export const CodeScreen = ({
     enabled: active,
     priority: 10,
   })
+  useKeyboardShortcut("code.reload", () => setReloadVersion((value) => value + 1), {
+    enabled: active && activeActivity === surfaceContribution.defaultActivityId,
+  })
 
   const searchPage = (query: string, offset: number, append: boolean) => {
     if (Option.isNone(readyWorkspace)) return

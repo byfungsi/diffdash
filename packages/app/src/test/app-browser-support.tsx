@@ -1133,6 +1133,7 @@ type AppBrowserScenarioId =
   | "projectReviewFailureRecovery"
   | "projectRestoreRace"
   | "projectStateRestoration"
+  | "ribbonShortcuts"
   | "cleanProjectReviews"
   | "failedProjectReviews"
   | "reviewNavigationLifecycle"
@@ -2225,6 +2226,18 @@ scenario("codeRibbon", async () => {
     ?.click()
   await vi.waitFor(() => expect(calls.listLocalCheckoutFiles.mock.calls.length).toBeGreaterThan(3))
 
+  const workspaceOpenCount = calls.openCodeWorkspace.mock.calls.length
+  const reloadShortcut = dispatchKeyboardShortcut("r", {
+    ctrlKey: !isMacPlatform(),
+    metaKey: isMacPlatform(),
+  })
+  expect(reloadShortcut.defaultPrevented).toBe(true)
+  await vi.waitFor(() =>
+    expect(calls.openCodeWorkspace.mock.calls.length).toBeGreaterThan(workspaceOpenCount),
+  )
+  const reloadedWorkspaceOpenCount = calls.openCodeWorkspace.mock.calls.length
+  const reloadedWorkspaceReleaseCount = calls.releaseCodeWorkspace.mock.calls.length
+
   document.querySelector<HTMLButtonElement>('button[aria-label="Reviews"]')?.click()
   await vi.waitFor(() => {
     const reviewsButton = document.querySelector(
@@ -2238,8 +2251,8 @@ scenario("codeRibbon", async () => {
     const codeButton = document.querySelector('button[aria-label="Code"][aria-pressed="true"]')
     expect(codeButton).not.toBeNull()
     expect(document.activeElement).toBe(codeButton)
-    expect(calls.openCodeWorkspace).toHaveBeenCalledTimes(2)
-    expect(calls.releaseCodeWorkspace).toHaveBeenCalledTimes(1)
+    expect(calls.openCodeWorkspace).toHaveBeenCalledTimes(reloadedWorkspaceOpenCount)
+    expect(calls.releaseCodeWorkspace).toHaveBeenCalledTimes(reloadedWorkspaceReleaseCount)
   })
 
   document.querySelector<HTMLButtonElement>('button[aria-label="Comments"]')?.click()
@@ -2255,7 +2268,7 @@ scenario("codeRibbon", async () => {
         activeActivity: REVIEW_COMMENTS_ACTIVITY_ID,
       }),
     )
-    expect(calls.releaseCodeWorkspace).toHaveBeenCalledTimes(1)
+    expect(calls.releaseCodeWorkspace).toHaveBeenCalledTimes(reloadedWorkspaceReleaseCount)
     expect(document.querySelector("diffs-container")?.shadowRoot?.textContent).toContain(
       'export const app = "DiffDash"',
     )
@@ -2274,7 +2287,52 @@ scenario("codeRibbon", async () => {
     expect(document.body.textContent).toContain("Code comments in DiffDash are not supported yet")
   })
   await waitForAnimationFrames(2)
-  expect(calls.openCodeWorkspace).toHaveBeenCalledTimes(2)
+  expect(calls.openCodeWorkspace).toHaveBeenCalledTimes(reloadedWorkspaceOpenCount)
+})
+
+scenario("ribbonShortcuts", async () => {
+  const calls = installDiffDashApi({ repositories: [linkedRepo(repo, "/workspace/diffdash")] })
+  renderApp()
+  await openDefaultProject()
+
+  const activityButtons = [
+    ...document.querySelectorAll<HTMLButtonElement>(
+      "[data-review-activity-rail] [data-project-activity-id]",
+    ),
+  ]
+  const targetIndex = activityButtons.findIndex((button) => button.ariaPressed !== "true")
+  const targetActivityId = activityButtons[targetIndex]?.dataset.projectActivityId
+  if (targetIndex < 0 || targetIndex >= 9 || targetActivityId === undefined) {
+    throw new Error("Ribbon shortcut test requires an inactive activity in the first nine items")
+  }
+
+  const selectShortcut = dispatchKeyboardShortcut(String(targetIndex + 1), {
+    ctrlKey: !isMacPlatform(),
+    metaKey: isMacPlatform(),
+  })
+  expect(selectShortcut.defaultPrevented).toBe(true)
+  await vi.waitFor(() => {
+    const selected = [
+      ...document.querySelectorAll<HTMLButtonElement>(
+        "[data-review-activity-rail] [data-project-activity-id]",
+      ),
+    ].find((button) => button.dataset.projectActivityId === targetActivityId)
+    expect(selected?.ariaPressed).toBe("true")
+    expect(calls.saveProjectWorkspace).toHaveBeenLastCalledWith(
+      expect.objectContaining({ activeActivity: targetActivityId }),
+    )
+  })
+
+  expect(activityButtons.length).toBeLessThan(9)
+  const unavailableShortcut = dispatchKeyboardShortcut("9", {
+    ctrlKey: !isMacPlatform(),
+    metaKey: isMacPlatform(),
+  })
+  expect(unavailableShortcut.defaultPrevented).toBe(true)
+  const selectedActivity = document.querySelector<HTMLButtonElement>(
+    '[data-review-activity-rail] [data-project-activity-id][aria-pressed="true"]',
+  )
+  expect(selectedActivity?.dataset.projectActivityId).toBe(targetActivityId)
 })
 
 scenario("codeRibbonLink", async () => {
