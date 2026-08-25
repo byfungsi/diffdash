@@ -1,4 +1,4 @@
-import { Array as EffectArray, Order } from "effect"
+import { Array as EffectArray, HashMap, Option, Order } from "effect"
 import {
   createContext,
   type ReactNode,
@@ -72,8 +72,8 @@ export const useReviewDiffContributionHost = (
   >
 } => {
   const [registrations, setRegistrations] = useState<
-    ReadonlyMap<string, RegisteredReviewDiffContribution>
-  >(new Map())
+    HashMap.HashMap<string, RegisteredReviewDiffContribution>
+  >(HashMap.empty)
   const register = useCallback(
     (key: string, id: string, order: number, output: ReviewDiffContributionOutput) => {
       const registration: RegisteredReviewDiffContribution = {
@@ -83,25 +83,37 @@ export const useReviewDiffContributionHost = (
         output,
         token: {},
       }
-      setRegistrations((current) => new Map(current).set(key, registration))
+      setRegistrations((current) => HashMap.set(current, key, registration))
       return () =>
         setRegistrations((current) => {
-          if (current.get(key)?.token !== registration.token) return current
-          const next = new Map(current)
-          next.delete(key)
-          return next
+          const currentRegistration = HashMap.get(current, key)
+          if (!Option.exists(currentRegistration, ({ token }) => token === registration.token)) {
+            return current
+          }
+          return HashMap.remove(current, key)
         })
     },
     [],
   )
   const update = useCallback((key: string, output: ReviewDiffContributionOutput) => {
     setRegistrations((current) => {
-      const registration = current.get(key)
-      if (registration === undefined || registration.output === output) return current
-      return new Map(current).set(key, { ...registration, output })
+      return Option.match(HashMap.get(current, key), {
+        onNone: () => current,
+        onSome: (registration) =>
+          registration.output === output
+            ? current
+            : HashMap.set(current, key, { ...registration, output }),
+      })
     })
   }, [])
-  const ordered = EffectArray.sort([...registrations.values()], contributionOrder)
+  const ordered = useMemo(
+    () =>
+      EffectArray.sort(
+        Array.from(registrations, ([, registration]) => registration),
+        contributionOrder,
+      ),
+    [registrations],
+  )
   const scopeKey = JSON.stringify([
     props.projectId,
     props.target,
@@ -110,30 +122,32 @@ export const useReviewDiffContributionHost = (
   ])
   const mounts = contributions.map((contribution) => (
     <ReviewDiffContributionScope
-      key={`${contribution.ownerExtensionId}:${contribution.id}:${scopeKey}`}
+      key={`${contribution.ownerExtensionId}:${contribution.id}:${contribution.ownerRegistrationToken.reactKey}:${scopeKey}`}
       contribution={contribution}
       props={props}
       register={register}
       update={update}
     />
   ))
-  const outputs = ordered.map(({ id, output }) => ({ id, output }))
-  const semantic = {
-    activeLineAnchor:
-      outputs.find(({ output }) => output.activeLineAnchor !== null)?.output.activeLineAnchor ??
-      null,
-    details: outputs.flatMap(({ output }) => output.details),
-    annotations: (file, navigationAnchor) =>
-      outputs.flatMap(({ output }) => output.annotations(file, navigationAnchor)),
-    activateLine: (file, side, lineNumber) =>
-      outputs.some(({ output }) => output.activateLine(file, side, lineNumber)),
-    annotationsRendered: (card) => {
-      for (const { output } of outputs) output.annotationsRendered(card)
-    },
-  } satisfies Pick<
-    ReviewDiffContributionOutput,
-    "activeLineAnchor" | "details" | "annotations" | "activateLine" | "annotationsRendered"
-  >
+  const outputs = useMemo(() => ordered.map(({ id, output }) => ({ id, output })), [ordered])
+  const semantic = useMemo(
+    () =>
+      ({
+        activeLineAnchor: Option.firstSomeOf(outputs.map(({ output }) => output.activeLineAnchor)),
+        details: outputs.flatMap(({ output }) => output.details),
+        annotations: (file, navigationAnchor) =>
+          outputs.flatMap(({ output }) => output.annotations(file, navigationAnchor)),
+        activateLine: (file, side, lineNumber) =>
+          outputs.some(({ output }) => output.activateLine(file, side, lineNumber)),
+        annotationsRendered: (card) => {
+          for (const { output } of outputs) output.annotationsRendered(card)
+        },
+      }) satisfies Pick<
+        ReviewDiffContributionOutput,
+        "activeLineAnchor" | "details" | "annotations" | "activateLine" | "annotationsRendered"
+      >,
+    [outputs],
+  )
   return { mounts, outputs, semantic }
 }
 

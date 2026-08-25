@@ -16,6 +16,7 @@ import {
   RunningAgentRun,
 } from "@diffdash/domain/agent-run"
 import { RepositoryRelativePath } from "@diffdash/domain/repository-path"
+import { HashSet, Match, Option } from "effect"
 import {
   CurrentReviewAnchor,
   CompletedAgentReviewThreadMessage,
@@ -353,7 +354,7 @@ describe("review thread UI", () => {
           loading,
           reload,
         })}
-        navigableThreadIds={new Set()}
+        navigableThreadIds={HashSet.empty()}
         state={{ _tag: "list" }}
         onCollapse={() => undefined}
         onOpenDetail={() => undefined}
@@ -509,8 +510,24 @@ const threadDetails = ({
 
 const userOnlyThreadDetails = () => {
   const populated = threadDetails({ pending: false })
-  const initialMessage = populated.messages[0]
-  if (initialMessage?._tag !== "User") throw new Error("Expected an initial user message")
+  const initialMessage = Option.match(Option.fromNullishOr(populated.messages[0]), {
+    onNone: () => {
+      throw new Error("Expected an initial user message")
+    },
+    onSome: (message) =>
+      Match.valueTags(message, {
+        User: (userMessage) => userMessage,
+        Pending: () => {
+          throw new Error("Expected an initial user message")
+        },
+        Completed: () => {
+          throw new Error("Expected an initial user message")
+        },
+        Failed: () => {
+          throw new Error("Expected an initial user message")
+        },
+      }),
+  })
   return ReviewThreadDetails.make({
     thread: populated.thread,
     conversation: [UserReviewTurn.make({ message: initialMessage })],

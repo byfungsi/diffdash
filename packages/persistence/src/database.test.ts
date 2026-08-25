@@ -97,7 +97,8 @@ const WorkspaceStateRow = Schema.Struct({
   repo_id: Schema.String,
   active_surface: Schema.String,
   active_activity: Schema.String,
-  selected_review_target_json: Schema.NullOr(Schema.String),
+  navigation_contribution_id: Schema.String,
+  navigation_location_json: Schema.String,
   updated_at: Schema.String,
 })
 const WorkspaceTableInfoRows = Schema.Array(
@@ -278,6 +279,9 @@ describe("database-node", () => {
         expect(workspaceTable.sql).toContain("REFERENCES repos(id) ON DELETE CASCADE")
         expect(workspaceTable.sql).toContain("active_surface IN ('review', 'code')")
         expect(workspaceTable.sql).toContain("length(active_activity) BETWEEN 1 AND 128")
+        expect(workspaceTable.sql).toContain(
+          "length(CAST(navigation_location_json AS BLOB)) <= 1048576",
+        )
         const localViewedFilesTable = decodeTableSqlRow(
           yield* database.get(
             "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'local_viewed_files'",
@@ -285,7 +289,7 @@ describe("database-node", () => {
         )
         expect(localViewedFilesTable.sql).toContain("'repositoryComparison'")
         expect(decodeUserVersionRow(yield* database.get("PRAGMA user_version")).user_version).toBe(
-          14,
+          16,
         )
       }).pipe(Effect.provide(makeLayer(databasePath)))
     }),
@@ -314,6 +318,7 @@ describe("database-node", () => {
         yield* database.run(
           "DELETE FROM diffdash_capabilities WHERE name = 'project-workspace-activity-selection'",
         )
+        yield* database.run("PRAGMA user_version = 14")
         yield* database.run("DROP TABLE project_workspace_state")
         yield* database.run(`CREATE TABLE project_workspace_state (
           repo_id TEXT PRIMARY KEY REFERENCES repos(id) ON DELETE CASCADE,
@@ -345,11 +350,17 @@ describe("database-node", () => {
         yield* database.run(`INSERT INTO project_workspace_state (
           repo_id, active_ribbon, selected_review_target_json, updated_at
         ) VALUES
-          ('repo-workspace-reviews', 'reviews', NULL, '2026-08-20T00:00:00.000Z'),
-          ('repo-workspace-files', 'files', NULL, '2026-08-20T00:00:00.000Z'),
+          ('repo-workspace-reviews', 'reviews', '{', '2026-08-20T00:00:00.000Z'),
+          ('repo-workspace-files', 'files',
+           '{"kind":"local","rootPath":"/workspace/files","comparison":{"_tag":"workingTree"}}',
+           '2026-08-20T00:00:00.000Z'),
           ('repo-workspace-code', 'code', NULL, '2026-08-20T00:00:00.000Z'),
-          ('repo-workspace-walkthrough', 'walkthrough', NULL, '2026-08-20T00:00:00.000Z'),
-          ('repo-workspace-threads', 'threads', '{"kind":"hosted"}', '2026-08-20T00:00:00.000Z')`)
+          ('repo-workspace-walkthrough', 'walkthrough',
+           '{"kind":"repositoryComparison","repository":{"providerId":"github","namespace":"fungsi","name":"workspace-walkthrough"},"baseRef":"v1","headRef":"v2","baseSha":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","headSha":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","mergeBaseSha":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}',
+           '2026-08-20T00:00:00.000Z'),
+          ('repo-workspace-threads', 'threads',
+           '{"kind":"hosted","review":{"repository":{"providerId":"github","namespace":"fungsi","name":"workspace-threads"},"number":42}}',
+           '2026-08-20T00:00:00.000Z')`)
       }).pipe(Effect.provide(makeLayer(databasePath)))
 
       yield* Effect.gen(function* () {
@@ -374,41 +385,53 @@ describe("database-node", () => {
         expect(migratedSchema).toEqual(freshSchema)
         expect(workspaceTable.sql).toContain("active_surface IN ('review', 'code')")
         expect(workspaceTable.sql).toContain("length(active_activity) BETWEEN 1 AND 128")
+        expect(workspaceTable.sql).toContain(
+          "length(CAST(navigation_location_json AS BLOB)) <= 1048576",
+        )
         expect(workspaceTable.sql).toContain("REFERENCES repos(id) ON DELETE CASCADE")
         expect(workspaceStates).toEqual([
           {
             repo_id: "repo-workspace-code",
             active_surface: "code",
             active_activity: "diffdash.core.code",
-            selected_review_target_json: null,
+            navigation_contribution_id: "diffdash.builtin.code.navigation",
+            navigation_location_json:
+              '{"target":{"_tag":"projectHead","projectId":"repo-workspace-code"},"path":null,"revealRange":null,"fileStatuses":[],"lineChanges":[]}',
             updated_at: "2026-08-20T00:00:00.000Z",
           },
           {
             repo_id: "repo-workspace-files",
             active_surface: "review",
             active_activity: "diffdash.core.files",
-            selected_review_target_json: null,
+            navigation_contribution_id: "diffdash.builtin.review.navigation",
+            navigation_location_json:
+              '{"selectedReview":{"kind":"localDiff","target":{"kind":"local","rootPath":"/workspace/files","comparison":{"_tag":"workingTree"}}}}',
             updated_at: "2026-08-20T00:00:00.000Z",
           },
           {
             repo_id: "repo-workspace-reviews",
             active_surface: "review",
             active_activity: "diffdash.core.reviews",
-            selected_review_target_json: null,
+            navigation_contribution_id: "diffdash.builtin.review.navigation",
+            navigation_location_json: '{"selectedReview":null}',
             updated_at: "2026-08-20T00:00:00.000Z",
           },
           {
             repo_id: "repo-workspace-threads",
             active_surface: "review",
             active_activity: "diffdash.builtin.review-comments.comments",
-            selected_review_target_json: '{"kind":"hosted"}',
+            navigation_contribution_id: "diffdash.builtin.review.navigation",
+            navigation_location_json:
+              '{"selectedReview":{"kind":"hosted","review":{"repository":{"providerId":"github","namespace":"fungsi","name":"workspace-threads"},"number":42}}}',
             updated_at: "2026-08-20T00:00:00.000Z",
           },
           {
             repo_id: "repo-workspace-walkthrough",
             active_surface: "review",
             active_activity: "diffdash.core.walkthrough",
-            selected_review_target_json: null,
+            navigation_contribution_id: "diffdash.builtin.review.navigation",
+            navigation_location_json:
+              '{"selectedReview":{"kind":"repositoryComparison","target":{"kind":"repositoryComparison","repository":{"providerId":"github","namespace":"fungsi","name":"workspace-walkthrough"},"baseRef":"v1","headRef":"v2","baseSha":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","headSha":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","mergeBaseSha":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}}}',
             updated_at: "2026-08-20T00:00:00.000Z",
           },
         ])
@@ -433,6 +456,161 @@ describe("database-node", () => {
             yield* database.get("SELECT COUNT(*) AS count FROM project_workspace_state"),
           ).count,
         ).toBe(4)
+      }).pipe(Effect.provide(makeLayer(databasePath)))
+    }),
+  )
+
+  it.effect("migrates activity-selected Code and malformed Review navigation by owner", () =>
+    Effect.gen(function* () {
+      const databasePath = yield* makeTempDatabasePath
+      yield* Effect.scoped(Effect.void.pipe(Effect.provide(makeLayer(databasePath))))
+
+      yield* Effect.gen(function* () {
+        const database = makeDatabase(yield* SqlClient.SqlClient)
+        yield* database.run("PRAGMA user_version = 14")
+        yield* database.run("DROP TABLE project_workspace_state")
+        yield* database.run(`CREATE TABLE project_workspace_state (
+          repo_id TEXT PRIMARY KEY REFERENCES repos(id) ON DELETE CASCADE,
+          active_surface TEXT NOT NULL CHECK (active_surface IN ('review', 'code')),
+          active_activity TEXT NOT NULL,
+          selected_review_target_json TEXT,
+          updated_at TEXT NOT NULL
+        )`)
+        yield* database.run(`INSERT INTO repos (
+          id, provider, owner, name, remote_url, local_path, is_favorite,
+          last_opened_at, last_synced_at, created_at, updated_at
+        ) VALUES
+          ('repo-activity-code', 'github', 'fungsi', 'activity-code',
+           'https://github.com/fungsi/activity-code', NULL, 0, NULL, NULL,
+           '2026-08-21T00:00:00.000Z', '2026-08-21T00:00:00.000Z'),
+          ('repo-activity-review', 'github', 'fungsi', 'activity-review',
+           'https://github.com/fungsi/activity-review', NULL, 0, NULL, NULL,
+           '2026-08-21T00:00:00.000Z', '2026-08-21T00:00:00.000Z')`)
+        yield* database.run(`INSERT INTO project_workspace_state (
+          repo_id, active_surface, active_activity, selected_review_target_json, updated_at
+        ) VALUES
+          ('repo-activity-code', 'code', 'diffdash.core.code',
+           '{"kind":"hosted","review":{"repository":{"providerId":"github","namespace":"fungsi","name":"activity-code"},"number":7}}',
+           '2026-08-21T00:00:00.000Z'),
+          ('repo-activity-review', 'review', 'diffdash.core.reviews', '{',
+           '2026-08-21T00:00:00.000Z')`)
+      }).pipe(Effect.provide(makeLayer(databasePath)))
+
+      yield* Effect.gen(function* () {
+        const database = makeDatabase(yield* SqlClient.SqlClient)
+        const workspaceStates = Schema.decodeUnknownSync(Schema.Array(WorkspaceStateRow))(
+          yield* database.all("SELECT * FROM project_workspace_state ORDER BY repo_id"),
+        )
+
+        expect(workspaceStates).toEqual([
+          {
+            repo_id: "repo-activity-code",
+            active_surface: "code",
+            active_activity: "diffdash.core.code",
+            navigation_contribution_id: "diffdash.builtin.code.navigation",
+            navigation_location_json:
+              '{"target":{"_tag":"projectHead","projectId":"repo-activity-code"},"path":null,"revealRange":null,"fileStatuses":[],"lineChanges":[]}',
+            updated_at: "2026-08-21T00:00:00.000Z",
+          },
+          {
+            repo_id: "repo-activity-review",
+            active_surface: "review",
+            active_activity: "diffdash.core.reviews",
+            navigation_contribution_id: "diffdash.builtin.review.navigation",
+            navigation_location_json: '{"selectedReview":null}',
+            updated_at: "2026-08-21T00:00:00.000Z",
+          },
+        ])
+      }).pipe(Effect.provide(makeLayer(databasePath)))
+    }),
+  )
+
+  it.effect("migrates version 15 navigation storage to a UTF-8 byte constraint", () =>
+    Effect.gen(function* () {
+      const databasePath = yield* makeTempDatabasePath
+      yield* Effect.scoped(Effect.void.pipe(Effect.provide(makeLayer(databasePath))))
+
+      yield* Effect.gen(function* () {
+        const database = makeDatabase(yield* SqlClient.SqlClient)
+        yield* database.run("DROP TABLE project_workspace_state")
+        yield* database.run(`CREATE TABLE project_workspace_state (
+          repo_id TEXT PRIMARY KEY REFERENCES repos(id) ON DELETE CASCADE,
+          active_surface TEXT NOT NULL CHECK (active_surface IN ('review', 'code')),
+          active_activity TEXT NOT NULL CHECK (length(active_activity) BETWEEN 1 AND 128),
+          navigation_contribution_id TEXT NOT NULL CHECK (
+            length(navigation_contribution_id) BETWEEN 1 AND 128
+          ),
+          navigation_location_json TEXT NOT NULL CHECK (
+            json_valid(navigation_location_json) AND length(navigation_location_json) <= 1048576
+          ),
+          updated_at TEXT NOT NULL
+        )`)
+        yield* database.run(
+          `INSERT INTO repos (
+          id, provider, owner, name, remote_url, local_path, is_favorite,
+          last_opened_at, last_synced_at, created_at, updated_at
+        ) VALUES (?, 'github', 'fungsi', 'utf8-migration', 'https://github.com/fungsi/utf8-migration',
+          NULL, 0, NULL, NULL, ?, ?)`,
+          ["github:fungsi/utf8-migration", "2026-08-25T00:00:00.000Z", "2026-08-25T00:00:00.000Z"],
+        )
+        yield* database.run(
+          `INSERT INTO repos (
+          id, provider, owner, name, remote_url, local_path, is_favorite,
+          last_opened_at, last_synced_at, created_at, updated_at
+        ) VALUES (?, 'github', 'fungsi', 'oversized', 'https://github.com/fungsi/oversized',
+          NULL, 0, NULL, NULL, ?, ?)`,
+          ["github:fungsi/oversized", "2026-08-25T00:00:00.000Z", "2026-08-25T00:00:00.000Z"],
+        )
+        yield* database.run(
+          `INSERT INTO project_workspace_state (
+          repo_id, active_surface, active_activity, navigation_contribution_id,
+          navigation_location_json, updated_at
+        ) VALUES (?, 'review', 'diffdash.core.reviews', 'diffdash.builtin.review.navigation', ?, ?)`,
+          ["github:fungsi/utf8-migration", '{"payload":"🚀"}', "2026-08-25T00:00:00.000Z"],
+        )
+        yield* database.run(
+          `INSERT INTO project_workspace_state (
+          repo_id, active_surface, active_activity, navigation_contribution_id,
+          navigation_location_json, updated_at
+        ) VALUES (?, 'code', 'diffdash.core.code', 'example.stale.navigation', ?, ?)`,
+          [
+            "github:fungsi/oversized",
+            JSON.stringify({ payload: "🚀".repeat(300_000) }),
+            "2026-08-25T00:00:00.000Z",
+          ],
+        )
+        yield* database.run("PRAGMA user_version = 15")
+      }).pipe(Effect.provide(makeLayer(databasePath)))
+
+      yield* Effect.gen(function* () {
+        const database = makeDatabase(yield* SqlClient.SqlClient)
+        const workspaceTable = decodeTableSqlRow(
+          yield* database.get(
+            "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'project_workspace_state'",
+          ),
+        )
+        const states = yield* database.all("SELECT * FROM project_workspace_state ORDER BY repo_id")
+        const oversizedState = Schema.decodeUnknownSync(WorkspaceStateRow)(states[0])
+        const state = Schema.decodeUnknownSync(WorkspaceStateRow)(states[1])
+
+        expect(workspaceTable.sql).toContain(
+          "length(CAST(navigation_location_json AS BLOB)) <= 1048576",
+        )
+        expect(state.navigation_location_json).toBe('{"payload":"🚀"}')
+        expect(oversizedState.navigation_contribution_id).toBe("diffdash.builtin.code.navigation")
+        expect(JSON.parse(oversizedState.navigation_location_json)).toEqual({
+          target: {
+            _tag: "projectHead",
+            projectId: "github:fungsi/oversized",
+          },
+          path: null,
+          revealRange: null,
+          fileStatuses: [],
+          lineChanges: [],
+        })
+        expect(decodeUserVersionRow(yield* database.get("PRAGMA user_version")).user_version).toBe(
+          16,
+        )
       }).pipe(Effect.provide(makeLayer(databasePath)))
     }),
   )
@@ -469,7 +647,7 @@ describe("database-node", () => {
           ),
         ).toEqual({ version: 1 })
         expect(decodeUserVersionRow(yield* database.get("PRAGMA user_version")).user_version).toBe(
-          14,
+          16,
         )
       }).pipe(Effect.provide(makeLayer(databasePath)))
     }),
@@ -588,7 +766,7 @@ describe("database-node", () => {
           ]),
         )
         expect(decodeUserVersionRow(yield* database.get("PRAGMA user_version")).user_version).toBe(
-          14,
+          16,
         )
       }).pipe(Effect.provide(makeLayer(databasePath)))
     }),
@@ -818,7 +996,7 @@ describe("database-node", () => {
       sqlite.exec(
         "CREATE TABLE future_marker (value TEXT NOT NULL); INSERT INTO future_marker VALUES ('preserve-me')",
       )
-      sqlite.exec("PRAGMA user_version = 15")
+      sqlite.exec("PRAGMA user_version = 17")
       sqlite.close()
 
       const result = yield* Effect.result(
@@ -832,12 +1010,12 @@ describe("database-node", () => {
       )
       if (Result.isFailure(result)) {
         expect(String(result.failure.cause)).toContain(
-          "Database schema version 15 is newer than supported version 14",
+          "Database schema version 17 is newer than supported version 16",
         )
       }
 
       const reopened = new DatabaseSync(databasePath, { readOnly: true })
-      expect(reopened.prepare("PRAGMA user_version").get()).toEqual({ user_version: 15 })
+      expect(reopened.prepare("PRAGMA user_version").get()).toEqual({ user_version: 17 })
       expect(reopened.prepare("SELECT value FROM future_marker").get()).toEqual({
         value: "preserve-me",
       })
@@ -873,7 +1051,7 @@ describe("database-node", () => {
       yield* Effect.gen(function* () {
         const database = makeDatabase(yield* SqlClient.SqlClient)
         expect(decodeUserVersionRow(yield* database.get("PRAGMA user_version")).user_version).toBe(
-          14,
+          16,
         )
         const agentRunsSql = decodeTableSqlRow(
           yield* database.get(
@@ -1061,7 +1239,7 @@ describe("database-node", () => {
       yield* Effect.gen(function* () {
         const database = makeDatabase(yield* SqlClient.SqlClient)
         expect(decodeUserVersionRow(yield* database.get("PRAGMA user_version")).user_version).toBe(
-          14,
+          16,
         )
         expect(
           Option.getOrThrow(
@@ -1089,7 +1267,7 @@ describe("database-node", () => {
 
         expect(Option.isNone(memory)).toBe(true)
         expect(decodeUserVersionRow(yield* database.get("PRAGMA user_version")).user_version).toBe(
-          14,
+          16,
         )
       }).pipe(Effect.provide(makeLayer(databasePath)))
     }),
@@ -1108,7 +1286,7 @@ describe("database-node", () => {
 
         expect(Option.isNone(row)).toBe(true)
         expect(decodeUserVersionRow(yield* database.get("PRAGMA user_version")).user_version).toBe(
-          14,
+          16,
         )
       }).pipe(Effect.provide(makeLayer(databasePath)))
     }),

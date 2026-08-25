@@ -8,6 +8,7 @@ import {
   ReviewThreadId,
 } from "@diffdash/domain/review-thread"
 import { describe, expect, it } from "@effect/vitest"
+import { Option } from "effect"
 import {
   lineAnchorIsInFile,
   lineReviewAnchor,
@@ -53,8 +54,7 @@ const details = (id: string, anchor: LineReviewAnchor, status: "active" | "outda
 describe("review thread annotations", () => {
   it("matches only exact current diff content", () => {
     const file = parsedFile()
-    const anchor = lineReviewAnchor(file, "additions", 1)
-    if (anchor === null) throw new Error("Expected added-line anchor")
+    const anchor = Option.getOrThrow(lineReviewAnchor(file, "additions", 1))
     const stale = LineReviewAnchor.make({ ...anchor, lineContent: "stale content" })
 
     expect(lineAnchorIsInFile(anchor, file)).toBe(true)
@@ -65,8 +65,7 @@ describe("review thread annotations", () => {
 
   it("groups active threads on one exact line and excludes stale thread states", () => {
     const file = parsedFile()
-    const anchor = lineReviewAnchor(file, "additions", 1)
-    if (anchor === null) throw new Error("Expected added-line anchor")
+    const anchor = Option.getOrThrow(lineReviewAnchor(file, "additions", 1))
 
     const annotations = reviewThreadAnnotations(
       file,
@@ -75,7 +74,7 @@ describe("review thread annotations", () => {
         details("thread-2", anchor),
         details("thread-3", anchor, "outdated"),
       ],
-      anchor,
+      Option.some(anchor),
     )
 
     expect(annotations).toHaveLength(1)
@@ -85,19 +84,22 @@ describe("review thread annotations", () => {
       "thread-2",
     ])
     expect(annotations[0]?.metadata.expanded).toBe(true)
-    expect(annotations[0]?.metadata.draftAnchor).toBeNull()
+    expect(annotations[0]?.metadata.draftAnchor).toEqual(Option.none())
   })
 
   it("creates an empty draft annotation only for a matching expanded line", () => {
     const file = parsedFile()
-    const anchor = lineReviewAnchor(file, "deletions", 1)
-    if (anchor === null) throw new Error("Expected deleted-line anchor")
+    const anchor = Option.getOrThrow(lineReviewAnchor(file, "deletions", 1))
 
-    expect(reviewThreadAnnotations(file, [], anchor)).toEqual([
+    expect(reviewThreadAnnotations(file, [], Option.some(anchor))).toEqual([
       expect.objectContaining({
         lineNumber: 1,
         side: "deletions",
-        metadata: expect.objectContaining({ details: [], draftAnchor: anchor, expanded: true }),
+        metadata: expect.objectContaining({
+          details: [],
+          draftAnchor: Option.some(anchor),
+          expanded: true,
+        }),
       }),
     ])
   })

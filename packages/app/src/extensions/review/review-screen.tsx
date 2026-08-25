@@ -1,20 +1,17 @@
 /* oxlint-disable eslint/no-underscore-dangle -- Domain unions use Effect-compatible _tag discriminants. */
-import {
-  PROJECT_WORKSPACE_FILES_ACTIVITY_ID,
-  PROJECT_WORKSPACE_REVIEWS_ACTIVITY_ID,
-  PROJECT_WORKSPACE_WALKTHROUGH_ACTIVITY_ID,
-  type ProjectWorkspaceActivityId,
-  REVIEW_COMMENTS_ACTIVITY_ID,
-} from "@diffdash/domain/project-workspace"
+import type { ProjectWorkspaceActivityId } from "@diffdash/domain/project-workspace"
+import type { ReviewProjectId } from "@diffdash/domain/review-identity"
 import type { ReactNode } from "react"
 import { useEffect, useState } from "react"
-import { Match } from "effect"
+import { Match, Option } from "effect"
 
 import type {
   OwnedExtensionContribution,
   ProjectActivityContribution,
+  ProjectSurfaceContribution,
   ReviewDiffContribution,
 } from "@/extensions/extension-registry"
+import { resolveProjectActivityMainPane } from "@/extensions/project-main-pane-resolver"
 import { ProjectWorkspaceFrame } from "@/project-workspace/project-workspace-frame"
 import { Button } from "@/shared/ui/button"
 import { ProjectWorkspaceStatePanel } from "@/shared/ui/project-workspace-state-panel"
@@ -22,101 +19,137 @@ import {
   type ReadyReviewDetailState,
   type ReviewDetailEnvironment,
   ReviewDetailView,
-} from "./review-detail-view"
-import type { ReviewSelectionProjection } from "./review-selection"
-import type { ReviewSourceOperationProjection } from "./use-review-source-operations"
-import { useProgressiveReviewContent } from "./use-progressive-review-content"
-import { useViewedFileMutations } from "./use-viewed-file-mutations"
+} from "@/review/review-detail-view"
+import type { ReviewSelectionProjection } from "@/review/review-selection"
+import type { ReviewSourceOperationProjection } from "@/review/use-review-source-operations"
+import { useProgressiveReviewContent } from "@/review/use-progressive-review-content"
+import { useViewedFileMutations } from "@/review/use-viewed-file-mutations"
+import { ReviewActivityPaneProvider } from "./review-activity-panes"
 
-type ReviewWorkspaceRibbon = "reviews" | "files" | "walkthrough" | "comments"
+/** Inputs supplied by the project host to the trusted Review extension surface. */
+export interface ReviewScreenProps {
+  readonly activeActivity: ProjectWorkspaceActivityId
+  readonly activities: readonly OwnedExtensionContribution<ProjectActivityContribution>[]
+  readonly detailEnvironment: ReviewDetailEnvironment
+  readonly projectId: ReviewProjectId
+  readonly reviewsContext: ReactNode
+  readonly reviewsMain: ReactNode
+  readonly reviewDiffContributions: readonly OwnedExtensionContribution<ReviewDiffContribution>[]
+  readonly selection: ReviewSelectionProjection
+  readonly sourceOperations: ReviewSourceOperationProjection
+  readonly surfaceContribution: OwnedExtensionContribution<ProjectSurfaceContribution>
+  readonly workspaceNotice: Option.Option<string>
+  readonly onActiveActivityChange: (activityId: ProjectWorkspaceActivityId) => void
+  readonly onRetrySelection: () => void
+}
 
 /** Branches once over normalized selection and directly composes ready review detail. */
 export const ReviewScreen = ({
   activeActivity,
   activities,
   detailEnvironment,
+  projectId,
   reviewsContext,
   reviewsMain,
   reviewDiffContributions,
   selection,
   sourceOperations,
+  surfaceContribution,
   workspaceNotice,
   onActiveActivityChange,
   onRetrySelection,
-}: {
-  readonly activeActivity: ProjectWorkspaceActivityId
-  readonly activities: readonly ProjectActivityContribution[]
-  readonly detailEnvironment: ReviewDetailEnvironment
-  readonly reviewsContext: ReactNode
-  readonly reviewsMain: ReactNode
-  readonly reviewDiffContributions: readonly OwnedExtensionContribution<ReviewDiffContribution>[]
-  readonly selection: ReviewSelectionProjection
-  readonly sourceOperations: ReviewSourceOperationProjection
-  readonly workspaceNotice: string | null
-  readonly onActiveActivityChange: (activityId: ProjectWorkspaceActivityId) => void
-  readonly onRetrySelection: () => void
-}) => {
-  const activeRibbon = projectWorkspaceActivityToReviewRibbon(activeActivity)
+}: ReviewScreenProps) => {
+  const activeActivityContribution = activities.find((activity) => activity.id === activeActivity)
+  const activeIsDefault = activeActivity === surfaceContribution.defaultActivityId
+  const activeLabel = activeActivityContribution?.label ?? "Activity"
+  const selectDefaultReviewActivity = () => {
+    const activity = activities.find(
+      (candidate) => candidate.id === surfaceContribution.defaultActivityId,
+    )
+    if (activity !== undefined) onActiveActivityChange(activity.id)
+  }
   const readySelection = Match.valueTags(selection, {
-    ready: (ready) => ready,
-    loading: () => null,
-    failure: () => null,
-    none: () => null,
+    ready: (ready) => Option.some(ready),
+    loading: () => Option.none<Extract<ReviewSelectionProjection, { readonly _tag: "ready" }>>(),
+    failure: () => Option.none<Extract<ReviewSelectionProjection, { readonly _tag: "ready" }>>(),
+    none: () => Option.none<Extract<ReviewSelectionProjection, { readonly _tag: "ready" }>>(),
   })
   const readyOperations = Match.valueTags(sourceOperations, {
-    ready: (ready) => ready,
-    unavailable: () => null,
+    ready: (ready) => Option.some(ready),
+    unavailable: () =>
+      Option.none<Extract<ReviewSourceOperationProjection, { readonly _tag: "ready" }>>(),
   })
-  if (readySelection !== null && readyOperations !== null) {
+  if (Option.isSome(readySelection) && Option.isSome(readyOperations)) {
     return (
       <ReadyReviewScreen
-        key={readySelection.sourceKey}
+        key={readySelection.value.sourceKey}
         activeActivity={activeActivity}
         activities={activities}
         detailEnvironment={detailEnvironment}
         reviewsContext={reviewsContext}
         reviewDiffContributions={reviewDiffContributions}
-        selection={readySelection}
-        operations={readyOperations.operations}
+        selection={readySelection.value}
+        surfaceContribution={surfaceContribution}
+        operations={readyOperations.value.operations}
         onActiveActivityChange={onActiveActivityChange}
       />
     )
   }
 
-  const context =
-    activeRibbon === "reviews" ? (
-      reviewsContext
-    ) : (
-      <WorkspaceContextUnavailable
-        ribbon={activeRibbon}
-        selection={selection}
-        onReviews={() => onActiveActivityChange(PROJECT_WORKSPACE_REVIEWS_ACTIVITY_ID)}
-      />
-    )
+  const unavailableContext = (
+    <WorkspaceContextUnavailable
+      activityLabel={activeLabel}
+      selection={selection}
+      onReviews={selectDefaultReviewActivity}
+    />
+  )
+  const context = activeIsDefault ? reviewsContext : unavailableContext
+  const activityPaneProps = {
+    location: { projectId, surface: "review" as const },
+    paneHost: {
+      contextOpen: detailEnvironment.sidebarExpanded,
+      detailOpen: false,
+      contextActions: null,
+      openContext: () => detailEnvironment.onSidebarExpandedChange(true),
+      openDetail: () => undefined,
+      closeContext: () => detailEnvironment.onSidebarExpandedChange(false),
+      closeDetail: () => undefined,
+      showMain: () => detailEnvironment.onSidebarExpandedChange(false),
+    },
+  }
 
   return (
-    <ProjectWorkspaceFrame
-      activeActivity={activeActivity}
-      activities={activities}
-      context={context}
-      contextWidth={detailEnvironment.sidebarWidth}
-      main={
-        <WorkspaceMainState
-          activeRibbon={activeRibbon}
-          notice={workspaceNotice}
-          reviewsMain={reviewsMain}
-          selection={selection}
-          onRetry={onRetrySelection}
-          onReviews={() => onActiveActivityChange(PROJECT_WORKSPACE_REVIEWS_ACTIVITY_ID)}
-        />
-      }
-      sidebarExpanded={detailEnvironment.sidebarExpanded}
-      threadDetailWidth={detailEnvironment.threadDetailWidth}
-      onActiveActivityChange={onActiveActivityChange}
-      onSidebarExpandedChange={detailEnvironment.onSidebarExpandedChange}
-      onSidebarWidthChange={detailEnvironment.onSidebarWidthChange}
-      onThreadDetailWidthChange={detailEnvironment.onThreadDetailWidthChange}
-    />
+    <ReviewActivityPaneProvider reviewsContext={reviewsContext} filesContext={unavailableContext}>
+      <ProjectWorkspaceFrame
+        activeActivity={activeActivity}
+        activities={activities}
+        context={context}
+        contextWidth={detailEnvironment.sidebarWidth}
+        main={resolveProjectActivityMainPane({
+          activeActivityId: activeActivity,
+          activities,
+          activityPaneProps,
+          baseMain: (
+            <WorkspaceMainState
+              activeIsDefault={activeIsDefault}
+              activityLabel={activeLabel}
+              notice={workspaceNotice}
+              reviewsMain={reviewsMain}
+              selection={selection}
+              onRetry={onRetrySelection}
+              onReviews={selectDefaultReviewActivity}
+            />
+          ),
+          surface: surfaceContribution,
+        })}
+        sidebarExpanded={detailEnvironment.sidebarExpanded}
+        threadDetailWidth={detailEnvironment.threadDetailWidth}
+        onActiveActivityChange={onActiveActivityChange}
+        onSidebarExpandedChange={detailEnvironment.onSidebarExpandedChange}
+        onSidebarWidthChange={detailEnvironment.onSidebarWidthChange}
+        onThreadDetailWidthChange={detailEnvironment.onThreadDetailWidthChange}
+      />
+    </ReviewActivityPaneProvider>
   )
 }
 
@@ -127,28 +160,32 @@ const ReadyReviewScreen = ({
   reviewsContext,
   reviewDiffContributions,
   selection,
+  surfaceContribution,
   operations,
   onActiveActivityChange,
 }: {
   readonly activeActivity: ProjectWorkspaceActivityId
-  readonly activities: readonly ProjectActivityContribution[]
+  readonly activities: readonly OwnedExtensionContribution<ProjectActivityContribution>[]
   readonly detailEnvironment: ReviewDetailEnvironment
   readonly reviewsContext: ReactNode
   readonly reviewDiffContributions: readonly OwnedExtensionContribution<ReviewDiffContribution>[]
   readonly selection: Extract<ReviewSelectionProjection, { readonly _tag: "ready" }>
+  readonly surfaceContribution: OwnedExtensionContribution<ProjectSurfaceContribution>
   readonly operations: ReadyReviewDetailState["sourceOperations"]
   readonly onActiveActivityChange: (activityId: ProjectWorkspaceActivityId) => void
 }) => {
   const content = useProgressiveReviewContent(selection.review.manifest, operations.refresh)
   const inventory = content.inventory
   const viewedFiles = useViewedFileMutations(selection, operations, inventory)
-  const [selectedPath, setSelectedPath] = useState<string | null>(inventory[0]?.path ?? null)
+  const [selectedPath, setSelectedPath] = useState<Option.Option<string>>(() =>
+    Option.fromNullishOr(inventory[0]?.path),
+  )
   const [isReloading, setIsReloading] = useState(false)
 
   useEffect(() => {
     setSelectedPath((path) => {
-      if (path !== null && inventory.some((file) => file.path === path)) return path
-      return inventory[0]?.path ?? null
+      if (Option.exists(path, (value) => inventory.some((file) => file.path === value))) return path
+      return Option.fromNullishOr(inventory[0]?.path)
     })
   }, [inventory])
 
@@ -159,9 +196,24 @@ const ReadyReviewScreen = ({
   }, [isReloading, selection.refreshing, selection.review.manifest.snapshotId])
 
   const emptyInventoryStatus = Match.valueTags(selection.review, {
-    hosted: () => null,
-    local: (review) => `No local changes in ${review.manifest.detail.repoName}`,
-    repositoryComparison: () => null,
+    hosted: () => Option.none<string>(),
+    local: (review) => Option.some(`No local changes in ${review.manifest.detail.repoName}`),
+    repositoryComparison: () => Option.none<string>(),
+  })
+
+  const status = Option.match(Option.fromNullishOr(viewedFiles.error), {
+    onSome: (error) => error,
+    onNone: () => {
+      if (
+        Option.isSome(emptyInventoryStatus) &&
+        !content.inventoryLoading &&
+        content.inventoryError === null &&
+        inventory.length === 0
+      ) {
+        return emptyInventoryStatus.value
+      }
+      return selection.status
+    },
   })
 
   const ready: ReadyReviewDetailState = {
@@ -172,20 +224,13 @@ const ReadyReviewScreen = ({
     viewedFileKeys: viewedFiles.viewedFileKeys,
     selectedPath,
     isReloading: isReloading || selection.refreshing,
-    status:
-      viewedFiles.error ??
-      (emptyInventoryStatus !== null &&
-      !content.inventoryLoading &&
-      content.inventoryError === null &&
-      inventory.length === 0
-        ? emptyInventoryStatus
-        : selection.status),
-    operationError: viewedFiles.error,
+    status,
+    operationError: Option.fromNullishOr(viewedFiles.error),
     onReload: () => {
       setIsReloading(true)
       operations.refresh()
     },
-    onSelectPath: setSelectedPath,
+    onSelectPath: (path) => setSelectedPath(Option.some(path)),
     onSetViewed: viewedFiles.setFileViewed,
     onToggleExpanded: viewedFiles.toggleExpanded,
   }
@@ -198,35 +243,40 @@ const ReadyReviewScreen = ({
       ready={ready}
       reviewsContext={reviewsContext}
       reviewDiffContributions={reviewDiffContributions}
+      surfaceContribution={surfaceContribution}
       onActiveActivityChange={onActiveActivityChange}
     />
   )
 }
 
 const WorkspaceMainState = ({
-  activeRibbon,
+  activeIsDefault,
+  activityLabel,
   notice,
   reviewsMain,
   selection,
   onRetry,
   onReviews,
 }: {
-  readonly activeRibbon: ReviewWorkspaceRibbon
-  readonly notice: string | null
+  readonly activeIsDefault: boolean
+  readonly activityLabel: string
+  readonly notice: Option.Option<string>
   readonly reviewsMain: ReactNode
   readonly selection: ReviewSelectionProjection
   readonly onRetry: () => void
   readonly onReviews: () => void
 }) => {
-  const noticePanel =
-    notice === null ? null : (
+  const noticePanel = Option.match(notice, {
+    onNone: () => null,
+    onSome: (message) => (
       <ProjectWorkspaceStatePanel
         announcement="alert"
-        description={notice}
+        description={message}
         title="Workspace notice"
         tone="warning"
       />
-    )
+    ),
+  })
 
   return Match.valueTags(selection, {
     loading: (loading) => (
@@ -270,10 +320,9 @@ const WorkspaceMainState = ({
         />
       </WorkspaceMainLayout>
     ),
-    none: () =>
-      activeRibbon === "reviews" ? (
-        <>{reviewsMain}</>
-      ) : (
+    none: () => {
+      if (activeIsDefault) return <>{reviewsMain}</>
+      return (
         <WorkspaceMainLayout notice={noticePanel}>
           <ProjectWorkspaceStatePanel
             actions={
@@ -281,12 +330,13 @@ const WorkspaceMainState = ({
                 Go to Reviews
               </Button>
             }
-            description={`${ribbonLabel(activeRibbon)} becomes available after selecting a review.`}
-            title={`${ribbonLabel(activeRibbon)} unavailable`}
+            description={`${activityLabel} becomes available after selecting a review.`}
+            title={`${activityLabel} unavailable`}
             tone="neutral"
           />
         </WorkspaceMainLayout>
-      ),
+      )
+    },
   })
 }
 
@@ -304,17 +354,17 @@ const WorkspaceMainLayout = ({
 )
 
 const WorkspaceContextUnavailable = ({
-  ribbon,
+  activityLabel,
   selection,
   onReviews,
 }: {
-  readonly ribbon: Exclude<ReviewWorkspaceRibbon, "reviews">
+  readonly activityLabel: string
   readonly selection: ReviewSelectionProjection
   readonly onReviews: () => void
 }) => {
   const state = Match.valueTags(selection, {
     none: () => ({
-      description: `Select a review before opening ${ribbonLabel(ribbon).toLowerCase()}.`,
+      description: `Select a review before opening ${activityLabel.toLowerCase()}.`,
       title: "No review selected",
       tone: "neutral" as const,
     }),
@@ -349,22 +399,4 @@ const WorkspaceContextUnavailable = ({
       />
     </aside>
   )
-}
-
-const ribbonLabel = (ribbon: ReviewWorkspaceRibbon) =>
-  ribbon === "files"
-    ? "Files"
-    : ribbon === "walkthrough"
-      ? "Walkthrough"
-      : ribbon === "comments"
-        ? "Comments"
-        : "Reviews"
-
-const projectWorkspaceActivityToReviewRibbon = (
-  activityId: ProjectWorkspaceActivityId,
-): ReviewWorkspaceRibbon => {
-  if (activityId === PROJECT_WORKSPACE_FILES_ACTIVITY_ID) return "files"
-  if (activityId === PROJECT_WORKSPACE_WALKTHROUGH_ACTIVITY_ID) return "walkthrough"
-  if (activityId === REVIEW_COMMENTS_ACTIVITY_ID) return "comments"
-  return "reviews"
 }

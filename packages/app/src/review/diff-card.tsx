@@ -3,7 +3,6 @@ import type {
   ReviewDiffContributionAnnotation,
   ReviewDiffContributionOutput,
 } from "@/extensions/extension-registry"
-import type { ReviewThreadAnchor } from "@diffdash/domain/review-thread"
 import { isVeryLargeDiffFile } from "@diffdash/domain/large-diff-policy"
 import { makeReviewDiffIdentity } from "@diffdash/domain/review-identity"
 import { Check, ChevronDown, ChevronRight, Copy } from "lucide-react"
@@ -76,7 +75,7 @@ export const OpenDiffCard = ({
 }: {
   readonly diffOptions: FileDiffOptions<ReviewDiffCardAnnotation["metadata"]>
   readonly annotationProvider: ReviewDiffContributionOutput["annotations"]
-  readonly navigationAnchor: ReviewThreadAnchor | null
+  readonly navigationAnchor: Parameters<ReviewDiffContributionOutput["annotations"]>[1]
   readonly expanded: boolean
   readonly file: ParsedDiffFile
   readonly forceExpanded: boolean

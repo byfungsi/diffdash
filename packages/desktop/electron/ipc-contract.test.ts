@@ -21,7 +21,8 @@ import {
 } from "@diffdash/domain/language"
 import { AgentProviderFailure } from "@diffdash/domain/provider-failure"
 import {
-  PROJECT_WORKSPACE_FILES_ACTIVITY_ID,
+  ProjectWorkspaceActivityId,
+  ProjectWorkspaceNavigationContributionId,
   ProjectWorkspaceState,
   ProjectWorkspaceStateInput,
 } from "@diffdash/domain/project-workspace"
@@ -102,6 +103,8 @@ import { sendProtocolEvent } from "./main/ipc/transport"
 import { createShutdown } from "./main/shutdown"
 import type { RendererIpc } from "./preload/transport"
 import { createRendererTransport } from "./preload/transport"
+
+const filesActivityId = ProjectWorkspaceActivityId.make("diffdash.fixture.files")
 
 describe("IPC contract", () => {
   it("has one schema contract for every protocol-owned invoke channel", () => {
@@ -399,8 +402,13 @@ describe("IPC contract", () => {
     const input = ProjectWorkspaceStateInput.make({
       projectId: ReviewProjectId.make("project"),
       activeSurface: "review",
-      activeActivity: PROJECT_WORKSPACE_FILES_ACTIVITY_ID,
-      selectedReviewTarget: null,
+      activeActivity: filesActivityId,
+      navigation: {
+        contributionId: ProjectWorkspaceNavigationContributionId.make(
+          "diffdash.fixture.navigation",
+        ),
+        location: { selectedReview: null },
+      },
     })
 
     await transport.invoke(InvokeChannel.projectWorkspaceSave, {
@@ -411,8 +419,11 @@ describe("IPC contract", () => {
       input: {
         projectId: "project",
         activeSurface: "review",
-        activeActivity: "diffdash.core.files",
-        selectedReviewTarget: null,
+        activeActivity: filesActivityId,
+        navigation: {
+          contributionId: "diffdash.fixture.navigation",
+          location: { selectedReview: null },
+        },
       },
     })
   })
@@ -1177,8 +1188,13 @@ describe("IPC contract", () => {
     const state = ProjectWorkspaceState.make({
       projectId: ReviewProjectId.make("project"),
       activeSurface: "review",
-      activeActivity: PROJECT_WORKSPACE_FILES_ACTIVITY_ID,
-      selectedReviewTarget: null,
+      activeActivity: filesActivityId,
+      navigation: {
+        contributionId: ProjectWorkspaceNavigationContributionId.make(
+          "diffdash.fixture.navigation",
+        ),
+        location: { transformed: ["opaque", null] },
+      },
       updatedAt: "2026-08-23T00:00:00.000Z",
     })
     const coreCodec = Schema.toCodecJson(ProjectWorkspaceGetRpc.successSchema)
@@ -1200,13 +1216,29 @@ describe("IPC contract", () => {
       value: {
         projectId: "project",
         activeSurface: "review",
-        activeActivity: "diffdash.core.files",
-        selectedReviewTarget: null,
+        activeActivity: filesActivityId,
+        navigation: {
+          contributionId: "diffdash.fixture.navigation",
+          location: { transformed: ["opaque", null] },
+        },
         updatedAt: "2026-08-23T00:00:00.000Z",
       },
     })
     expect(mainOwnedState).toBeInstanceOf(ProjectWorkspaceState)
     expect(envelope.value).toBeInstanceOf(ProjectWorkspaceState)
+  })
+
+  it("preserves missing project workspace state as null at renderer IPC", async () => {
+    const host = hostIpc()
+    const registry = new IpcControllerRegistry(testRendererSecurityPolicy(), host.api, [
+      InvokeChannel.projectWorkspaceGet,
+    ])
+    registry.define(InvokeChannel.projectWorkspaceGet, async () => null)
+    registry.install()
+
+    const response = await host.handler?.(trustedEvent(), { projectId: "project" })
+
+    expect(response).toEqual({ _tag: "Success", value: null })
   })
 
   it("rejects response values that are not owned by the main-process schema runtime", async () => {
@@ -1353,8 +1385,11 @@ describe("IPC contract", () => {
       input: {
         projectId: "project",
         activeSurface: "review",
-        activeActivity: "diffdash.core.files",
-        selectedReviewTarget: null,
+        activeActivity: filesActivityId,
+        navigation: {
+          contributionId: "diffdash.fixture.navigation",
+          location: { selectedReview: null },
+        },
       },
     })
 
@@ -1363,7 +1398,7 @@ describe("IPC contract", () => {
       _tag: "Success",
       value: {
         activeSurface: "review",
-        activeActivity: "diffdash.core.files",
+        activeActivity: filesActivityId,
       },
     })
   })

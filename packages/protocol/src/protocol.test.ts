@@ -332,7 +332,10 @@ describe("protocol boundaries", () => {
         projectId: "",
         activeSurface: "review",
         activeActivity: "diffdash.core.files",
-        selectedReviewTarget: null,
+        navigation: {
+          contributionId: "diffdash.fixture.navigation",
+          location: { selectedReview: null },
+        },
       },
     })
     const relativeCheckout = Schema.decodeUnknownResult(

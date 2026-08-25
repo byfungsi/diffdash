@@ -1,5 +1,5 @@
 import { AISettings, DEFAULT_AI_SETTINGS } from "@diffdash/domain/ai-settings"
-import { useEffect, useState } from "react"
+import { createContext, type ReactNode, use, useEffect, useState } from "react"
 import { runRendererPromise, useRendererPreferences } from "@/platform/renderer-runtime"
 import { formatError } from "@/shared/errors"
 import {
@@ -9,7 +9,7 @@ import {
 } from "./settings-mutation"
 
 /** State and operations for renderer settings persistence. */
-type SettingsMutationController = {
+export interface SettingsMutationController {
   readonly settings: AISettings
   readonly status: string | null
   readonly update: (
@@ -18,7 +18,9 @@ type SettingsMutationController = {
 }
 
 /** Loads settings and coordinates optimistic serialized updates with last-write-wins rendering. */
-export const useSettingsMutation = (): SettingsMutationController => {
+const SettingsMutationContext = createContext<SettingsMutationController | null>(null)
+
+const useSettingsMutationController = (): SettingsMutationController => {
   const preferences = useRendererPreferences()
   const [settings, setSettings] = useState<AISettings>(DEFAULT_AI_SETTINGS)
   const [status, setStatus] = useState<string | null>(null)
@@ -56,4 +58,17 @@ export const useSettingsMutation = (): SettingsMutationController => {
   }, [coordinator, preferences])
 
   return { settings, status, update: coordinator.update }
+}
+
+/** Owns the renderer's single optimistic settings mutation coordinator. */
+export const SettingsMutationProvider = ({ children }: { readonly children: ReactNode }) => {
+  const controller = useSettingsMutationController()
+  return <SettingsMutationContext value={controller}>{children}</SettingsMutationContext>
+}
+
+/** Reads the application-scoped renderer settings mutation capability. */
+export const useSettingsMutation = (): SettingsMutationController => {
+  const controller = use(SettingsMutationContext)
+  if (controller === null) throw new Error("SettingsMutationProvider is unavailable")
+  return controller
 }

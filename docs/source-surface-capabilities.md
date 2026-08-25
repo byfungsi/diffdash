@@ -44,6 +44,29 @@ transitions, and fallback when a saved contribution is unavailable. Ordered proj
 contributions keep extension state scoped to the active project without hard-coding a feature at the
 application root.
 
+The same registry has a generic global-navigation lane. Its required host-owned Home contribution
+provides the non-removable fallback, while every global owner provides its own opaque state
+validation, equality, component, and feature policy. AppShell supplies global components only generic
+project-opening and navigation-history controls; it does not build or inject Home content. AppShell and history resolve both global and project
+destinations through registered contribution identity and registration generation.
+The durable project destination uses the same ownership boundary: persistence stores the registered
+navigation contribution identity and bounded encoded JSON without interpreting it. Review owns the
+Review codec, Code owns the Code codec, and a preferred project-opening provider can persist either
+surface only by dispatching through the registry's owner-neutral codec contract.
+
+Review (`diffdash.builtin.review`) and Code (`diffdash.builtin.code`) own the two project source
+surface registrations. Reviews and Files belong to Review; Code owns its repository-tree context and
+source-viewer main slots; Walkthrough (`diffdash.builtin.walkthrough`) owns its activity slot; Review
+Comments owns its context and selected-thread detail slots. Surface ownership is exclusive and
+duplicate registration fails before a partial registry generation becomes visible.
+
+All contribution kinds owned by an extension are removed atomically. The host then resolves a
+registered default for the retained surface or another available surface, rewrites stale navigation
+history entries without adding a new entry, persists the repaired workspace once, and unmounts an
+unavailable source surface so leases and subscriptions are released. This is the deletion invariant
+that built-ins must satisfy before the same semantic contracts can be exposed through a future
+out-of-process user extension API.
+
 Trusted built-ins mount React adapters in-process. Those adapters are application implementation
 details, not public extension contracts. Their source contributions exchange semantic values:
 

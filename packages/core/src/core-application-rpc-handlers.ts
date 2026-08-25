@@ -425,7 +425,7 @@ export const coreApplicationRpcHandlersLayer = CoreApplicationRpcs.toLayer(
       "ProjectWorkspace.get": (request: ApplicationRpcRequest<"ProjectWorkspace.get">) =>
         handle("ProjectWorkspace.get", request, (methods) =>
           methods["ProjectWorkspace.get"](request, {}),
-        ),
+        ).pipe(Effect.map(Option.getOrNull)),
       "ProjectWorkspace.save": (request: ApplicationRpcRequest<"ProjectWorkspace.save">) =>
         handle("ProjectWorkspace.save", request, (methods) =>
           methods["ProjectWorkspace.save"](request, {}),

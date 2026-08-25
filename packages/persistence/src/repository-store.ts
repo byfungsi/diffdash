@@ -1034,14 +1034,17 @@ const moveAliasRows = (
 
     yield* database.run(
       `INSERT INTO project_workspace_state (
-       repo_id, active_surface, active_activity, selected_review_target_json, updated_at
-     )
-     SELECT ?, active_surface, active_activity, selected_review_target_json, updated_at
+        repo_id, active_surface, active_activity,
+        navigation_contribution_id, navigation_location_json, updated_at
+      )
+      SELECT ?, active_surface, active_activity,
+             navigation_contribution_id, navigation_location_json, updated_at
      FROM project_workspace_state WHERE repo_id = ?
      ON CONFLICT(repo_id) DO UPDATE SET
        active_surface = excluded.active_surface,
        active_activity = excluded.active_activity,
-       selected_review_target_json = excluded.selected_review_target_json,
+        navigation_contribution_id = excluded.navigation_contribution_id,
+        navigation_location_json = excluded.navigation_location_json,
        updated_at = excluded.updated_at
      WHERE excluded.updated_at > project_workspace_state.updated_at`,
       [canonicalProjectId, aliasProjectId],

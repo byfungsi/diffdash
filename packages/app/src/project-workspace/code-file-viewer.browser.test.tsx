@@ -28,6 +28,7 @@ import {
 } from "@/extensions/review-comments/review-comments-extension"
 import { ReviewCommentsCodeSourceContribution } from "@/extensions/review-comments/code-comments-contribution"
 import { ReviewCommentsStateProvider } from "@/extensions/review-comments/review-comments-provider"
+import { TrustedExtensionRegistrationToken } from "@/extensions/extension-registry"
 import { CodeFileViewer } from "./code-file-viewer"
 
 let root: Root | null = null
@@ -38,6 +39,7 @@ const CODE_COMMENT_CONTRIBUTIONS = [
     id: REVIEW_COMMENTS_CODE_SOURCE_ID,
     order: 500,
     ownerExtensionId: REVIEW_COMMENTS_EXTENSION_ID,
+    ownerRegistrationToken: new TrustedExtensionRegistrationToken(),
     component: ReviewCommentsCodeSourceContribution,
   },
 ]

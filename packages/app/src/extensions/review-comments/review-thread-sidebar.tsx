@@ -1,6 +1,6 @@
 /* oxlint-disable eslint/no-underscore-dangle -- Sidebar states use the project-standard tagged-union discriminant. */
 import type { ReviewThreadDetails, ReviewThreadId } from "@diffdash/domain/review-thread"
-import { Match } from "effect"
+import { HashSet, Match } from "effect"
 import { Loader2, X } from "lucide-react"
 import { type ReactNode, type RefObject, useEffect, useEffectEvent, useRef } from "react"
 import { Badge } from "@/shared/ui/badge"
@@ -38,7 +38,7 @@ export function ReviewThreadListPane({
   readonly buttonRefs: ReviewThreadButtonRefs
   readonly children?: ReactNode
   readonly controller: ReviewThreadsController
-  readonly navigableThreadIds: ReadonlySet<ReviewThreadId>
+  readonly navigableThreadIds: HashSet.HashSet<ReviewThreadId>
   readonly state: ReviewThreadSidebarState
   readonly onCollapse: () => void
   readonly onOpenDetail: (threadId: ReviewThreadId) => void
@@ -101,7 +101,7 @@ export function ReviewThreadListPane({
           {controller.details.map((details) => {
             const { thread } = details
             const anchor = thread.displayAnchor
-            const navigable = navigableThreadIds.has(thread.id)
+            const navigable = HashSet.has(navigableThreadIds, thread.id)
             const previousRevision = reviewThreadIsPreviousRevision(thread)
             const selected = Match.valueTags(state, {
               detail: ({ threadId }) => threadId === thread.id,
@@ -187,7 +187,7 @@ export function ReviewThreadDetailPane({
 }: {
   readonly buttonRefs: ReviewThreadButtonRefs
   readonly controller: ReviewThreadsController
-  readonly navigableThreadIds: ReadonlySet<ReviewThreadId>
+  readonly navigableThreadIds: HashSet.HashSet<ReviewThreadId>
   readonly state: ReviewThreadSidebarState
   readonly onClose: (threadId: ReviewThreadId) => void
   readonly onGoToDiff: (details: ReviewThreadDetails) => void
@@ -252,7 +252,7 @@ export function ReviewThreadDetailPane({
         </div>
         <div className="text-muted-foreground mt-0.5 flex min-h-5 flex-wrap items-center gap-1.5 text-caption">
           <span>{reviewLineLabel(selectedAnchor)}</span>
-          {navigableThreadIds.has(selectedDetails.thread.id) ? (
+          {HashSet.has(navigableThreadIds, selectedDetails.thread.id) ? (
             <Button
               type="button"
               size="xs"

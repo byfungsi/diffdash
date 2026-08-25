@@ -1,30 +1,21 @@
 import type { ProjectWorkspaceActivityId } from "@diffdash/domain/project-workspace"
-import { Code2, Files, GitPullRequest, MessageSquare, Sparkles } from "lucide-react"
 import type { Ref } from "react"
 
 import type {
+  OwnedExtensionContribution,
   ProjectActivityContribution,
-  ProjectActivityIcon,
 } from "@/extensions/extension-registry"
 import { Button } from "@/shared/ui/button"
 import { cn } from "@/shared/utils"
 
 interface ProjectActivityNavigationProps {
   readonly activeActivity: ProjectWorkspaceActivityId
-  readonly activities: readonly ProjectActivityContribution[]
+  readonly activities: readonly OwnedExtensionContribution<ProjectActivityContribution>[]
   readonly buttonRefs?: ReadonlyMap<ProjectWorkspaceActivityId, Ref<HTMLButtonElement>>
   readonly placement: "rail" | "bottom"
   readonly sidebarExpanded: boolean
-  readonly onSelect: (activity: ProjectActivityContribution) => void
+  readonly onSelect: (activity: OwnedExtensionContribution<ProjectActivityContribution>) => void
 }
-
-const activityIcons = {
-  reviews: GitPullRequest,
-  files: Files,
-  code: Code2,
-  walkthrough: Sparkles,
-  comments: MessageSquare,
-} as const satisfies Readonly<Record<ProjectActivityIcon, typeof Files>>
 
 /** Shared project activity rail used before, during, and after review loading. */
 export const ProjectActivityNavigation = ({
@@ -53,11 +44,11 @@ export const ProjectActivityNavigation = ({
       )}
     >
       {activities.map((activity) => {
-        const Icon = activityIcons[activity.icon]
+        const Icon = activity.icon
         const selected = activeActivity === activity.id
         return (
           <Button
-            key={activity.id}
+            key={`${activity.id}:${activity.ownerRegistrationToken.reactKey}`}
             ref={buttonRefs?.get(activity.id)}
             type="button"
             size="icon-lg"
@@ -89,7 +80,7 @@ export const ProjectActivityNavigation = ({
               })
             }}
           >
-            <Icon className="size-6" />
+            <Icon key={activity.ownerRegistrationToken.reactKey} className="size-6" />
             <span className="sr-only">{activity.label}</span>
           </Button>
         )

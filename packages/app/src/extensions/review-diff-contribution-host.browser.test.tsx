@@ -2,6 +2,7 @@ import { LocalReviewTarget, RevisionRangeComparison } from "@diffdash/domain/loc
 import { RepositoryCheckoutPath } from "@diffdash/domain/repository"
 import { RepositoryComparisonRef } from "@diffdash/domain/repository-comparison"
 import { ReviewProjectId, ReviewRevision } from "@diffdash/domain/review-identity"
+import { Option, Result } from "effect"
 import { createRoot, type Root } from "react-dom/client"
 import { useEffect } from "react"
 import { afterEach, describe, expect, it, vi } from "vitest"
@@ -11,8 +12,19 @@ import type {
   ReviewDiffContribution,
   ReviewDiffContributionOutput,
   ReviewDiffContributionProps,
+  TrustedBuiltInExtension,
 } from "@/extensions/extension-registry"
-import { TrustedExtensionContributionId, TrustedExtensionId } from "@/extensions/extension-registry"
+import {
+  makeTrustedExtensionRegistry,
+  TrustedExtensionContributionId,
+  TrustedExtensionId,
+  TrustedExtensionRegistrationToken,
+} from "@/extensions/extension-registry"
+import {
+  TrustedExtensionRegistryProvider,
+  useTrustedExtensionRegistry,
+} from "@/extensions/extension-registry-context"
+import { reviewExtension } from "@/extensions/review/review-extension"
 import {
   useReviewDiffContributionHost,
   useReviewDiffContributionRegistration,
@@ -76,12 +88,56 @@ describe("ReviewDiffContributionHost", () => {
       id: TrustedExtensionContributionId.make("example.review.scoped"),
       order: 100,
       ownerExtensionId: TrustedExtensionId.make("example.review.extension"),
+      ownerRegistrationToken: new TrustedExtensionRegistrationToken(),
       component: ScopedContribution,
     }
     render([scoped])
     await vi.waitFor(() => expect(mounted).toHaveBeenCalledOnce())
 
     render([scoped], { ...props, headRevision: ReviewRevision.make("3".repeat(40)) })
+    await vi.waitFor(() => {
+      expect(unmounted).toHaveBeenCalledOnce()
+      expect(mounted).toHaveBeenCalledTimes(2)
+    })
+  })
+
+  it("disposes and remounts a contribution across same-tick registration turnover", async () => {
+    const mounted = vi.fn<() => void>()
+    const unmounted = vi.fn<() => void>()
+    const extensionId = TrustedExtensionId.make("example.review.turnover")
+    const turnoverOutput = emptyOutput("turnover")
+    function TurnoverContribution() {
+      useReviewDiffContributionRegistration(turnoverOutput)
+      useEffect(() => {
+        mounted()
+        return unmounted
+      }, [])
+      return null
+    }
+    const extension: TrustedBuiltInExtension = {
+      id: extensionId,
+      reviewDiffContributions: [
+        {
+          id: TrustedExtensionContributionId.make("example.review.turnover.diff"),
+          order: 100,
+          component: TurnoverContribution,
+        },
+      ],
+    }
+    const registry = Result.getOrThrow(makeTrustedExtensionRegistry([reviewExtension, extension]))
+    const container = document.createElement("div")
+    document.body.append(container)
+    root = createRoot(container)
+    root.render(
+      <TrustedExtensionRegistryProvider extensions={[]} registry={registry}>
+        <RegistryHarness />
+      </TrustedExtensionRegistryProvider>,
+    )
+
+    await vi.waitFor(() => expect(mounted).toHaveBeenCalledOnce())
+    expect(registry.unregister(extensionId)).toBe(true)
+    Result.getOrThrow(registry.register(extension))
+
     await vi.waitFor(() => {
       expect(unmounted).toHaveBeenCalledOnce()
       expect(mounted).toHaveBeenCalledTimes(2)
@@ -104,26 +160,21 @@ const contribution = (
     id: TrustedExtensionContributionId.make(id),
     order,
     ownerExtensionId: TrustedExtensionId.make("example.review.extension"),
+    ownerRegistrationToken: new TrustedExtensionRegistrationToken(),
     component: TestReviewContribution,
   }
 }
 
-const emptyOutput = (label: string): ReviewDiffContributionOutput => ({
-  activeLineAnchor: null,
-  details: [],
-  loading: false,
-  listOpen: false,
-  detailOpen: false,
-  annotations: () => [],
-  activateLine: () => false,
-  annotationsRendered: () => undefined,
-  openDetail: () => undefined,
-  revealLine: () => undefined,
-  showList: () => undefined,
-  collapse: () => undefined,
-  renderContextPane: () => <span data-review-output={label}>{label}</span>,
-  renderDetailPane: () => null,
-})
+const emptyOutput = (label: string): ReviewDiffContributionOutput => {
+  void label
+  return {
+    activeLineAnchor: Option.none(),
+    details: [],
+    annotations: () => [],
+    activateLine: () => false,
+    annotationsRendered: () => undefined,
+  }
+}
 
 const Harness = ({
   contributions,
@@ -136,14 +187,8 @@ const Harness = ({
   return (
     <>
       {host.mounts}
-      {host.outputs.map(({ id, output }) => (
-        <div key={id}>
-          {output.renderContextPane({
-            navigableThreadIds: new Set(),
-            settings: null,
-            onCollapse: () => undefined,
-          })}
-        </div>
+      {host.outputs.map(({ id }) => (
+        <span key={id} data-review-output={id.split(".").at(-1)} />
       ))}
       <button
         type="button"
@@ -153,6 +198,11 @@ const Harness = ({
       />
     </>
   )
+}
+
+const RegistryHarness = () => {
+  const { reviewDiffContributions } = useTrustedExtensionRegistry()
+  return <Harness contributions={reviewDiffContributions} reviewProps={props} />
 }
 
 const render = (

@@ -13,7 +13,7 @@ interface DatabaseMigration {
   readonly migrate: (database: Database) => Effect.Effect<void, SqlError | DatabaseError>
 }
 
-const MAX_SUPPORTED_DATABASE_SCHEMA_VERSION = 14
+const MAX_SUPPORTED_DATABASE_SCHEMA_VERSION = 16
 const REPOSITORY_IDENTITY_CAPABILITY = "repository-identity"
 const REPOSITORY_IDENTITY_CAPABILITY_VERSION = 1
 const REVIEW_PROVIDER_FAILURE_CAPABILITY = "review-provider-failure"
@@ -948,6 +948,156 @@ const migrations: readonly DatabaseMigration[] = [
       )
     }),
   },
+  {
+    version: 15,
+    migrate: Effect.fn("DatabaseMigration.15")(function* (database) {
+      if (!(yield* tableExists(database, "project_workspace_state"))) return
+      const columns = yield* tableColumns(database, "project_workspace_state")
+      if (columns.some(({ name }) => name === "navigation_location_json")) return
+      const hasActivitySelection = columns.some(({ name }) => name === "active_surface")
+      const selectionProjection = hasActivitySelection
+        ? "active_surface, active_activity"
+        : `CASE active_ribbon WHEN 'code' THEN 'code' ELSE 'review' END,
+           CASE active_ribbon
+             WHEN 'reviews' THEN 'diffdash.core.reviews'
+             WHEN 'files' THEN 'diffdash.core.files'
+             WHEN 'code' THEN 'diffdash.core.code'
+             WHEN 'walkthrough' THEN 'diffdash.core.walkthrough'
+             WHEN 'threads' THEN 'diffdash.builtin.review-comments.comments'
+           END`
+      yield* executeSqlScript(
+        database,
+        `
+        CREATE TABLE project_workspace_state_navigation_envelope (
+          repo_id TEXT PRIMARY KEY REFERENCES repos(id) ON DELETE CASCADE,
+          active_surface TEXT NOT NULL CHECK (active_surface IN ('review', 'code')),
+          active_activity TEXT NOT NULL CHECK (length(active_activity) BETWEEN 1 AND 128),
+          navigation_contribution_id TEXT NOT NULL CHECK (
+            length(navigation_contribution_id) BETWEEN 1 AND 128
+          ),
+          navigation_location_json TEXT NOT NULL CHECK (
+            json_valid(navigation_location_json) AND
+            length(CAST(navigation_location_json AS BLOB)) <= 1048576
+          ),
+          updated_at TEXT NOT NULL
+        );
+
+        INSERT INTO project_workspace_state_navigation_envelope (
+          repo_id, active_surface, active_activity, navigation_contribution_id,
+          navigation_location_json, updated_at
+        )
+        SELECT
+          repo_id,
+          ${selectionProjection},
+          CASE ${hasActivitySelection ? "active_surface" : "active_ribbon"}
+            WHEN 'code' THEN 'diffdash.builtin.code.navigation'
+            ELSE 'diffdash.builtin.review.navigation'
+          END,
+          CASE ${hasActivitySelection ? "active_surface" : "active_ribbon"}
+            WHEN 'code' THEN json_object(
+              'target', json_object('_tag', 'projectHead', 'projectId', repo_id),
+              'path', NULL,
+              'revealRange', NULL,
+              'fileStatuses', json_array(),
+              'lineChanges', json_array()
+            )
+            ELSE json_object(
+              'selectedReview',
+              CASE
+                WHEN selected_review_target_json IS NULL THEN NULL
+                WHEN NOT json_valid(selected_review_target_json) THEN NULL
+                WHEN json_extract(selected_review_target_json, '$.kind') = 'local'
+                  THEN json_object(
+                    'kind', 'localDiff', 'target', json(selected_review_target_json)
+                  )
+                WHEN json_extract(selected_review_target_json, '$.kind') = 'repositoryComparison'
+                  THEN json_object(
+                    'kind', 'repositoryComparison', 'target', json(selected_review_target_json)
+                  )
+                ELSE json(selected_review_target_json)
+              END
+            )
+          END,
+          updated_at
+        FROM project_workspace_state;
+
+        DROP TABLE project_workspace_state;
+        ALTER TABLE project_workspace_state_navigation_envelope
+          RENAME TO project_workspace_state;
+        `,
+      )
+      const now = new Date().toISOString()
+      yield* database.run(
+        `INSERT INTO diffdash_capabilities (name, version, installed_at)
+         VALUES (?, ?, ?), (?, ?, ?)
+         ON CONFLICT(name) DO UPDATE SET version = excluded.version, installed_at = excluded.installed_at`,
+        [
+          PROJECT_WORKSPACE_CODE_RIBBON_CAPABILITY,
+          PROJECT_WORKSPACE_CODE_RIBBON_CAPABILITY_VERSION,
+          now,
+          PROJECT_WORKSPACE_ACTIVITY_SELECTION_CAPABILITY,
+          PROJECT_WORKSPACE_ACTIVITY_SELECTION_CAPABILITY_VERSION,
+          now,
+        ],
+      )
+    }),
+  },
+  {
+    version: 16,
+    migrate: Effect.fn("DatabaseMigration.16")(function* (database) {
+      if (!(yield* tableExists(database, "project_workspace_state"))) return
+      yield* executeSqlScript(
+        database,
+        `
+        CREATE TABLE project_workspace_state_utf8_navigation (
+          repo_id TEXT PRIMARY KEY REFERENCES repos(id) ON DELETE CASCADE,
+          active_surface TEXT NOT NULL CHECK (active_surface IN ('review', 'code')),
+          active_activity TEXT NOT NULL CHECK (length(active_activity) BETWEEN 1 AND 128),
+          navigation_contribution_id TEXT NOT NULL CHECK (
+            length(navigation_contribution_id) BETWEEN 1 AND 128
+          ),
+          navigation_location_json TEXT NOT NULL CHECK (
+            json_valid(navigation_location_json) AND
+            length(CAST(navigation_location_json AS BLOB)) <= 1048576
+          ),
+          updated_at TEXT NOT NULL
+        );
+
+        INSERT INTO project_workspace_state_utf8_navigation (
+          repo_id, active_surface, active_activity, navigation_contribution_id,
+          navigation_location_json, updated_at
+        )
+        SELECT
+          repo_id,
+          active_surface,
+          active_activity,
+          CASE
+            WHEN length(CAST(navigation_location_json AS BLOB)) <= 1048576
+              THEN navigation_contribution_id
+            WHEN active_surface = 'code' THEN 'diffdash.builtin.code.navigation'
+            ELSE 'diffdash.builtin.review.navigation'
+          END,
+          CASE
+            WHEN length(CAST(navigation_location_json AS BLOB)) <= 1048576
+              THEN navigation_location_json
+            WHEN active_surface = 'code' THEN json_object(
+              'target', json_object('_tag', 'projectHead', 'projectId', repo_id),
+              'path', NULL,
+              'revealRange', NULL,
+              'fileStatuses', json_array(),
+              'lineChanges', json_array()
+            )
+            ELSE json_object('selectedReview', NULL)
+          END,
+          updated_at
+        FROM project_workspace_state;
+
+        DROP TABLE project_workspace_state;
+        ALTER TABLE project_workspace_state_utf8_navigation RENAME TO project_workspace_state;
+        `,
+      )
+    }),
+  },
 ]
 
 /** Highest core schema version written for rollback-compatible installations. */
@@ -1381,7 +1531,13 @@ const runDatabaseCapabilityMigrations = Effect.fn("runDatabaseCapabilityMigratio
         active_activity TEXT NOT NULL CHECK (
           length(active_activity) BETWEEN 1 AND 128
         ),
-        selected_review_target_json TEXT,
+        navigation_contribution_id TEXT NOT NULL CHECK (
+          length(navigation_contribution_id) BETWEEN 1 AND 128
+        ),
+        navigation_location_json TEXT NOT NULL CHECK (
+          json_valid(navigation_location_json) AND
+          length(CAST(navigation_location_json AS BLOB)) <= 1048576
+        ),
         updated_at TEXT NOT NULL
       );
 

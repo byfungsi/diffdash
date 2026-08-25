@@ -1,7 +1,7 @@
 /* oxlint-disable eslint/no-underscore-dangle -- Renderer review variants use Effect-compatible _tag discriminants. */
 import type { ReviewSnapshotFileInventory } from "@diffdash/domain/review-context"
 import { ReviewKey } from "@diffdash/domain/review-identity"
-import { Match } from "effect"
+import { HashSet, Match } from "effect"
 import { useEffect, useEffectEvent, useRef, useState } from "react"
 import { useCaptureAnalytics } from "@/shared/analytics"
 import { formatError } from "@/shared/errors"
@@ -15,7 +15,7 @@ import {
 
 /** Local viewed and expansion state coordinated with persisted writes. */
 type ViewedFileMutationController = {
-  readonly viewedFileKeys: ReadonlySet<string>
+  readonly viewedFileKeys: HashSet.HashSet<string>
   readonly expandedFileKeys: ReadonlySet<string>
   readonly error: string | null
   readonly setFileViewed: (reviewKey: string, viewed: boolean) => void
@@ -41,9 +41,9 @@ export const useViewedFileMutations = (
   const initialExpanded = new Set(inventory.map((file) => file.reviewKey))
   const inventoryRef = useRef(inventory)
   inventoryRef.current = inventory
-  const viewedRef = useRef<ReadonlySet<string>>(new Set())
+  const viewedRef = useRef(HashSet.empty<string>())
   const expandedRef = useRef<ReadonlySet<string>>(initialExpanded)
-  const [viewedFileKeys, setViewedFileKeys] = useState<ReadonlySet<string>>(new Set())
+  const [viewedFileKeys, setViewedFileKeys] = useState(() => HashSet.empty<string>())
   const [expandedFileKeys, setExpandedFileKeys] = useState<ReadonlySet<string>>(initialExpanded)
   const [error, setError] = useState<string | null>(null)
   const operationsRef = useRef(operations)
@@ -52,10 +52,10 @@ export const useViewedFileMutations = (
     createViewedFileMutationCoordinator({
       write: (write) => operationsRef.current.setViewedFile(write),
       onOptimistic: ({ write, next }) => {
-        const nextViewed = new Set(viewedRef.current)
+        const nextViewed = next.viewed
+          ? HashSet.add(viewedRef.current, write.reviewKey)
+          : HashSet.remove(viewedRef.current, write.reviewKey)
         const nextExpanded = new Set(expandedRef.current)
-        if (next.viewed) nextViewed.add(write.reviewKey)
-        else nextViewed.delete(write.reviewKey)
         if (next.expanded) nextExpanded.add(write.reviewKey)
         else nextExpanded.delete(write.reviewKey)
         viewedRef.current = nextViewed
@@ -65,10 +65,10 @@ export const useViewedFileMutations = (
         setError(null)
       },
       onRollback: (reviewKey, snapshot) => {
-        const nextViewed = new Set(viewedRef.current)
+        const nextViewed = snapshot.viewed
+          ? HashSet.add(viewedRef.current, reviewKey)
+          : HashSet.remove(viewedRef.current, reviewKey)
         const nextExpanded = new Set(expandedRef.current)
-        if (snapshot.viewed) nextViewed.add(reviewKey)
-        else nextViewed.delete(reviewKey)
         if (snapshot.expanded) nextExpanded.add(reviewKey)
         else nextExpanded.delete(reviewKey)
         viewedRef.current = nextViewed
@@ -90,9 +90,9 @@ export const useViewedFileMutations = (
   useEffect(() => {
     let cancelled = false
     const expanded = new Set(inventory.map((file) => file.reviewKey))
-    viewedRef.current = new Set()
+    viewedRef.current = HashSet.empty()
     expandedRef.current = expanded
-    setViewedFileKeys(new Set())
+    setViewedFileKeys(HashSet.empty())
     setExpandedFileKeys(expanded)
     setError(null)
     inventory.forEach((file) => {
@@ -102,7 +102,7 @@ export const useViewedFileMutations = (
     void listViewedFiles()
       .then((records) => {
         if (cancelled) return undefined
-        const viewed = new Set(
+        const viewed = HashSet.fromIterable(
           records.flatMap((record) => {
             const file = matchingInventoryFile(inventory, record.reviewKey)
             return file?.patchHash === record.patchHash ? [record.reviewKey] : []
@@ -112,7 +112,7 @@ export const useViewedFileMutations = (
         setViewedFileKeys(viewed)
         inventory.forEach((file) => {
           coordinator.replaceConfirmed(file.reviewKey, {
-            viewed: viewed.has(file.reviewKey),
+            viewed: HashSet.has(viewed, file.reviewKey),
             expanded: true,
           })
         })
@@ -134,7 +134,7 @@ export const useViewedFileMutations = (
     const file = matchingInventoryFile(inventory, reviewKey)
     if (file === undefined) return
     const previous: ViewedFileMutationSnapshot = {
-      viewed: viewedRef.current.has(reviewKey),
+      viewed: HashSet.has(viewedRef.current, reviewKey),
       expanded: expandedRef.current.has(reviewKey),
     }
     coordinator.submit({

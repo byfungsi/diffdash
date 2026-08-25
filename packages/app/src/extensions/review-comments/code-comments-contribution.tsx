@@ -16,6 +16,8 @@ import { Textarea } from "@/shared/ui/textarea"
 import { formatError } from "@/shared/errors"
 import { useCommentSubmission } from "./comment-submission-context"
 import { type CodeCommentDraft, useReviewCommentsState } from "./review-comments-provider"
+import { ReviewCommentsReviewContextPane } from "./review-comments-review-contribution"
+import { useCodeSurfaceCapability } from "../code/code-surface-capability"
 
 /** Review Comments behavior mounted into one active Code source host. */
 export const ReviewCommentsCodeSourceContribution = ({ source }: CodeSourceContributionProps) => {
@@ -59,14 +61,14 @@ export const ReviewCommentsCodeSourceContribution = ({ source }: CodeSourceContr
 }
 
 /** Comments activity pane shown while the Code source surface remains visible. */
-export const ReviewCommentsActivityPane = (props: ProjectActivityPaneProps) => {
+export const ReviewCommentsCodeActivityPane = ({ location }: ProjectActivityPaneProps) => {
   const reviewComments = useReviewCommentsState()
-  if (props.surface === "review") return null
+  const code = useCodeSurfaceCapability()
   const activeDraft = Option.filter(
     reviewComments.codeDraft,
     (draft) =>
-      draft.projectId === props.projectId &&
-      (props.workspaceRevision === null || draft.workspaceRevision === props.workspaceRevision),
+      draft.projectId === location.projectId &&
+      (code.workspaceRevision === null || draft.workspaceRevision === code.workspaceRevision),
   )
 
   return (
@@ -118,7 +120,7 @@ export const ReviewCommentsActivityPane = (props: ProjectActivityPaneProps) => {
                   size="xs"
                   variant="outline"
                   onClick={() => {
-                    props.selectPath(draft.path)
+                    code.selectPath(draft.path)
                     reviewComments.requestCodeDraftFocus()
                   }}
                 >
@@ -141,6 +143,14 @@ export const ReviewCommentsActivityPane = (props: ProjectActivityPaneProps) => {
     </aside>
   )
 }
+
+/** Comments context pane selected for the active source surface. */
+export const ReviewCommentsActivityPane = (props: ProjectActivityPaneProps) =>
+  props.location.surface === "review" ? (
+    <ReviewCommentsReviewContextPane {...props} />
+  ) : (
+    <ReviewCommentsCodeActivityPane {...props} />
+  )
 
 const CodeCommentAnnotation = () => {
   const reviewComments = useReviewCommentsState()

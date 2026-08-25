@@ -1,7 +1,10 @@
 import type { ProjectWorkspaceActivityId } from "@diffdash/domain/project-workspace"
 import type { ReactNode } from "react"
 
-import type { ProjectActivityContribution } from "@/extensions/extension-registry"
+import type {
+  OwnedExtensionContribution,
+  ProjectActivityContribution,
+} from "@/extensions/extension-registry"
 import { ReviewWorkbenchLayout } from "@/review/review-workbench-layout"
 
 import { ProjectActivityNavigation } from "./project-activity-navigation"
@@ -9,7 +12,7 @@ import { ProjectActivityNavigation } from "./project-activity-navigation"
 /** Workspace chrome inputs shared by selected and unselected project states. */
 export interface ProjectWorkspaceFrameProps {
   readonly activeActivity: ProjectWorkspaceActivityId
-  readonly activities: readonly ProjectActivityContribution[]
+  readonly activities: readonly OwnedExtensionContribution<ProjectActivityContribution>[]
   readonly context: ReactNode
   readonly contextWidth: number
   readonly main: ReactNode
@@ -37,7 +40,7 @@ export const ProjectWorkspaceFrame = ({
 }: ProjectWorkspaceFrameProps) => {
   const activePane = sidebarExpanded ? "context" : "diff"
 
-  const selectActivity = (activity: ProjectActivityContribution) => {
+  const selectActivity = (activity: OwnedExtensionContribution<ProjectActivityContribution>) => {
     if (activity.id === activeActivity && sidebarExpanded) {
       onSidebarExpandedChange(false)
       return

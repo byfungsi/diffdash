@@ -2,4 +2,6 @@
 "@diffdash/desktop": minor
 ---
 
-Add Review Comments as a trusted built-in extension spanning Code and Review.
+Make Review, Code, Walkthrough, and Review Comments independently removable trusted built-in
+extensions with registry-owned surfaces, ribbon activities, pane slots, lifecycle providers, and
+schema-encoded navigation repair.

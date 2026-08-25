@@ -9,7 +9,8 @@ import {
 } from "@diffdash/domain/comment"
 import { HostedReviewTarget, MarkdownBody } from "@diffdash/domain/review-thread"
 import {
-  PROJECT_WORKSPACE_FILES_ACTIVITY_ID,
+  ProjectWorkspaceActivityId,
+  ProjectWorkspaceNavigationContributionId,
   ProjectWorkspaceStateInput,
 } from "@diffdash/domain/project-workspace"
 import { ReviewHunkId, ReviewProjectId, ReviewRevision } from "@diffdash/domain/review-identity"
@@ -41,6 +42,7 @@ import { WalkthroughBridgeIdempotencyKey } from "@diffdash/protocol/walkthrough-
 import { buildWalkthroughHunkDigest, walkthroughLocalDiffScope } from "@diffdash/domain/walkthrough"
 import { createDemoLocalReviewFixtures } from "./local-review-fixtures"
 
+const filesActivityId = ProjectWorkspaceActivityId.make("diffdash.fixture.files")
 const review = HostedReviewLocator.make({
   repository: HostedRepositoryLocator.make({
     providerId: GitProviderId.make("github"),
@@ -71,8 +73,13 @@ describe("scenario-backed DiffDash API", () => {
           ProjectWorkspaceStateInput.make({
             projectId,
             activeSurface: "review",
-            activeActivity: PROJECT_WORKSPACE_FILES_ACTIVITY_ID,
-            selectedReviewTarget: null,
+            activeActivity: filesActivityId,
+            navigation: {
+              contributionId: ProjectWorkspaceNavigationContributionId.make(
+                "diffdash.fixture.navigation",
+              ),
+              location: { selectedReview: null },
+            },
           }),
         ),
       )

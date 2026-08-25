@@ -1,9 +1,9 @@
 import {
   CoreMethod,
+  type CoreApplicationRpcOutput,
   type CoreMethod as CoreMethodType,
   type CoreMethodInput,
   type CoreOperationOptions,
-  type CoreOperationOutput,
 } from "@diffdash/core"
 import type { DiffDashApi } from "@diffdash/protocol/api"
 import type { ProgressiveReviewApi } from "@diffdash/protocol/review-session"
@@ -12,7 +12,7 @@ import type { WalkthroughOperationBridgeHint } from "@diffdash/protocol/walkthro
 type ApplicationCoreOperation<Method extends CoreMethodType> = (
   input: CoreMethodInput<Method>,
   options?: CoreOperationOptions,
-) => Promise<CoreOperationOutput<Method>>
+) => Promise<CoreApplicationRpcOutput<Method>>
 
 interface ApplicationCoreRuntime {
   readonly analyticsCapture: ApplicationCoreOperation<typeof CoreMethod.analyticsCapture>

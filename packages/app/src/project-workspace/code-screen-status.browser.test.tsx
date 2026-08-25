@@ -10,15 +10,27 @@ import { LinkedCheckout, Repo, RepositoryCheckoutPath } from "@diffdash/domain/r
 import { RepositoryRelativePath } from "@diffdash/domain/repository-path"
 import { HashMap } from "effect"
 import { ReviewProjectId } from "@diffdash/domain/review-identity"
-import { PROJECT_WORKSPACE_CODE_ACTIVITY_ID } from "@diffdash/domain/project-workspace"
 import { Suspense } from "react"
 import { createRoot, type Root } from "react-dom/client"
 import { afterEach, describe, expect, it, vi } from "vitest"
 
 import { installDiffDashApi } from "@/test/app-browser-support"
-import { CORE_PROJECT_ACTIVITIES } from "@/extensions/core-workspace/core-workspace-extension"
+import {
+  CODE_PROJECT_ACTIVITY,
+  CODE_PROJECT_SURFACE,
+  PROJECT_WORKSPACE_CODE_ACTIVITY_ID,
+} from "@/extensions/code/code-extension"
 
-import { CodeScreen } from "./code-screen"
+import { CodeScreen } from "@/extensions/code/code-screen"
+import {
+  TrustedExtensionId,
+  TrustedExtensionRegistrationToken,
+} from "@/extensions/extension-registry"
+
+const ownerExtensionId = TrustedExtensionId.make("diffdash.test.code-status")
+const ownerRegistrationToken = new TrustedExtensionRegistrationToken()
+const ownedActivity = { ...CODE_PROJECT_ACTIVITY, ownerExtensionId, ownerRegistrationToken }
+const ownedSurface = { ...CODE_PROJECT_SURFACE, ownerExtensionId, ownerRegistrationToken }
 
 const repo = Repo.make({
   createdAt: "2026-08-22T00:00:00Z",
@@ -70,12 +82,13 @@ describe("CodeScreen working-tree status", () => {
         <CodeScreen
           active
           activeActivity={PROJECT_WORKSPACE_CODE_ACTIVITY_ID}
-          activities={CORE_PROJECT_ACTIVITIES}
+          activities={[ownedActivity]}
           codeThemes={DEFAULT_CODE_THEME_PREFERENCES}
           colorScheme="light"
           contextWidth={280}
           fileStatuses={HashMap.empty()}
           repo={repo}
+          surfaceContribution={ownedSurface}
           selectedPath={null}
           sidebarExpanded
           target={ProjectHeadCodeWorkspaceTarget.make({ projectId: repo.id })}

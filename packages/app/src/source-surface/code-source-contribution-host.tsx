@@ -1,4 +1,4 @@
-import { Array as EffectArray, Option, Order } from "effect"
+import { Array as EffectArray, HashMap, Option, Order } from "effect"
 import {
   createContext,
   type ReactNode,
@@ -75,8 +75,8 @@ export const useCodeSourceContributionHost = (
   readonly renderAnnotation: (contributionKey: string) => ReactNode
 } => {
   const [registrations, setRegistrations] = useState<
-    ReadonlyMap<string, RegisteredCodeSourceContribution>
-  >(new Map())
+    HashMap.HashMap<string, RegisteredCodeSourceContribution>
+  >(HashMap.empty)
   const [generation, setGeneration] = useState(0)
   const registrationsRef = useRef(registrations)
   registrationsRef.current = registrations
@@ -89,14 +89,15 @@ export const useCodeSourceContributionHost = (
       output: CodeSourceContributionOutput,
     ): (() => void) => {
       const registration: RegisteredCodeSourceContribution = { key, id, order, output, token: {} }
-      setRegistrations((current) => new Map(current).set(key, registration))
+      setRegistrations((current) => HashMap.set(current, key, registration))
       setGeneration((current) => current + 1)
       return () => {
         setRegistrations((current) => {
-          if (current.get(key)?.token !== registration.token) return current
-          const next = new Map(current)
-          next.delete(key)
-          return next
+          const currentRegistration = HashMap.get(current, key)
+          if (!Option.exists(currentRegistration, ({ token }) => token === registration.token)) {
+            return current
+          }
+          return HashMap.remove(current, key)
         })
         setGeneration((current) => current + 1)
       }
@@ -105,7 +106,7 @@ export const useCodeSourceContributionHost = (
   )
 
   const orderedRegistrations = EffectArray.sort(
-    [...registrations.values()],
+    Array.from(HashMap.values(registrations)),
     registeredCodeSourceContributionOrder,
   )
   const annotations = orderedRegistrations.flatMap(({ key, output }) =>
@@ -118,7 +119,7 @@ export const useCodeSourceContributionHost = (
     (lineNumber: number, lineContent: string): boolean => {
       const target: CodeSourceLineTarget = { ...source, lineNumber, lineContent }
       const ordered = EffectArray.sort(
-        [...registrationsRef.current.values()],
+        Array.from(HashMap.values(registrationsRef.current)),
         registeredCodeSourceContributionOrder,
       )
       return ordered.some(({ output }) => output.handleLineAction(target))
@@ -126,16 +127,18 @@ export const useCodeSourceContributionHost = (
     [source],
   )
   const renderAnnotation = (contributionKey: string): ReactNode => {
-    const registration = registrations.get(contributionKey)
-    if (registration === undefined) return null
-    return Option.match(registration.output.annotation, {
+    return Option.match(HashMap.get(registrations, contributionKey), {
       onNone: () => null,
-      onSome: ({ render }) => render(),
+      onSome: ({ output }) =>
+        Option.match(output.annotation, {
+          onNone: () => null,
+          onSome: ({ render }) => render(),
+        }),
     })
   }
   const mounts = contributions.map((contribution) => (
     <CodeSourceContributionScope
-      key={`${contribution.ownerExtensionId}:${contribution.id}`}
+      key={`${contribution.ownerExtensionId}:${contribution.id}:${contribution.ownerRegistrationToken.reactKey}`}
       contribution={contribution}
       source={source}
       register={register}

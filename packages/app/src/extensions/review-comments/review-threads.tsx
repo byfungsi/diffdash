@@ -1,16 +1,10 @@
-import type { HostedReviewLocator } from "@diffdash/domain/git-provider"
 import type { AgentProviderFailure } from "@diffdash/domain/provider-failure"
-import { type LocalReviewTarget, localReviewTargetKey } from "@diffdash/domain/local-review"
-import {
-  makeRepositoryComparisonReviewKey,
-  type RepositoryComparisonTarget,
-} from "@diffdash/domain/repository-comparison"
 import {
   REVIEW_AGENT_PROGRESS_LABELS,
   ReviewAgentProgress,
   type ReviewAgentProgressStage,
 } from "@diffdash/domain/review-agent"
-import { makeReviewKey, ReviewProjectId, ReviewRevision } from "@diffdash/domain/review-identity"
+import { ReviewProjectId } from "@diffdash/domain/review-identity"
 import { WebUrl } from "@diffdash/domain/web-url"
 import {
   CommentDestination,
@@ -19,16 +13,14 @@ import {
   CommentSubject,
   CommentSubjectUnavailableError,
 } from "@diffdash/domain/comment"
-import { Array as EffectArray, Effect, Match, Option, Order } from "effect"
+import { Array as EffectArray, Effect, HashMap, Match, Option, Order, Schema } from "effect"
 import {
-  HostedReviewTarget,
   MarkdownBody,
   type ReviewThreadAnchor,
   ReviewThreadDetails,
   type ReviewThreadId,
   type ReviewThreadMessage,
   type ReviewThreadMessageId,
-  type ReviewThreadTarget,
 } from "@diffdash/domain/review-thread"
 import { RunReviewThreadAgentRequest } from "@diffdash/protocol/review-threads"
 import { AlertCircle, Bot, Loader2, MessageSquare, UserRound } from "lucide-react"
@@ -64,29 +56,14 @@ import {
   reviewThreadIsPreviousRevision,
   syncPinnedReviewThreadHistories,
 } from "./review-thread-presentation"
+import {
+  type ReviewThreadScope,
+  type ReviewThreadScopeIdentity,
+  reviewThreadScopeIdentity,
+  reviewThreadTargetType,
+} from "./review-thread-scope"
 
 /* oxlint-disable jsx-a11y/no-noninteractive-tabindex -- Scrollable conversation logs need keyboard focus. */
-
-/** Renderer-owned review scope used to derive typed preload requests. */
-export type ReviewThreadScope =
-  | {
-      readonly kind: "hosted"
-      readonly review: HostedReviewLocator
-      readonly baseRevision: string | null
-      readonly headRevision: string | null
-    }
-  | {
-      readonly kind: "local"
-      readonly target: LocalReviewTarget
-      readonly baseRevision: string
-      readonly headRevision: string
-    }
-  | {
-      readonly kind: "repositoryComparison"
-      readonly target: RepositoryComparisonTarget
-      readonly baseRevision: string
-      readonly headRevision: string
-    }
 
 /** Optional orchestration seam for an agent API that is not currently exposed through preload. */
 export type ReviewThreadOrchestration = {
@@ -112,6 +89,14 @@ export type ReviewThreadsController = {
   readonly reload: () => Promise<void>
 }
 
+class ReviewThreadUnavailableError extends Schema.TaggedError<ReviewThreadUnavailableError>()(
+  "ReviewThreadUnavailableError",
+  {
+    operation: Schema.Literals(["createThread", "runAgent"]),
+    message: Schema.String,
+  },
+) {}
+
 /** Loads and mutates persisted review threads exclusively through the typed preload API. */
 export function useReviewThreads(scope: ReviewThreadScope): ReviewThreadsController {
   const captureAnalytics = useCaptureAnalytics()
@@ -123,28 +108,16 @@ export function useReviewThreads(scope: ReviewThreadScope): ReviewThreadsControl
   const [runningThreadIds, setRunningThreadIds] = useState<readonly ReviewThreadId[]>([])
   const [agentProgress, setAgentProgress] = useState<readonly ReviewAgentProgress[]>([])
   const [agentErrors, setAgentErrors] = useState<Readonly<Record<string, string>>>({})
-  const baseRevision = scope.baseRevision
-  const headRevision = scope.headRevision
-  const hostedReview = scope.kind === "hosted" ? scope.review : null
-  const localTarget = scope.kind === "local" ? scope.target : null
-  const comparisonTarget = scope.kind === "repositoryComparison" ? scope.target : null
-  const hostedReviewKey = hostedReview === null ? null : makeReviewKey(hostedReview)
-  const localTargetKey = localTarget === null ? null : localReviewTargetKey(localTarget)
-  const comparisonTargetKey =
-    comparisonTarget === null ? null : makeRepositoryComparisonReviewKey(comparisonTarget)
-  const scopeKey = JSON.stringify([
-    scope.kind,
-    hostedReviewKey,
-    localTargetKey,
-    comparisonTargetKey,
-    baseRevision,
-    headRevision,
-  ])
-  const activeScopeKeyRef = useRef<string | null>(scopeKey)
-  const available = baseRevision !== null && headRevision !== null
-  const listThreadDetails = useEffectEvent(() =>
-    automation.threads.listDetails(reviewThreadTarget(hostedReview, localTarget, comparisonTarget)),
-  )
+  const revisions = Option.all({
+    baseRevision: scope.baseRevision,
+    headRevision: scope.headRevision,
+  })
+  const target = scope.target
+  const targetType = reviewThreadTargetType(target)
+  const scopeKey = reviewThreadScopeIdentity(scope)
+  const activeScopeKeyRef = useRef<ReviewThreadScopeIdentity | null>(scopeKey)
+  const available = Option.isSome(revisions)
+  const listThreadDetails = useEffectEvent(() => automation.threads.listDetails(target))
 
   useLayoutEffect(() => {
     activeScopeKeyRef.current = scopeKey
@@ -167,11 +140,7 @@ export function useReviewThreads(scope: ReviewThreadScope): ReviewThreadsControl
     setLoading(true)
     setError(null)
     try {
-      const loaded = await runRendererPromise(
-        automation.threads.listDetails(
-          reviewThreadTarget(hostedReview, localTarget, comparisonTarget),
-        ),
-      )
+      const loaded = await runRendererPromise(automation.threads.listDetails(target))
       if (activeScopeKeyRef.current === requestedScopeKey) {
         setDetails(sortThreadDetails(loaded))
       }
@@ -225,16 +194,7 @@ export function useReviewThreads(scope: ReviewThreadScope): ReviewThreadsControl
     return () => {
       cancelled = true
     }
-  }, [
-    available,
-    baseRevision,
-    comparisonTargetKey,
-    headRevision,
-    hostedReviewKey,
-    localTargetKey,
-    automation,
-    scopeKey,
-  ])
+  }, [available, automation, scopeKey])
 
   const refreshThreadDetails = async (threadId: ReviewThreadId) => {
     if (activeScopeKeyRef.current !== scopeKey) return null
@@ -258,7 +218,7 @@ export function useReviewThreads(scope: ReviewThreadScope): ReviewThreadsControl
   const reconcileAcceptedAgent = async (
     threadId: ReviewThreadId,
     initial: ReviewThreadDetails,
-    requestedScopeKey: string,
+    requestedScopeKey: ReviewThreadScopeIdentity,
     previousLatestMessageId?: ReviewThreadMessageId,
   ) => {
     setAgentErrors((current) => {
@@ -303,10 +263,14 @@ export function useReviewThreads(scope: ReviewThreadScope): ReviewThreadsControl
     if (
       activeScopeKeyRef.current !== scopeKey ||
       currentDetails === undefined ||
-      baseRevision === null ||
-      headRevision === null
+      Option.isNone(revisions)
     ) {
-      throw new Error("Review thread target is unavailable")
+      return Promise.reject(
+        ReviewThreadUnavailableError.make({
+          operation: "runAgent",
+          message: "Review thread target is unavailable",
+        }),
+      )
     }
     const previousLatestMessageId = currentDetails.messages.at(-1)?.id
     setAgentErrors((current) => {
@@ -325,11 +289,11 @@ export function useReviewThreads(scope: ReviewThreadScope): ReviewThreadsControl
         automation.threads.runAgent(
           RunReviewThreadAgentRequest.make({
             threadId,
-            target: reviewThreadTarget(hostedReview, localTarget, comparisonTarget),
+            target,
             repoId: ReviewProjectId.make(currentDetails.thread.repoId),
             reviewKey: currentDetails.thread.reviewKey,
-            expectedBaseRevision: ReviewRevision.make(baseRevision),
-            expectedHeadRevision: ReviewRevision.make(headRevision),
+            expectedBaseRevision: revisions.value.baseRevision,
+            expectedHeadRevision: revisions.value.headRevision,
           }),
         ),
       )
@@ -341,12 +305,7 @@ export function useReviewThreads(scope: ReviewThreadScope): ReviewThreadsControl
       )
       captureAnalytics({
         event: "review_agent_completed",
-        reviewType:
-          comparisonTarget !== null
-            ? "repository_comparison"
-            : localTarget === null
-              ? "pull_request"
-              : "local_diff",
+        reviewType: targetType,
       })
       setError(null)
     } catch (cause) {
@@ -378,14 +337,19 @@ export function useReviewThreads(scope: ReviewThreadScope): ReviewThreadsControl
 
   const createThread = async (anchor: ReviewThreadAnchor, bodyMarkdown: string) => {
     const requestedScopeKey = scopeKey
-    if (baseRevision === null || headRevision === null) {
-      throw new Error("Review revisions are unavailable")
+    if (Option.isNone(revisions)) {
+      return Promise.reject(
+        ReviewThreadUnavailableError.make({
+          operation: "createThread",
+          message: "Review revisions are unavailable",
+        }),
+      )
     }
     const body = MarkdownBody.make(bodyMarkdown)
     const subject = CommentSubject.cases.ReviewLine.make({
-      target: reviewThreadTarget(hostedReview, localTarget, comparisonTarget),
-      expectedBaseRevision: ReviewRevision.make(baseRevision),
-      expectedHeadRevision: ReviewRevision.make(headRevision),
+      target,
+      expectedBaseRevision: revisions.value.baseRevision,
+      expectedHeadRevision: revisions.value.headRevision,
       anchor,
     })
     try {
@@ -399,12 +363,7 @@ export function useReviewThreads(scope: ReviewThreadScope): ReviewThreadsControl
           if (created === null) return false
           captureAnalytics({
             event: "review_thread_created",
-            reviewType:
-              comparisonTarget !== null
-                ? "repository_comparison"
-                : localTarget === null
-                  ? "pull_request"
-                  : "local_diff",
+            reviewType: targetType,
           })
           if (agentAccepted) {
             void reconcileAcceptedAgent(threadId, created, requestedScopeKey)
@@ -433,21 +392,20 @@ export function useReviewThreads(scope: ReviewThreadScope): ReviewThreadsControl
         Effect.fromOption(
           Option.all({
             details: Option.fromNullishOr(currentDetails),
-            baseRevision: Option.fromNullishOr(baseRevision),
-            headRevision: Option.fromNullishOr(headRevision),
+            revisions,
           }),
           () => CommentSubjectUnavailableError.make({ threadId }),
         ).pipe(
-          Effect.flatMap(({ details: current, baseRevision: base, headRevision: head }) => {
+          Effect.flatMap(({ details: current, revisions: currentRevisions }) => {
             const currentAnchor = current.thread.activeAnchor
             if (currentAnchor === null) {
               return Effect.fail(CommentSubjectUnavailableError.make({ threadId }))
             }
             return Effect.succeed(
               CommentSubject.cases.ReviewLine.make({
-                target: reviewThreadTarget(hostedReview, localTarget, comparisonTarget),
-                expectedBaseRevision: ReviewRevision.make(base),
-                expectedHeadRevision: ReviewRevision.make(head),
+                target,
+                expectedBaseRevision: currentRevisions.baseRevision,
+                expectedHeadRevision: currentRevisions.headRevision,
                 anchor: currentAnchor,
               }),
             )
@@ -919,11 +877,11 @@ export function ReviewMarkdown({ children }: { readonly children: string }) {
     }
     if (/^[-*]\s+/.test(line)) {
       const items: { readonly key: string; readonly value: string }[] = []
-      const occurrences = new Map<string, number>()
+      let occurrences = HashMap.empty<string, number>()
       while (index < lines.length && /^[-*]\s+/.test(lines[index] ?? "")) {
         const value = (lines[index] ?? "").replace(/^[-*]\s+/, "")
-        const occurrence = occurrences.get(value) ?? 0
-        occurrences.set(value, occurrence + 1)
+        const occurrence = Option.getOrElse(HashMap.get(occurrences, value), () => 0)
+        occurrences = HashMap.set(occurrences, value, occurrence + 1)
         items.push({ key: `${value}:${occurrence}`, value })
         index += 1
       }
@@ -1219,19 +1177,6 @@ const hasNewTerminalAgentResponse = (
       Failed: (message) => message.id !== previousLatestMessageId,
     })
   )
-}
-
-const reviewThreadTarget = (
-  hostedReview: HostedReviewLocator | null,
-  localTarget: LocalReviewTarget | null,
-  comparisonTarget: RepositoryComparisonTarget | null,
-): ReviewThreadTarget => {
-  if (hostedReview !== null) {
-    return HostedReviewTarget.make({ kind: "hosted", review: hostedReview })
-  }
-  if (comparisonTarget !== null) return comparisonTarget
-  if (localTarget === null) throw new Error("Local review target is unavailable")
-  return localTarget
 }
 
 /** Human-readable label for any persisted anchor. */

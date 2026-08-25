@@ -14,11 +14,14 @@ const TrustedExtensionRegistryContext = createContext<TrustedExtensionRegistry |
 export const TrustedExtensionRegistryProvider = ({
   children,
   extensions,
+  registry: suppliedRegistry,
 }: {
   readonly children: ReactNode
   readonly extensions: readonly TrustedBuiltInExtension[]
+  readonly registry?: TrustedExtensionRegistry | undefined
 }) => {
   const [registry] = useState(() => {
+    if (suppliedRegistry !== undefined) return suppliedRegistry
     const composed = makeTrustedExtensionRegistry(extensions)
     if (Result.isFailure(composed)) throw composed.failure
     return composed.success
@@ -34,4 +37,11 @@ export const useTrustedExtensionRegistry = (): TrustedExtensionRegistrySnapshot 
   const registry = use(TrustedExtensionRegistryContext)
   if (registry === null) throw new Error("TrustedExtensionRegistryProvider is unavailable")
   return useSyncExternalStore(registry.subscribe, registry.snapshot, registry.snapshot)
+}
+
+/** Returns the trusted registry controller used to enable or disable bundled extensions atomically. */
+export const useTrustedExtensionRegistryController = (): TrustedExtensionRegistry => {
+  const registry = use(TrustedExtensionRegistryContext)
+  if (registry === null) throw new Error("TrustedExtensionRegistryProvider is unavailable")
+  return registry
 }

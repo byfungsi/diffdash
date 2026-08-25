@@ -5,6 +5,7 @@ import {
   type ReviewThreadAnchor,
   type ReviewThreadDetails,
 } from "@diffdash/domain/review-thread"
+import { Option } from "effect"
 
 interface ReviewThreadLineAnnotation {
   readonly lineNumber: number
@@ -16,7 +17,7 @@ interface ReviewThreadLineAnnotation {
 export type ReviewThreadAnnotation = {
   readonly anchor: ReviewThreadAnchor
   readonly details: readonly ReviewThreadDetails[]
-  readonly draftAnchor: ReviewThreadAnchor | null
+  readonly draftAnchor: Option.Option<ReviewThreadAnchor>
   readonly expanded: boolean
 }
 
@@ -24,14 +25,15 @@ export type ReviewThreadAnnotation = {
 export const reviewThreadAnnotations = (
   file: ParsedDiffFile,
   details: readonly ReviewThreadDetails[],
-  expandedLineAnchor: ReviewThreadAnchor | null,
+  expandedLineAnchor: Option.Option<ReviewThreadAnchor>,
 ): ReviewThreadLineAnnotation[] => {
   const annotations: ReviewThreadLineAnnotation[] = []
   for (const item of details) {
-    const anchor = item.thread.activeAnchor
-    if (anchor === null || !lineAnchorIsInFile(anchor, file)) {
+    const activeAnchor = Option.fromNullishOr(item.thread.activeAnchor)
+    if (Option.isNone(activeAnchor) || !lineAnchorIsInFile(activeAnchor.value, file)) {
       continue
     }
+    const anchor = activeAnchor.value
     const existingIndex = annotations.findIndex((annotation) =>
       sameReviewThreadLine(annotation.metadata.anchor, anchor),
     )
@@ -41,8 +43,10 @@ export const reviewThreadAnnotations = (
         metadata: {
           anchor,
           details: [item],
-          draftAnchor: null,
-          expanded: sameReviewThreadLine(expandedLineAnchor, anchor),
+          draftAnchor: Option.none(),
+          expanded: Option.exists(expandedLineAnchor, (expanded) =>
+            sameReviewThreadLine(expanded, anchor),
+          ),
         },
       })
       continue
@@ -56,12 +60,13 @@ export const reviewThreadAnnotations = (
     }
   }
 
-  if (expandedLineAnchor === null || !lineAnchorIsInFile(expandedLineAnchor, file)) {
+  if (Option.isNone(expandedLineAnchor) || !lineAnchorIsInFile(expandedLineAnchor.value, file)) {
     return annotations
   }
+  const expandedAnchor = expandedLineAnchor.value
   if (
     annotations.some((annotation) =>
-      sameReviewThreadLine(annotation.metadata.anchor, expandedLineAnchor),
+      sameReviewThreadLine(annotation.metadata.anchor, expandedAnchor),
     )
   ) {
     return annotations
@@ -69,11 +74,11 @@ export const reviewThreadAnnotations = (
   return [
     ...annotations,
     {
-      ...annotationPosition(expandedLineAnchor),
+      ...annotationPosition(expandedAnchor),
       metadata: {
-        anchor: expandedLineAnchor,
+        anchor: expandedAnchor,
         details: [],
-        draftAnchor: expandedLineAnchor,
+        draftAnchor: Option.some(expandedAnchor),
         expanded: true,
       },
     },
@@ -81,7 +86,7 @@ export const reviewThreadAnnotations = (
 }
 
 /** Returns the stable disclosure content ID for one annotation. */
-export const reviewThreadAnnotationContentId = (anchor: ReviewThreadAnchor) =>
+export const reviewThreadAnnotationContentId = (anchor: ReviewThreadAnchor): string =>
   `review-thread-${anchor.hunkId}-${anchor.side}-${anchor.lineNumber}`
 
 /** Reconstructs an exact line anchor from a rendered diff coordinate. */
@@ -89,42 +94,47 @@ export const lineReviewAnchor = (
   file: ParsedDiffFile,
   annotationSide: "additions" | "deletions",
   lineNumber: number,
-): ReviewThreadAnchor | null => {
+): Option.Option<ReviewThreadAnchor> => {
   const side = annotationSide === "deletions" ? "old" : "new"
   for (const hunk of file.hunks) {
     const line = findProjectedDiffHunkLine(projectDiffHunkLines(hunk), { side, lineNumber })
     if (line === null) continue
-    return LineReviewAnchor.make({
-      fileId: file.fileId,
-      filePath: file.path,
-      oldPath: file.oldPath,
-      hunkId: hunk.id,
-      hunkFingerprint: hunk.fingerprint,
-      hunkHeader: hunk.header,
-      side,
-      lineNumber,
-      lineContent: line.content,
-    })
+    return Option.some(
+      LineReviewAnchor.make({
+        fileId: file.fileId,
+        filePath: file.path,
+        oldPath: file.oldPath,
+        hunkId: hunk.id,
+        hunkFingerprint: hunk.fingerprint,
+        hunkHeader: hunk.header,
+        side,
+        lineNumber,
+        lineContent: line.content,
+      }),
+    )
   }
-  return null
+  return Option.none()
 }
 
 /** Checks that an anchor still points to the exact content in a parsed file. */
-export const lineAnchorIsInFile = (anchor: ReviewThreadAnchor, file: ParsedDiffFile) => {
+export const lineAnchorIsInFile = (anchor: ReviewThreadAnchor, file: ParsedDiffFile): boolean => {
   if (anchor.fileId !== file.fileId || anchor.filePath !== file.path) return false
   const annotationSide = anchor.side === "old" ? "deletions" : "additions"
   const candidate = lineReviewAnchor(file, annotationSide, anchor.lineNumber)
-  return (
-    candidate !== null &&
-    candidate.hunkId === anchor.hunkId &&
-    candidate.hunkFingerprint === anchor.hunkFingerprint &&
-    candidate.lineContent === anchor.lineContent
+  return Option.exists(
+    candidate,
+    (value) =>
+      value.hunkId === anchor.hunkId &&
+      value.hunkFingerprint === anchor.hunkFingerprint &&
+      value.lineContent === anchor.lineContent,
   )
 }
 
 /** Checks whether two anchors identify the same exact diff line. */
-export const sameReviewThreadLine = (left: ReviewThreadAnchor | null, right: ReviewThreadAnchor) =>
-  left !== null &&
+export const sameReviewThreadLine = (
+  left: ReviewThreadAnchor,
+  right: ReviewThreadAnchor,
+): boolean =>
   left.fileId === right.fileId &&
   left.hunkId === right.hunkId &&
   left.hunkFingerprint === right.hunkFingerprint &&

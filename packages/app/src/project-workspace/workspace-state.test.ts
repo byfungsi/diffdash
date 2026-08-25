@@ -3,45 +3,41 @@ import {
   makeHostedRepositoryLocator,
   makeHostedReviewLocator,
 } from "@diffdash/domain/git-provider"
-import { workingTreeReviewTarget } from "@diffdash/domain/local-review"
 import {
-  PROJECT_WORKSPACE_CODE_ACTIVITY_ID,
-  PROJECT_WORKSPACE_FILES_ACTIVITY_ID,
-  PROJECT_WORKSPACE_REVIEWS_ACTIVITY_ID,
-  PROJECT_WORKSPACE_WALKTHROUGH_ACTIVITY_ID,
+  ProjectWorkspaceNavigationContributionId,
   ProjectWorkspaceState,
-  REVIEW_COMMENTS_ACTIVITY_ID,
 } from "@diffdash/domain/project-workspace"
 import { LinkedCheckout, Repo, RepositoryCheckoutPath } from "@diffdash/domain/repository"
-import {
-  GitCommitSha,
-  RepositoryComparisonRef,
-  RepositoryComparisonTarget,
-} from "@diffdash/domain/repository-comparison"
 import { ReviewProjectId } from "@diffdash/domain/review-identity"
-import { HostedReviewTarget } from "@diffdash/domain/review-thread"
-import { Result } from "effect"
+import { Option } from "effect"
 import { describe, expect, it } from "vitest"
 
-import { TrustedExtensionRegistry } from "@/extensions/extension-registry"
-import { coreWorkspaceExtension } from "@/extensions/core-workspace/core-workspace-extension"
-import { reviewCommentsExtension } from "@/extensions/review-comments/review-comments-extension"
 import {
-  resolveProjectWorkspaceState as resolveWorkspaceState,
-  selectedReviewTargetForPersistence,
-} from "./workspace-state"
-
-const availableActivityIds = [
-  PROJECT_WORKSPACE_REVIEWS_ACTIVITY_ID,
-  PROJECT_WORKSPACE_FILES_ACTIVITY_ID,
+  CODE_PROJECT_ACTIVITY,
   PROJECT_WORKSPACE_CODE_ACTIVITY_ID,
-  PROJECT_WORKSPACE_WALKTHROUGH_ACTIVITY_ID,
-  REVIEW_COMMENTS_ACTIVITY_ID,
-]
+} from "@/extensions/code/code-extension"
+import {
+  codeNavigationContribution,
+  createDefaultCodeNavigationState,
+} from "@/extensions/code/code-navigation"
+import {
+  PROJECT_WORKSPACE_REVIEWS_ACTIVITY_ID,
+  REVIEW_PROJECT_ACTIVITIES,
+} from "@/extensions/review/review-extension"
+import {
+  encodeReviewNavigationState,
+  reviewNavigationContribution,
+} from "@/extensions/review/review-navigation"
+import { resolveProjectWorkspaceState } from "./workspace-state"
 
-const resolveProjectWorkspaceState = <Persisted>(repo: Repo, persisted: Persisted) =>
-  resolveWorkspaceState(repo, persisted, availableActivityIds)
-
+const availableActivities = [...REVIEW_PROJECT_ACTIVITIES, CODE_PROJECT_ACTIVITY].map(
+  (activity) => ({
+    id: activity.id,
+    supportedSurfaces: activity.supportedSurfaces,
+    defaultForSurfaces: activity.defaultForSurfaces ?? [],
+  }),
+)
+const availableNavigation = [reviewNavigationContribution, codeNavigationContribution]
 const repo = Repo.make({
   id: ReviewProjectId.make("github:fungsi/diffdash"),
   source: HostedRepositorySource.make({
@@ -58,181 +54,81 @@ const repo = Repo.make({
   updatedAt: "2026-08-02T00:00:00.000Z",
 })
 
+const resolve = (persisted: ProjectWorkspaceState | null, navigation = availableNavigation) =>
+  resolveProjectWorkspaceState(repo, persisted, availableActivities, navigation)
+
 describe("project workspace state", () => {
-  it("defaults a first open to Reviews without a selection", () => {
-    expect(resolveProjectWorkspaceState(repo, null)).toEqual({
+  it("defaults a first open through the registered Review codec", () => {
+    expect(resolve(null)).toEqual({
+      _tag: "resolved",
       activeSurface: "review",
       activeActivity: PROJECT_WORKSPACE_REVIEWS_ACTIVITY_ID,
-      notice: null,
-      selectedReview: null,
+      navigationContributionId: reviewNavigationContribution.id,
+      navigationLocation: encodeReviewNavigationState({ selectedReview: Option.none() }),
+      notice: Option.none(),
     })
   })
 
-  it("restores hosted and local targets losslessly", () => {
-    const hosted = HostedReviewTarget.make({
-      kind: "hosted",
-      review: makeHostedReviewLocator("github", "fungsi", "diffdash", 51),
-    })
-    const local = workingTreeReviewTarget(RepositoryCheckoutPath.make("/workspace/diffdash"))
-
-    expect(
-      resolveProjectWorkspaceState(
-        repo,
-        ProjectWorkspaceState.make({
-          projectId: repo.id,
-          activeSurface: "review",
-          activeActivity: REVIEW_COMMENTS_ACTIVITY_ID,
-          selectedReviewTarget: hosted,
-          updatedAt: "2026-08-02T00:00:00.000Z",
-        }),
-      ),
-    ).toEqual({
-      activeSurface: "review",
-      activeActivity: REVIEW_COMMENTS_ACTIVITY_ID,
-      notice: null,
-      selectedReview: { kind: "hosted", review: hosted.review },
-    })
-    expect(selectedReviewTargetForPersistence({ kind: "localDiff", target: local })).toEqual(local)
-  })
-
-  it("restores Code without requiring a selected review", () => {
-    expect(
-      resolveProjectWorkspaceState(
-        repo,
-        ProjectWorkspaceState.make({
-          projectId: repo.id,
-          activeSurface: "code",
-          activeActivity: PROJECT_WORKSPACE_CODE_ACTIVITY_ID,
-          selectedReviewTarget: null,
-          updatedAt: "2026-08-20T00:00:00.000Z",
-        }),
-      ),
-    ).toEqual({
-      activeSurface: "code",
-      activeActivity: PROJECT_WORKSPACE_CODE_ACTIVITY_ID,
-      notice: null,
-      selectedReview: null,
-    })
-  })
-
-  it("rehydrates structural repository comparisons at the persistence boundary", () => {
-    const target = {
-      kind: "repositoryComparison" as const,
-      repository: { ...makeHostedRepositoryLocator("github", "fungsi", "diffdash") },
-      baseRef: RepositoryComparisonRef.make("v1.0.0"),
-      headRef: RepositoryComparisonRef.make("v1.1.0"),
-      baseSha: GitCommitSha.make("a".repeat(40)),
-      headSha: GitCommitSha.make("b".repeat(40)),
-      mergeBaseSha: GitCommitSha.make("c".repeat(40)),
-    }
-
-    const persisted = selectedReviewTargetForPersistence({
-      kind: "repositoryComparison",
-      target,
-    })
-
-    expect(persisted).toBeInstanceOf(RepositoryComparisonTarget)
-    expect(persisted).toEqual(target)
-  })
-
-  it("falls back visibly for malformed, mismatched, and foreign targets", () => {
-    const malformed = resolveProjectWorkspaceState(repo, { activeActivity: "diffdash.core.files" })
-    const mismatched = resolveProjectWorkspaceState(
-      repo,
-      ProjectWorkspaceState.make({
-        projectId: ReviewProjectId.make("github:other/project"),
-        activeSurface: "review",
-        activeActivity: PROJECT_WORKSPACE_FILES_ACTIVITY_ID,
-        selectedReviewTarget: null,
-        updatedAt: "2026-08-02T00:00:00.000Z",
+  it("restores exact Review owner state", () => {
+    const location = encodeReviewNavigationState({
+      selectedReview: Option.some({
+        kind: "hosted",
+        review: makeHostedReviewLocator("github", "fungsi", "diffdash", 51),
       }),
-    )
-    const foreign = resolveProjectWorkspaceState(
-      repo,
+    })
+    const restored = resolve(
       ProjectWorkspaceState.make({
         projectId: repo.id,
         activeSurface: "review",
-        activeActivity: PROJECT_WORKSPACE_FILES_ACTIVITY_ID,
-        selectedReviewTarget: HostedReviewTarget.make({
-          kind: "hosted",
-          review: makeHostedReviewLocator("github", "other", "project", 1),
-        }),
-        updatedAt: "2026-08-02T00:00:00.000Z",
+        activeActivity: PROJECT_WORKSPACE_REVIEWS_ACTIVITY_ID,
+        navigation: { contributionId: reviewNavigationContribution.id, location },
+        updatedAt: "2026-08-25T00:00:00.000Z",
       }),
     )
-
-    for (const resolved of [malformed, mismatched, foreign]) {
-      expect(resolved.activeSurface).toBe("review")
-      expect(resolved.activeActivity).toBe(PROJECT_WORKSPACE_REVIEWS_ACTIVITY_ID)
-      expect(resolved.selectedReview).toBeNull()
-      expect(resolved.notice).not.toBeNull()
-    }
+    expect(restored).toMatchObject({
+      _tag: "resolved",
+      navigationContributionId: reviewNavigationContribution.id,
+      navigationLocation: location,
+    })
   })
 
-  it("repairs an unavailable extension activity without changing the source surface", () => {
-    const resolved = resolveWorkspaceState(
-      repo,
+  it("restores exact opaque Code owner state", () => {
+    const location = createDefaultCodeNavigationState(repo.id)
+    const restored = resolve(
       ProjectWorkspaceState.make({
         projectId: repo.id,
         activeSurface: "code",
-        activeActivity: REVIEW_COMMENTS_ACTIVITY_ID,
-        selectedReviewTarget: null,
-        updatedAt: "2026-08-20T00:00:00.000Z",
+        activeActivity: PROJECT_WORKSPACE_CODE_ACTIVITY_ID,
+        navigation: { contributionId: codeNavigationContribution.id, location },
+        updatedAt: "2026-08-25T00:00:00.000Z",
       }),
-      [
-        PROJECT_WORKSPACE_REVIEWS_ACTIVITY_ID,
-        PROJECT_WORKSPACE_FILES_ACTIVITY_ID,
-        PROJECT_WORKSPACE_CODE_ACTIVITY_ID,
-        PROJECT_WORKSPACE_WALKTHROUGH_ACTIVITY_ID,
-      ],
     )
-
-    expect(resolved).toEqual({
-      activeSurface: "code",
-      activeActivity: PROJECT_WORKSPACE_CODE_ACTIVITY_ID,
-      notice:
-        "The saved workspace activity is unavailable. A built-in activity was restored instead.",
-      selectedReview: null,
+    expect(restored).toMatchObject({
+      _tag: "resolved",
+      navigationContributionId: codeNavigationContribution.id,
+      navigationLocation: location,
     })
   })
 
-  it("repairs an active disposed Comments contribution once without changing Code", () => {
-    const registry = new TrustedExtensionRegistry()
-    Result.getOrThrow(registry.register(coreWorkspaceExtension))
-    const disposeComments = Result.getOrThrow(registry.register(reviewCommentsExtension))
-    const persisted = ProjectWorkspaceState.make({
-      projectId: repo.id,
-      activeSurface: "code",
-      activeActivity: REVIEW_COMMENTS_ACTIVITY_ID,
-      selectedReviewTarget: null,
-      updatedAt: "2026-08-20T00:00:00.000Z",
-    })
-
-    disposeComments()
-    const repaired = resolveWorkspaceState(
-      repo,
-      persisted,
-      registry.snapshot().projectActivities.map(({ id }) => id),
-    )
-    const restored = resolveWorkspaceState(
-      repo,
+  it("repairs a missing navigation owner through a registered default", () => {
+    const restored = resolve(
       ProjectWorkspaceState.make({
         projectId: repo.id,
-        activeSurface: repaired.activeSurface,
-        activeActivity: repaired.activeActivity,
-        selectedReviewTarget: null,
-        updatedAt: "2026-08-20T00:00:01.000Z",
+        activeSurface: "review",
+        activeActivity: PROJECT_WORKSPACE_REVIEWS_ACTIVITY_ID,
+        navigation: {
+          contributionId: ProjectWorkspaceNavigationContributionId.make(
+            "example.removed.navigation",
+          ),
+          location: { opaque: true },
+        },
+        updatedAt: "2026-08-25T00:00:00.000Z",
       }),
-      registry.snapshot().projectActivities.map(({ id }) => id),
     )
-
-    expect(repaired).toEqual({
-      activeSurface: "code",
-      activeActivity: PROJECT_WORKSPACE_CODE_ACTIVITY_ID,
-      notice:
-        "The saved workspace activity is unavailable. A built-in activity was restored instead.",
-      selectedReview: null,
+    expect(restored).toMatchObject({
+      _tag: "resolved",
+      navigationContributionId: reviewNavigationContribution.id,
+      navigationLocation: encodeReviewNavigationState({ selectedReview: Option.none() }),
     })
-    expect(restored).toEqual({ ...repaired, notice: null })
   })
 })

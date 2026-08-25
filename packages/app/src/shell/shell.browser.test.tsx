@@ -22,6 +22,11 @@ describe("App shell browser interactions", () => {
     await appBrowserScenario("projectOpenChooser")()
   })
 
+  it("supersedes an older directory project open before applying or persisting it", async () => {
+    expect.hasAssertions()
+    await appBrowserScenario("projectOpenSupersession")()
+  })
+
   it("browses, opens, rejects, and refreshes checkout files in the Code ribbon", async () => {
     expect.hasAssertions()
     await appBrowserScenario("codeRibbon")()

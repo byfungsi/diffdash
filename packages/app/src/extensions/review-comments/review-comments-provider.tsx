@@ -18,9 +18,13 @@ import {
   useState,
 } from "react"
 
-import type { TrustedTitlebarActionProps } from "../extension-registry"
+import type {
+  TrustedExtensionRegistrationToken,
+  TrustedTitlebarActionProps,
+} from "../extension-registry"
 import { AIConnectionMenu } from "./ai-connection-menu"
 import { CommentSubmissionProvider } from "./comment-submission"
+import { ReviewCommentsReviewStateProvider } from "./review-comments-review-state"
 
 const ReviewCommentsConnectionContext = createContext(Option.none<OpenCodeConnectionSelection>())
 const ReviewCommentsDirectoryContext = createContext<RepositoryCheckoutPath | null>(null)
@@ -63,37 +67,49 @@ const ReviewCommentsStateContext = createContext<ReviewCommentsState | null>(nul
 
 /** Owns project-scoped Review Comments destination state and submission routing. */
 export const ReviewCommentsProvider = ({
+  active,
   children,
   directory,
   projectId,
+  registrationToken: _registrationToken,
 }: {
+  readonly active: boolean
   readonly children: ReactNode
   readonly directory: RepositoryCheckoutPath | null
   readonly projectId: ReviewProjectId | null
+  readonly registrationToken: TrustedExtensionRegistrationToken
 }) => {
   const [connection, setConnection] = useState(Option.none<OpenCodeConnectionSelection>())
   const activeConnection = Option.filter(
     connection,
-    (selected) => projectId !== null && selected.projectId === projectId,
+    (selected) => active && projectId !== null && selected.projectId === projectId,
   )
 
   useEffect(() => {
     setConnection((current) =>
-      Option.filter(current, (selected) => projectId !== null && selected.projectId === projectId),
+      Option.filter(
+        current,
+        (selected) => active && projectId !== null && selected.projectId === projectId,
+      ),
     )
-  }, [projectId])
+  }, [active, projectId])
 
   return (
-    <ReviewCommentsStateProvider connection={activeConnection} projectId={projectId}>
-      <ReviewCommentsConnectionContext value={activeConnection}>
-        <ReviewCommentsDirectoryContext value={directory}>
-          <ReviewCommentsConnectionChangeContext value={setConnection}>
-            <CommentSubmissionProvider connection={activeConnection}>
-              {children}
-            </CommentSubmissionProvider>
-          </ReviewCommentsConnectionChangeContext>
-        </ReviewCommentsDirectoryContext>
-      </ReviewCommentsConnectionContext>
+    <ReviewCommentsStateProvider
+      connection={activeConnection}
+      projectId={active ? projectId : null}
+    >
+      <ReviewCommentsReviewStateProvider>
+        <ReviewCommentsConnectionContext value={activeConnection}>
+          <ReviewCommentsDirectoryContext value={directory}>
+            <ReviewCommentsConnectionChangeContext value={setConnection}>
+              <CommentSubmissionProvider connection={activeConnection}>
+                {children}
+              </CommentSubmissionProvider>
+            </ReviewCommentsConnectionChangeContext>
+          </ReviewCommentsDirectoryContext>
+        </ReviewCommentsConnectionContext>
+      </ReviewCommentsReviewStateProvider>
     </ReviewCommentsStateProvider>
   )
 }

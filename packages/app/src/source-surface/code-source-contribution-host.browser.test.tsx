@@ -1,15 +1,23 @@
 import { RepositoryRelativePath } from "@diffdash/domain/repository-path"
 import { ReviewProjectId, ReviewRevision } from "@diffdash/domain/review-identity"
-import { Option } from "effect"
+import { Option, Result } from "effect"
 import { useEffect } from "react"
 import { createRoot, type Root } from "react-dom/client"
 import { afterEach, describe, expect, it, vi } from "vitest"
 
 import {
   type CodeSourceContributionOutput,
+  makeTrustedExtensionRegistry,
+  type TrustedBuiltInExtension,
   TrustedExtensionContributionId,
   TrustedExtensionId,
+  TrustedExtensionRegistrationToken,
 } from "@/extensions/extension-registry"
+import {
+  TrustedExtensionRegistryProvider,
+  useTrustedExtensionRegistry,
+} from "@/extensions/extension-registry-context"
+import { codeExtension } from "@/extensions/code/code-extension"
 import {
   useCodeSourceContributionHost,
   useCodeSourceContributionRegistration,
@@ -18,6 +26,8 @@ import {
 const contributionId = TrustedExtensionContributionId.make("diffdash.test.shared.code-source")
 const firstOwnerId = TrustedExtensionId.make("diffdash.test.first-owner")
 const secondOwnerId = TrustedExtensionId.make("diffdash.test.second-owner")
+const firstOwnerRegistrationToken = new TrustedExtensionRegistrationToken()
+const secondOwnerRegistrationToken = new TrustedExtensionRegistrationToken()
 const source = {
   projectId: ReviewProjectId.make("source-host-project"),
   workspaceRevision: ReviewRevision.make("1".repeat(40)),
@@ -54,7 +64,49 @@ describe("Code source contribution host", () => {
       expect(mounted).toHaveBeenCalledTimes(2)
     })
   })
+
+  it("disposes and remounts a contribution across same-tick registration turnover", async () => {
+    const mounted = vi.fn<() => void>()
+    const unmounted = vi.fn<() => void>()
+    const extensionId = TrustedExtensionId.make("diffdash.test.code-source-turnover")
+    activeMounted = mounted
+    activeUnmounted = unmounted
+    const extension: TrustedBuiltInExtension = {
+      id: extensionId,
+      codeSourceContributions: [
+        {
+          id: contributionId,
+          order: 1,
+          component: Probe,
+        },
+      ],
+    }
+    const registry = Result.getOrThrow(makeTrustedExtensionRegistry([codeExtension, extension]))
+    const container = document.createElement("div")
+    document.body.append(container)
+    root = createRoot(container)
+    root.render(
+      <TrustedExtensionRegistryProvider extensions={[]} registry={registry}>
+        <RegistryHost />
+      </TrustedExtensionRegistryProvider>,
+    )
+
+    await vi.waitFor(() => expect(mounted).toHaveBeenCalledOnce())
+    expect(registry.unregister(extensionId)).toBe(true)
+    Result.getOrThrow(registry.register(extension))
+
+    await vi.waitFor(() => {
+      expect(unmounted).toHaveBeenCalledOnce()
+      expect(mounted).toHaveBeenCalledTimes(2)
+    })
+  })
 })
+
+const RegistryHost = () => {
+  const { codeSourceContributions } = useTrustedExtensionRegistry()
+  const host = useCodeSourceContributionHost(codeSourceContributions, source)
+  return <>{host.mounts}</>
+}
 
 const Host = ({
   ownerExtensionId,
@@ -68,7 +120,18 @@ const Host = ({
   activeMounted = mounted
   activeUnmounted = unmounted
   const host = useCodeSourceContributionHost(
-    [{ id: contributionId, order: 1, ownerExtensionId, component: Probe }],
+    [
+      {
+        id: contributionId,
+        order: 1,
+        ownerExtensionId,
+        ownerRegistrationToken:
+          ownerExtensionId === firstOwnerId
+            ? firstOwnerRegistrationToken
+            : secondOwnerRegistrationToken,
+        component: Probe,
+      },
+    ],
     source,
   )
   return <>{host.mounts}</>

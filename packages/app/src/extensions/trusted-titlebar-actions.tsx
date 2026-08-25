@@ -16,7 +16,7 @@ export const TrustedTitlebarActions = ({
 }) =>
   actions.map((action) =>
     createElement(action.component, {
-      key: action.id,
+      key: `${action.ownerExtensionId}:${action.id}:${action.ownerRegistrationToken.reactKey}`,
       projectId,
     }),
   )

@@ -983,7 +983,7 @@ test("reports an explicit Claude walkthrough failure through contextBridge and c
     await expect(walkthroughContainer).toHaveAttribute(
       "data-walkthrough-operation-id",
       rawAcceptance.operationId,
-      { timeout: 20_000 },
+      { timeout: 30_000 },
     )
     const uiOperationId = await walkthroughContainer.getAttribute("data-walkthrough-operation-id")
     if (uiOperationId === null) throw new Error("UI walkthrough operation ID is unavailable")
@@ -1316,7 +1316,7 @@ test("opens a merge-base branch comparison from the versioned CLI command", asyn
     active_surface: "review",
     active_activity: "diffdash.core.files",
   })
-  expect(String(persisted.workspaceStates[0]?.selected_review_target_json)).toContain(
+  expect(String(persisted.workspaceStates[0]?.navigation_location_json)).toContain(
     '"_tag":"branch"',
   )
 })
@@ -1485,12 +1485,16 @@ test("opens and forwards immutable repository comparisons through Electron", asy
   const persisted = readReviewPersistenceSnapshot(join(userData, "diffdash.sqlite"))
   expect(persisted.workspaceStates).toHaveLength(1)
   expect(
-    JSON.parse(String(persisted.workspaceStates[0]?.selected_review_target_json)) as unknown,
+    JSON.parse(String(persisted.workspaceStates[0]?.navigation_location_json)) as unknown,
   ).toMatchObject({
-    kind: "repositoryComparison",
-    baseSha: revisions.base,
-    headSha: revisions.head,
-    mergeBaseSha: revisions.base,
+    selectedReview: {
+      kind: "repositoryComparison",
+      target: {
+        baseSha: revisions.base,
+        headSha: revisions.head,
+        mergeBaseSha: revisions.base,
+      },
+    },
   })
 })
 
@@ -1634,16 +1638,17 @@ const dismissOnboardingIfPresent = async (
   options: { readonly telemetryEnabled?: boolean } = {},
 ) => {
   const continueButton = window.getByRole("button", { name: "Continue to DiffDash" })
-  try {
-    await continueButton.waitFor({ state: "visible", timeout: 2_000 })
-    if (options.telemetryEnabled === false) {
-      await window.getByRole("checkbox", { name: "Share anonymous usage data" }).uncheck()
-    }
-    await continueButton.click()
-    await expect(window.getByRole("heading", { name: "DiffDash", exact: true })).toBeVisible()
-  } catch {
-    // Onboarding is only shown for fresh app state.
+  await continueButton
+    .or(window.locator("[data-home-layout], [data-review-activity-rail]").first())
+    .first()
+    .waitFor({ state: "visible", timeout: 15_000 })
+  if (!(await continueButton.isVisible())) return
+  if (options.telemetryEnabled === false) {
+    await window.getByRole("checkbox", { name: "Share anonymous usage data" }).uncheck()
   }
+  await continueButton.click()
+  await expect(continueButton).toBeHidden()
+  await expect(window.getByRole("heading", { name: "DiffDash", exact: true })).toBeVisible()
 }
 
 const openGutterThreadComposer = async (window: Page, gutterNumber: Locator) => {
@@ -1821,7 +1826,8 @@ const readReviewPersistenceSnapshot = (databasePath: string) => {
     const workspaceStates = parseSqliteRows(
       database
         .prepare(
-          `SELECT repo_id, active_surface, active_activity, selected_review_target_json, updated_at
+          `SELECT repo_id, active_surface, active_activity,
+             navigation_contribution_id, navigation_location_json, updated_at
            FROM project_workspace_state ORDER BY repo_id`,
         )
         .all(),

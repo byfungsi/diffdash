@@ -1,17 +1,22 @@
-import { REVIEW_COMMENTS_ACTIVITY_ID } from "@diffdash/domain/project-workspace"
-
 import {
   type ProjectActivityContribution,
   type TrustedBuiltInExtension,
   TrustedExtensionContributionId,
   TrustedExtensionId,
 } from "../extension-registry"
+import { MessageSquare } from "lucide-react"
 import { ReviewCommentsConnectionAction, ReviewCommentsProvider } from "./review-comments-provider"
 import {
   ReviewCommentsActivityPane,
   ReviewCommentsCodeSourceContribution,
 } from "./code-comments-contribution"
-import { ReviewCommentsReviewDiffContribution } from "./review-comments-review-contribution"
+import {
+  ReviewCommentsActivityDetailPane,
+  ReviewCommentsReviewDiffContribution,
+} from "./review-comments-review-contribution"
+import { REVIEW_COMMENTS_ACTIVITY_ID } from "./review-comments-identities"
+
+export { REVIEW_COMMENTS_ACTIVITY_ID } from "./review-comments-identities"
 
 /** Stable owner identity for the trusted Review Comments renderer extension. */
 export const REVIEW_COMMENTS_EXTENSION_ID = TrustedExtensionId.make(
@@ -33,16 +38,36 @@ export const REVIEW_COMMENTS_PROJECT_PROVIDER_ID = TrustedExtensionContributionI
   "diffdash.builtin.review-comments.project-provider",
 )
 
+/** Stable identity for the Review Comments activity context pane. */
+export const REVIEW_COMMENTS_CONTEXT_PANE_ID = TrustedExtensionContributionId.make(
+  "diffdash.builtin.review-comments.context-pane",
+)
+
+/** Stable identity for the Review Comments selected-thread detail pane. */
+export const REVIEW_COMMENTS_DETAIL_PANE_ID = TrustedExtensionContributionId.make(
+  "diffdash.builtin.review-comments.detail-pane",
+)
+
 /** Comments activity metadata shared by Code and Review workspace hosts. */
 export const REVIEW_COMMENTS_ACTIVITY: ProjectActivityContribution = {
   id: REVIEW_COMMENTS_ACTIVITY_ID,
   label: "Comments",
-  icon: "comments",
+  icon: MessageSquare,
   order: 500,
   supportedSurfaces: ["code", "review"],
   surfacePolicy: "preserve",
-  paneComponent: ReviewCommentsActivityPane,
-  reviewDiffContributionId: REVIEW_COMMENTS_REVIEW_DIFF_ID,
+  slots: {
+    contextPane: {
+      id: REVIEW_COMMENTS_CONTEXT_PANE_ID,
+      order: 500,
+      component: ReviewCommentsActivityPane,
+    },
+    detailPane: {
+      id: REVIEW_COMMENTS_DETAIL_PANE_ID,
+      order: 500,
+      component: ReviewCommentsActivityDetailPane,
+    },
+  },
 }
 
 /** Stable identity for the Review Comments destination selector. */

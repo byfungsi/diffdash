@@ -28,6 +28,8 @@ import {
   REVIEW_COMMENTS_EXTENSION_ID,
 } from "./review-comments-extension"
 import { ReviewCommentsStateProvider } from "./review-comments-provider"
+import { TrustedExtensionRegistrationToken } from "../extension-registry"
+import { CodeSurfaceCapabilityProvider } from "../code/code-surface-capability"
 
 let root: Root | null = null
 const projectId = ReviewProjectId.make("code-comment-project")
@@ -51,6 +53,7 @@ const contributions = [
     id: REVIEW_COMMENTS_CODE_SOURCE_ID,
     order: 500,
     ownerExtensionId: REVIEW_COMMENTS_EXTENSION_ID,
+    ownerRegistrationToken: new TrustedExtensionRegistrationToken(),
     component: ReviewCommentsCodeSourceContribution,
   },
 ]
@@ -198,13 +201,23 @@ const renderHarness = (
               projectId={activeProjectId}
               revision={workspaceRevision}
             />
-            <ReviewCommentsActivityPane
-              surface="code"
-              projectId={activeProjectId}
-              workspaceRevision={workspaceRevision}
-              selectedPath={path}
-              selectPath={() => undefined}
-            />
+            <CodeSurfaceCapabilityProvider
+              capability={{ workspaceRevision, selectedPath: path, selectPath: () => undefined }}
+            >
+              <ReviewCommentsActivityPane
+                location={{ surface: "code", projectId: activeProjectId }}
+                paneHost={{
+                  contextOpen: true,
+                  detailOpen: false,
+                  contextActions: null,
+                  openContext: () => undefined,
+                  openDetail: () => undefined,
+                  closeContext: () => undefined,
+                  closeDetail: () => undefined,
+                  showMain: () => undefined,
+                }}
+              />
+            </CodeSurfaceCapabilityProvider>
           </div>
         </CommentSubmissionContext>
       </ReviewCommentsStateProvider>,

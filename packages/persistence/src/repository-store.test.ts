@@ -395,13 +395,15 @@ describe("RepositoryStore", () => {
         )
         yield* database.run(
           `INSERT INTO project_workspace_state (
-            repo_id, active_surface, active_activity, selected_review_target_json, updated_at
-          ) VALUES (?, ?, ?, ?, ?)`,
+            repo_id, active_surface, active_activity,
+            navigation_contribution_id, navigation_location_json, updated_at
+          ) VALUES (?, ?, ?, ?, ?, ?)`,
           [
             alias.id,
             "review",
             "diffdash.builtin.review-comments.comments",
-            null,
+            "diffdash.builtin.review.navigation",
+            '{"selectedReview":null}',
             "2026-08-02T01:00:00.000Z",
           ],
         )
@@ -690,14 +692,16 @@ describe("RepositoryStore", () => {
         )
         yield* database.run(
           `INSERT INTO project_workspace_state (
-            repo_id, active_surface, active_activity, selected_review_target_json, updated_at
-          ) VALUES (?, ?, ?, NULL, ?)`,
+            repo_id, active_surface, active_activity,
+            navigation_contribution_id, navigation_location_json, updated_at
+          ) VALUES (?, ?, ?, 'diffdash.builtin.review.navigation', '{"selectedReview":null}', ?)`,
           [hosted.id, "review", "diffdash.core.reviews", "2026-08-02T04:00:00.000Z"],
         )
         yield* database.run(
           `INSERT INTO project_workspace_state (
-            repo_id, active_surface, active_activity, selected_review_target_json, updated_at
-          ) VALUES (?, ?, ?, NULL, ?)`,
+            repo_id, active_surface, active_activity,
+            navigation_contribution_id, navigation_location_json, updated_at
+          ) VALUES (?, ?, ?, 'diffdash.builtin.review.navigation', '{"selectedReview":null}', ?)`,
           [
             alias.id,
             "review",
