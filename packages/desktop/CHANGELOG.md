@@ -1,5 +1,17 @@
 # DiffDash Changelog
 
+## 0.13.1
+
+### Patch Changes
+
+- [#106](https://github.com/byfungsi/diffdash/pull/106) [`d4ce747`](https://github.com/byfungsi/diffdash/commit/d4ce747079b966302f4e7301983505ca7303f4c7) Thanks [@hanipcode](https://github.com/hanipcode)! - Resolve clean local reviews without leaving the working-tree source loading indefinitely.
+
+- [#105](https://github.com/byfungsi/diffdash/pull/105) [`712503f`](https://github.com/byfungsi/diffdash/commit/712503f196ce2ddcb70ab2d235a3a03a02e86091) Thanks [@hanipcode](https://github.com/hanipcode)! - Stream large Code workspace files through Core and Electron while keeping rendering responsive.
+
+- [#103](https://github.com/byfungsi/diffdash/pull/103) [`d062970`](https://github.com/byfungsi/diffdash/commit/d06297049af6765d4165e27d20fc9c9176a596f4) Thanks [@hanipcode](https://github.com/hanipcode)! - Add keyboard shortcuts to refresh Code and open project ribbon items by their displayed order.
+
+- [#107](https://github.com/byfungsi/diffdash/pull/107) [`edf411e`](https://github.com/byfungsi/diffdash/commit/edf411ebb827c6c744281d957afe92a78e233267) Thanks [@hanipcode](https://github.com/hanipcode)! - Keep changed files in the same order in the review file tree and diff view.
+
 ## 0.13.0
 
 ### Minor Changes
