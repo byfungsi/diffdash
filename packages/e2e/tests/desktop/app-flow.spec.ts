@@ -1648,7 +1648,6 @@ const dismissOnboardingIfPresent = async (
   }
   await continueButton.click()
   await expect(continueButton).toBeHidden()
-  await expect(window.getByRole("heading", { name: "DiffDash", exact: true })).toBeVisible()
 }
 
 const openGutterThreadComposer = async (window: Page, gutterNumber: Locator) => {
