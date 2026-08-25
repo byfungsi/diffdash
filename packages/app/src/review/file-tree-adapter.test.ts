@@ -32,17 +32,17 @@ const file = (path: string, status: ParsedDiffFile["status"] = "modified") => {
 }
 
 describe("buildReviewFileTreeInput", () => {
-  it("preserves diff order for visible paths and git statuses", () => {
+  it("uses tree order for visible paths and git statuses", () => {
     const input = buildReviewFileTreeInput(
       [file("src/b.ts", "modified"), file("src/a.ts", "added"), file("src/old.ts", "deleted")],
       false,
     )
 
-    expect(input.paths).toEqual(["src/b.ts", "src/a.ts", "src/old.ts"])
+    expect(input.paths).toEqual(["src/a.ts", "src/b.ts", "src/old.ts"])
     expect(input.gitStatus).toEqual([
       { path: "src/", status: "modified" },
-      { path: "src/b.ts", status: "modified" },
       { path: "src/a.ts", status: "added" },
+      { path: "src/b.ts", status: "modified" },
       { path: "src/old.ts", status: "deleted" },
     ])
   })
@@ -78,7 +78,7 @@ describe("buildReviewFileTreeInput", () => {
     })
     expect(buildReviewFileTreeInput(files, true)).toMatchObject({
       hiddenCount: 0,
-      paths: ["src/app.tsx", "pnpm-lock.yaml", "assets/logo.png"],
+      paths: ["assets/logo.png", "src/app.tsx", "pnpm-lock.yaml"],
     })
   })
 
