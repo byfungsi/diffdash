@@ -36,8 +36,10 @@ import {
 } from "@diffdash/domain/review-identity"
 import {
   HostedReviewDiffSourceTarget,
+  HostedReviewCheckoutSpec,
   REVIEW_DIFF_MAX_CHUNK_BYTES,
   ReviewDiffByteCompletion,
+  ReviewDiffAvailabilityFailure,
   ReviewDiffGenerationTracker,
   ReviewDiffSourceFacts,
   ReviewDiffSourceOffer,
@@ -45,6 +47,10 @@ import {
   type ReviewDiffSource,
 } from "@diffdash/git-provider"
 import { GitService } from "@diffdash/local-git/local-git"
+import {
+  HostedReviewWorkspacePool,
+  HostedReviewWorkspacePoolError,
+} from "@diffdash/local-git/hosted-review-workspace-pool"
 import * as DatabaseNode from "@diffdash/persistence/database-node"
 import { ResourceCatalog, ResourceRootId } from "@diffdash/persistence/resource-catalog"
 import { ProcessExit, ProcessResult, ProcessService, type ProcessRequest } from "@diffdash/process"
@@ -164,6 +170,23 @@ const hostedSource = (closed: { count: number }): ReviewDiffSource => {
   }
 }
 
+const refusedHostedSource = (closed: { count: number }): ReviewDiffSource => {
+  const source = hostedSource(closed)
+  return {
+    ...source,
+    unifiedBytes: (acquisition) =>
+      Stream.fail(
+        ReviewDiffAvailabilityFailure.make({
+          generation: acquisition.generation,
+          method: "unifiedBytes",
+          message: "Provider refused to generate the complete diff",
+          category: "providerGenerationLimit",
+          diagnosticCode: "http-406",
+        }),
+      ),
+  }
+}
+
 const processResult = (request: ProcessRequest, stdout: string): ProcessResult =>
   ProcessResult.make({
     command: request.command,
@@ -263,8 +286,17 @@ const providerLayer = (source: ReviewDiffSource) =>
     getReviewDiffSource: () => Effect.succeed(source),
     getReviewDecision: () => Effect.die("unused"),
     submitReviewDecision: () => Effect.die("unused"),
-    hostedReviewCheckoutSpec: () => Effect.die("unused"),
-    bootstrapBareRepository: () => Effect.die("unused"),
+    hostedReviewCheckoutSpec: () =>
+      Effect.succeed(
+        HostedReviewCheckoutSpec.make({
+          repository,
+          review,
+          remoteUrl: "https://example.test/diffdash/acquisition.git",
+          fetchRef: RepositoryComparisonRef.make("refs/pull/218/head"),
+          revision: headRevision,
+        }),
+      ),
+    bootstrapBareRepository: () => Effect.void,
     isAvailable: () => Effect.die("unused"),
   })
 
@@ -284,6 +316,19 @@ const comparisonLayer = Layer.succeed(RepositoryComparisonSource, {
   useWorkspace: (_target, run) => run(checkout),
 })
 
+const hostedWorkspaceLayer = Layer.succeed(HostedReviewWorkspacePool, {
+  use: () => Effect.die("unused"),
+  pinComparison: () =>
+    Effect.succeed({
+      baseSha: GitCommitSha.make(baseRevision),
+      headSha: GitCommitSha.make(headRevision),
+      mergeBaseSha: GitCommitSha.make(baseRevision),
+    }),
+  readComparisonDiff: () => Effect.die("unused"),
+  useComparison: (_input, run) => run(checkout),
+  useRevision: (_input, run) => run(checkout),
+})
+
 const testDirectory = Effect.acquireRelease(
   Effect.sync(() => {
     const directory = mkdtempSync(join(tmpdir(), "diffdash-acquisition-"))
@@ -293,7 +338,14 @@ const testDirectory = Effect.acquireRelease(
   (directory) => Effect.sync(() => rmSync(directory, { force: true, recursive: true })),
 )
 
-const acquisitionLayer = (directory: string, source: ReviewDiffSource) => {
+const acquisitionLayer = (
+  directory: string,
+  source: ReviewDiffSource,
+  options?: {
+    readonly managedQuotaBytes?: number
+    readonly workspaceLayer?: Layer.Layer<HostedReviewWorkspacePool>
+  },
+) => {
   const resourceLayer = ResourceCatalog.layer.pipe(
     Layer.provide(DatabaseNode.layer(join(directory, "database.sqlite"))),
   )
@@ -311,7 +363,7 @@ const acquisitionLayer = (directory: string, source: ReviewDiffSource) => {
   return coreSnapshotAcquisitionLayer({
     rootId,
     rootPath: join(directory, "managed"),
-    managedQuotaBytes: 4 * 1024 * 1024,
+    managedQuotaBytes: options?.managedQuotaBytes ?? 4 * 1024 * 1024,
     reservationLifetimeMs: 60_000,
   }).pipe(
     Layer.provideMerge(ingestionLayer),
@@ -322,6 +374,7 @@ const acquisitionLayer = (directory: string, source: ReviewDiffSource) => {
     Layer.provideMerge(repositoriesLayer),
     Layer.provideMerge(resourceLayer),
     Layer.provideMerge(collectionLayer),
+    Layer.provideMerge(options?.workspaceLayer ?? hostedWorkspaceLayer),
   )
 }
 
@@ -380,6 +433,102 @@ describe("CoreSnapshotAcquisition", () => {
           Buffer.from(patchBytes),
         )
       }).pipe(Effect.provide(layer))
+      expect(closed.count).toBe(1)
+    }),
+  )
+
+  it.effect("falls back to an exact Git stream after a provider generation-limit refusal", () =>
+    Effect.gen(function* () {
+      const directory = yield* testDirectory
+      const closed = { count: 0 }
+      yield* Effect.gen(function* () {
+        const acquisition = yield* CoreSnapshotAcquisition
+        const resources = yield* ResourceCatalog
+        yield* resources.registerRoot({
+          id: rootId,
+          path: join(directory, "managed"),
+          createdAtMs: 0,
+        })
+
+        const manifest = yield* acquisition.acquireHosted(review)
+
+        expect(manifest.projectId).toBe(projectId)
+        expect(manifest.fileCount).toBe(1)
+        expect(closed.count).toBe(1)
+        expect((yield* resources.list()).some(({ state }) => state === "writing")).toBe(false)
+      }).pipe(Effect.provide(acquisitionLayer(directory, refusedHostedSource(closed))))
+    }),
+  )
+
+  it.effect("classifies managed spool quota exhaustion as a cache-full review failure", () =>
+    Effect.gen(function* () {
+      const directory = yield* testDirectory
+      const closed = { count: 0 }
+      const failure = yield* Effect.gen(function* () {
+        const acquisition = yield* CoreSnapshotAcquisition
+        const resources = yield* ResourceCatalog
+        yield* resources.registerRoot({
+          id: rootId,
+          path: join(directory, "managed"),
+          createdAtMs: 0,
+        })
+        return yield* acquisition.acquireHosted(review).pipe(Effect.flip)
+      }).pipe(
+        Effect.provide(
+          acquisitionLayer(directory, hostedSource(closed), {
+            managedQuotaBytes: patchBytes.byteLength - 1,
+          }),
+        ),
+      )
+
+      expect(failure).toMatchObject({
+        _tag: "ReviewContextError",
+        category: "cacheFull",
+      })
+      expect(closed.count).toBe(1)
+    }),
+  )
+
+  it.effect("classifies revision movement during exact Git fallback as review changed", () =>
+    Effect.gen(function* () {
+      const directory = yield* testDirectory
+      const closed = { count: 0 }
+      const revisionChangedWorkspaceLayer = Layer.succeed(HostedReviewWorkspacePool, {
+        use: () => Effect.die("unused"),
+        pinComparison: () => Effect.die("unused"),
+        readComparisonDiff: () => Effect.die("unused"),
+        useComparison: () => Effect.die("unused"),
+        useRevision: () =>
+          Effect.fail(
+            HostedReviewWorkspacePoolError.make({
+              code: "revision-changed",
+              operation: "useRevision",
+              reason: "The fetched review revision changed",
+              cause: new Error("revision changed"),
+            }),
+          ),
+      })
+      const failure = yield* Effect.gen(function* () {
+        const acquisition = yield* CoreSnapshotAcquisition
+        const resources = yield* ResourceCatalog
+        yield* resources.registerRoot({
+          id: rootId,
+          path: join(directory, "managed"),
+          createdAtMs: 0,
+        })
+        return yield* acquisition.acquireHosted(review).pipe(Effect.flip)
+      }).pipe(
+        Effect.provide(
+          acquisitionLayer(directory, refusedHostedSource(closed), {
+            workspaceLayer: revisionChangedWorkspaceLayer,
+          }),
+        ),
+      )
+
+      expect(failure).toMatchObject({
+        _tag: "ReviewContextError",
+        category: "reviewChanged",
+      })
       expect(closed.count).toBe(1)
     }),
   )

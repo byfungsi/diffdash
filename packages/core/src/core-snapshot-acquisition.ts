@@ -10,10 +10,12 @@ import {
 import { type LocalReviewTarget } from "@diffdash/domain/local-review"
 import { RepositoryCheckoutPath } from "@diffdash/domain/repository"
 import {
+  GitCommitSha,
   makeRepositoryComparisonReviewKey,
+  RepositoryComparisonRef,
   repositoryComparisonBaseRevision,
   repositoryComparisonHeadRevision,
-  type RepositoryComparisonTarget,
+  RepositoryComparisonTarget,
 } from "@diffdash/domain/repository-comparison"
 import {
   HostedReviewSnapshotManifest,
@@ -30,11 +32,13 @@ import {
 } from "@diffdash/domain/review-identity"
 import {
   LocalReviewDiffSourceTarget,
+  ReviewDiffAvailabilityFailure,
   ReviewDiffAcquisition,
   type ReviewDiffByteChunk,
   type ReviewDiffByteCompletion,
   ReviewDiffGeneration,
   reviewDiffStorageRequirement,
+  ReviewDiffRevisionChanged,
   ReviewDiffSourceFailure,
   type ReviewDiffSource,
 } from "@diffdash/git-provider"
@@ -45,6 +49,10 @@ import {
   makeLocalReviewKey,
 } from "@diffdash/local-git/local-git"
 import { makeRepositoryComparisonReviewDiffSource } from "@diffdash/local-git/repository-comparison-review-diff-source"
+import {
+  HostedReviewWorkspacePool,
+  HostedReviewWorkspacePoolError,
+} from "@diffdash/local-git/hosted-review-workspace-pool"
 import {
   CatalogResourceId,
   ResourceCatalog,
@@ -57,17 +65,29 @@ import {
   FileDeltaIdentity,
   type SnapshotStorageSource,
 } from "@diffdash/persistence/snapshot-block-store"
-import { ProcessService, processRequest, type ProcessExecutionError } from "@diffdash/process"
+import {
+  ProcessCancellationError,
+  ProcessService,
+  processRequest,
+  type ProcessExecutionError,
+} from "@diffdash/process"
 import { Clock, Context, Deferred, Effect, Layer, Match, Schema, Stream } from "effect"
 
 import { toCoreExpectedCause } from "./core-error-cause"
+import { CoreAbsolutePath } from "./core-configuration"
 import {
   CoreSnapshotIngestion,
+  CoreSnapshotIngestionError,
   type CoreSnapshotFileDeltaKeySource,
   type CoreSnapshotIngestionFailure,
   type CoreSnapshotIngestionResult,
 } from "./core-snapshot-ingestion"
-import { GitProvider, type GitProviderCallError, ReviewContextError } from "./services/git-provider"
+import {
+  GitProvider,
+  type GitProviderCallError,
+  ReviewContextError,
+  type ReviewContextFailureCategory,
+} from "./services/git-provider"
 import {
   RepositoryComparisonSource,
   RepositoryComparisonOperation,
@@ -78,6 +98,7 @@ import { ResourceCollection } from "./resource-collection"
 
 const DIFF_OPTIONS = "--no-ext-diff --no-color"
 const FILE_DELTA_IDENTITY_VERSION = 1
+const MANAGED_SPOOL_QUOTA_CAUSE_TAG = "managed-spool-quota"
 const GIT_METADATA_MAX_BYTES = 64 * 1024 * 1024
 
 /** Filesystem and quota policy for durable managed review spools. */
@@ -124,12 +145,14 @@ export const coreSnapshotAcquisitionLayer = (
   | RepositoryLinker
   | ResourceCatalog
   | ResourceCollection
+  | HostedReviewWorkspacePool
 > =>
   Layer.effect(
     CoreSnapshotAcquisition,
     Effect.gen(function* () {
       const comparisons = yield* RepositoryComparisonSource
       const git = yield* GitService
+      const hostedWorkspaces = yield* HostedReviewWorkspacePool
       const ingestion = yield* CoreSnapshotIngestion
       const processes = yield* ProcessService
       const providers = yield* GitProvider
@@ -166,10 +189,10 @@ export const coreSnapshotAcquisitionLayer = (
           )
           const prepared =
             reviewDiffStorageRequirement(source.offer.facts) === "managedCompleteSpool"
-              ? yield* makeManagedSpoolSource(source, resources, options)
+              ? yield* makeManagedSpoolSource(source, resources, resourceCollection, options)
               : sourceMaterial.storageSource === null
                 ? yield* spoolFailure("Exact Git source did not provide materialized objects")
-                : { source, storageSource: sourceMaterial.storageSource }
+                : { source, storageSource: sourceMaterial.storageSource, discard: Effect.void }
           const acquisition = freshAcquisition(prepared.source)
           const snapshotId = makeReviewSnapshotId({
             reviewKey,
@@ -178,21 +201,23 @@ export const coreSnapshotAcquisitionLayer = (
             diffIdentity: source.offer.semanticIdentity,
           })
           handedToIngestion = true
-          return yield* ingestion.ingest({
-            source: prepared.source,
-            acquisition,
-            manifest: {
-              projectId: input.projectId,
-              snapshotId,
-              reviewKey,
-              baseRevision: input.baseRevision,
-              headRevision: source.offer.expectedRevision,
-              semanticIdentity: source.offer.semanticIdentity,
-              descriptor: input.descriptor,
-              storageSource: prepared.storageSource,
-            },
-            fileDeltaKeys: sourceMaterial.fileDeltaKeys,
-          })
+          return yield* ingestion
+            .ingest({
+              source: prepared.source,
+              acquisition,
+              manifest: {
+                projectId: input.projectId,
+                snapshotId,
+                reviewKey,
+                baseRevision: input.baseRevision,
+                headRevision: source.offer.expectedRevision,
+                semanticIdentity: source.offer.semanticIdentity,
+                descriptor: input.descriptor,
+                storageSource: prepared.storageSource,
+              },
+              fileDeltaKeys: sourceMaterial.fileDeltaKeys,
+            })
+            .pipe(Effect.onError(() => prepared.discard.pipe(Effect.ignore)))
         })
         return yield* workflow.pipe(
           Effect.onExit(() => (handedToIngestion ? Effect.void : source.close.pipe(Effect.ignore))),
@@ -226,23 +251,115 @@ export const coreSnapshotAcquisitionLayer = (
         const revisions = yield* hostedRevisions(detail, source).pipe(
           Effect.onError(() => source.close.pipe(Effect.ignore)),
         )
-        const result = yield* ingest({
+        const descriptor = HostedReviewDescriptor.make({
+          review: detail.summary.locator,
+          title: detail.summary.title,
+          authorUsername: detail.summary.author.username,
+          state: detail.summary.state,
+          draft: detail.summary.draft,
+          baseRef: detail.summary.base.name,
+          headRef: detail.summary.head.name,
+          url: detail.summary.url,
+        })
+        const direct = ingest({
           source,
           projectId: project.id,
           baseRevision: revisions.base,
-          descriptor: HostedReviewDescriptor.make({
-            review: detail.summary.locator,
-            title: detail.summary.title,
-            authorUsername: detail.summary.author.username,
-            state: detail.summary.state,
-            draft: detail.summary.draft,
-            baseRef: detail.summary.base.name,
-            headRef: detail.summary.head.name,
-            url: detail.summary.url,
-          }),
+          descriptor,
           repositoryPath: project.localPath,
           statusByPath: changedFileStatuses(detail.files),
-        }).pipe(Effect.mapError(reviewFailure("hosted.snapshot")))
+        })
+        const result = yield* direct.pipe(
+          Effect.catch((error) =>
+            Schema.is(ReviewDiffAvailabilityFailure)(error) &&
+            error.category === "providerGenerationLimit"
+              ? Effect.gen(function* () {
+                  const checkoutSpec = yield* providers.hostedReviewCheckoutSpec(
+                    review,
+                    source.offer.expectedRevision,
+                  )
+                  const baseSha = yield* Schema.decodeUnknownEffect(GitCommitSha)(
+                    revisions.base,
+                  ).pipe(
+                    Effect.mapError(() =>
+                      spoolFailure("Hosted review base revision was not a complete Git commit SHA"),
+                    ),
+                  )
+                  const headSha = yield* Schema.decodeUnknownEffect(GitCommitSha)(
+                    source.offer.expectedRevision,
+                  ).pipe(
+                    Effect.mapError(() =>
+                      spoolFailure("Hosted review head revision was not a complete Git commit SHA"),
+                    ),
+                  )
+                  const bootstrapBareRepository = (destination: RepositoryCheckoutPath) =>
+                    providers.bootstrapBareRepository(
+                      review.repository,
+                      CoreAbsolutePath.make(destination),
+                    )
+                  return yield* hostedWorkspaces.useRevision(
+                    {
+                      repository: review.repository,
+                      sourcePath: project.localPath,
+                      remoteUrl: checkoutSpec.remoteUrl,
+                      revision: headSha,
+                      fetchRef: checkoutSpec.fetchRef,
+                      bootstrapBareRepository,
+                    },
+                    () =>
+                      hostedWorkspaces
+                        .pinComparison({
+                          repository: review.repository,
+                          sourcePath: project.localPath,
+                          remoteUrl: checkoutSpec.remoteUrl,
+                          baseRef: RepositoryComparisonRef.make(baseSha),
+                          headRef: RepositoryComparisonRef.make(headSha),
+                          bootstrapBareRepository,
+                        })
+                        .pipe(
+                          Effect.flatMap((pinned) => {
+                            const target = RepositoryComparisonTarget.make({
+                              kind: "repositoryComparison",
+                              repository: review.repository,
+                              baseRef: detail.summary.base.name,
+                              headRef: detail.summary.head.name,
+                              ...pinned,
+                            })
+                            return hostedWorkspaces.useComparison(
+                              {
+                                repository: review.repository,
+                                sourcePath: project.localPath,
+                                remoteUrl: checkoutSpec.remoteUrl,
+                                ...pinned,
+                                bootstrapBareRepository,
+                              },
+                              (repositoryPath) =>
+                                makeRepositoryComparisonReviewDiffSource({
+                                  reviewKey: source.offer.target.reviewKey,
+                                  target,
+                                  repositoryPath,
+                                }).pipe(
+                                  Effect.provideService(ProcessService, processes),
+                                  Effect.flatMap((exactSource) =>
+                                    ingest({
+                                      source: exactSource,
+                                      projectId: project.id,
+                                      baseRevision: revisions.base,
+                                      descriptor,
+                                      repositoryPath,
+                                      statusByPath: new Map(),
+                                    }),
+                                  ),
+                                ),
+                            )
+                          }),
+                        ),
+                  )
+                })
+              : Effect.fail(error),
+          ),
+          Effect.mapError(reviewFailure("hosted.snapshot")),
+        )
         const manifest = HostedReviewSnapshotManifest.make({
           ...manifestIdentity(result, revisions.base, source.offer.expectedRevision),
           detail: { summary: detail.summary },
@@ -692,6 +809,7 @@ const makeManagedSpoolSource = Effect.fn("CoreSnapshotAcquisition.makeManagedSpo
   function* (
     source: ReviewDiffSource,
     resources: ResourceCatalog["Service"],
+    resourceCollection: ResourceCollection["Service"],
     options: CoreSnapshotAcquisitionOptions,
   ) {
     const digest = createHash("sha256")
@@ -746,7 +864,8 @@ const makeManagedSpoolSource = Effect.fn("CoreSnapshotAcquisition.makeManagedSpo
       })
       if (reserved.kind === "quotaExceeded")
         return yield* spoolFailure(
-          `Managed review spool needs ${reserved.requiredBytes} bytes but only ${reserved.availableBytes} are available`,
+          "The managed review spool quota is exhausted",
+          MANAGED_SPOOL_QUOTA_CAUSE_TAG,
         )
       yield* writeAll(handle, chunk)
       bytes += chunk.byteLength
@@ -772,6 +891,25 @@ const makeManagedSpoolSource = Effect.fn("CoreSnapshotAcquisition.makeManagedSpo
         nowMs: finalizedAt,
       })
     })
+    const discard = Effect.gen(function* () {
+      if (completed) return
+      completed = true
+      yield* closeHandle()
+      const nowMs = yield* Clock.currentTimeMillis
+      yield* resources.finalizeWrite({
+        resourceId,
+        expectedBytes: bytes,
+        checksum: `sha256:${hash.digest("hex")}`,
+        validation: "incomplete-unified-diff:v1",
+        nowMs,
+      })
+      yield* resourceCollection.collect({
+        resourceId,
+        recoveryToken: ResourceRecoveryToken.make(`discard-spool:${randomUUID()}`),
+        nowMs,
+        retryAtMs: nowMs,
+      })
+    }).pipe(Effect.mapError(toSpoolSourceFailure))
     const managed: ReviewDiffSource = {
       offer: source.offer,
       unifiedBytes: (acquisition) =>
@@ -795,6 +933,7 @@ const makeManagedSpoolSource = Effect.fn("CoreSnapshotAcquisition.makeManagedSpo
     return {
       source: managed,
       storageSource: { kind: "managedSpool", resourceId } satisfies SnapshotStorageSource,
+      discard,
     }
   },
 )
@@ -808,11 +947,12 @@ const writeAll = (
     catch: () => spoolFailure("Could not write the managed review spool"),
   }).pipe(Effect.asVoid)
 
-const spoolFailure = (message: string): ReviewDiffSourceFailure =>
+const spoolFailure = (message: string, causeTag?: string): ReviewDiffSourceFailure =>
   ReviewDiffSourceFailure.make({
     generation: ReviewDiffGeneration.make("core-managed-spool"),
     method: "unifiedBytes",
     message,
+    causeTag,
   })
 
 const localStagingFailure = (): ReviewDiffSourceFailure =>
@@ -856,6 +996,7 @@ const hostedRevisions = (
     ? Effect.succeed({ base: ReviewRevision.make(base) })
     : ReviewContextError.make({
         operation: "hosted.snapshot",
+        category: "reviewChanged",
         reason: "Hosted review metadata did not match its committed diff source",
         cause: new Error("Hosted review revisions changed before ingestion"),
       })
@@ -903,6 +1044,7 @@ const rawStatus = (status: string): FileDeltaIdentity["status"] => {
 type CoreSnapshotAcquisitionInternalFailure =
   | CoreSnapshotIngestionFailure
   | GitProviderCallError
+  | HostedReviewWorkspacePoolError
   | LocalReviewChangedError
   | ProcessExecutionError
   | ResourceCatalogError
@@ -910,12 +1052,91 @@ type CoreSnapshotAcquisitionInternalFailure =
 
 const reviewFailure =
   (operation: ReviewContextError["operation"]) =>
-  (cause: CoreSnapshotAcquisitionInternalFailure): ReviewContextError =>
-    ReviewContextError.make({
+  (cause: CoreSnapshotAcquisitionInternalFailure): ReviewContextError => {
+    const details = reviewFailureDetails(cause)
+    return ReviewContextError.make({
       operation,
-      reason: "Unable to load review context",
+      ...details,
       cause: toCoreExpectedCause(cause),
     })
+  }
+
+const reviewFailureDetails = (
+  cause: CoreSnapshotAcquisitionInternalFailure,
+): { readonly category: ReviewContextFailureCategory; readonly reason: string } => {
+  if (Schema.is(ReviewDiffAvailabilityFailure)(cause)) {
+    switch (cause.category) {
+      case "authenticationRequired":
+        return {
+          category: "authenticationRequired",
+          reason: "The Git provider needs authentication before this review can be loaded",
+        }
+      case "authorizationRequired":
+        return {
+          category: "authorizationRequired",
+          reason: "The Git provider account cannot access this review diff",
+        }
+      case "transientProviderFailure":
+        return {
+          category: "providerUnavailable",
+          reason: "The Git provider is temporarily unable to generate this review diff",
+        }
+      case "providerGenerationLimit":
+        return {
+          category: "fallbackFailed",
+          reason: "The provider diff was too large and the exact Git fallback could not load it",
+        }
+    }
+  }
+  if (Schema.is(ReviewDiffRevisionChanged)(cause)) {
+    return {
+      category: "reviewChanged",
+      reason: "The review changed while its diff was loading; retry to open the latest revision",
+    }
+  }
+  if (Schema.is(HostedReviewWorkspacePoolError)(cause)) {
+    if (cause.code === "revision-changed") {
+      return {
+        category: "reviewChanged",
+        reason: "The review changed while its exact Git fallback was loading",
+      }
+    }
+    return {
+      category: "fallbackFailed",
+      reason:
+        "The provider diff was unavailable and the exact Git fallback could not prepare the review",
+    }
+  }
+  if (
+    Schema.is(ReviewDiffSourceFailure)(cause) &&
+    cause.causeTag === MANAGED_SPOOL_QUOTA_CAUSE_TAG
+  ) {
+    return {
+      category: "cacheFull",
+      reason: "The managed review cache is full; clear cached data and retry",
+    }
+  }
+  if (Schema.is(CoreSnapshotIngestionError)(cause) && cause.reason === "hunkTooLarge") {
+    return {
+      category: "contentTooLarge",
+      reason:
+        "The review contains an individual diff line or hunk that exceeds the supported limit",
+    }
+  }
+  if (Schema.is(CoreSnapshotIngestionError)(cause) && cause.reason === "quotaExceeded") {
+    return {
+      category: "cacheFull",
+      reason: "The managed review cache is full; clear cached data and retry",
+    }
+  }
+  if (Schema.is(ProcessCancellationError)(cause)) {
+    return {
+      category: "cancelled",
+      reason: "The review acquisition was cancelled before it completed",
+    }
+  }
+  return { category: "acquisitionFailed", reason: "Unable to load review context" }
+}
 
 const comparisonFailure =
   (operation: string) =>

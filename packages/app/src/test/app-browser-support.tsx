@@ -1163,6 +1163,7 @@ type AppBrowserScenarioId =
   | "viewedShortcutPointerTarget"
   | "viewedViewportAnchor"
   | "virtualizedSearch"
+  | "lateDiffHostResize"
   | "walkthroughNoAgent"
   | "walkthroughSettingsPersistence"
   | "workbenchTitlebar"
@@ -2535,6 +2536,7 @@ scenario("projectStateRestoration", async () => {
     ).not.toBeNull()
     expect(document.body.textContent).toContain("Opened PR #51")
     expect(getDiffCardPaths()).toEqual(["docs/readme.md", "src/app.tsx"])
+    expect(calls.acquireLocalReviewSnapshot).not.toHaveBeenCalled()
   })
 })
 
@@ -5146,6 +5148,44 @@ scenario("wrappedFileBuffers", async () => {
     },
     { timeout: 15_000 },
   )
+})
+
+scenario("lateDiffHostResize", async () => {
+  const fixture = makeManyFileDiffFixture()
+  installDiffDashApi({
+    pullRequestDetail: HostedReviewDetail.make({
+      ...detail,
+      summary: fixture.manyPullRequest,
+    }),
+    pullRequestDiff: fixture.manyDiff,
+    reviewRequests: [fixture.manyPullRequest],
+  })
+  renderApp({ strictMode: true })
+
+  await openHostedReview(58)
+  await showResponsiveDiffPane()
+  const host = await vi.waitFor(() => {
+    const candidate = getDiffShadowRoot(fixture.paths[2] ?? "")?.host
+    expect(candidate).toBeInstanceOf(HTMLElement)
+    return candidate as HTMLElement
+  })
+  await waitForAnimationFrames(8)
+
+  type InstrumentedVirtualizer = {
+    readonly requestHeightReconcile: (instance: object) => void
+  }
+  const virtualizer = (window as typeof window & { readonly __INSTANCE?: InstrumentedVirtualizer })
+    .__INSTANCE
+  expect(virtualizer).not.toBeUndefined()
+  if (virtualizer === undefined) return
+  const requestHeightReconcile = vi.spyOn(virtualizer, "requestHeightReconcile")
+  const initialCalls = requestHeightReconcile.mock.calls.length
+
+  host.style.height = `${Math.ceil(host.getBoundingClientRect().height) + 320}px`
+  await vi.waitFor(() => {
+    expect(requestHeightReconcile.mock.calls.length).toBeGreaterThan(initialCalls)
+  })
+  host.style.removeProperty("height")
 })
 
 scenario("multiFileSearchWrap", async () => {

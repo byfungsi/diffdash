@@ -21,4 +21,9 @@ describe("Review virtualization budgets and navigation", () => {
     expect.hasAssertions()
     await appBrowserScenario("wrappedSearchConvergence")()
   })
+
+  it("reconciles a diff host that resizes after initial rendering settles", async () => {
+    expect.hasAssertions()
+    await appBrowserScenario("lateDiffHostResize")()
+  })
 })

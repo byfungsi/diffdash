@@ -24,6 +24,7 @@ import type {
 import { CoreLifecycle } from "./core-lifecycle"
 import { CoreRuntimeServices } from "./core-runtime-services"
 import type { OperationHandlers } from "./operations/operation-handlers"
+import { ReviewContextError, type ReviewContextFailureCategory } from "./services/git-provider"
 
 type ApplicationRpcRequest<Method extends CoreMethodType> = HostRequestContext &
   CoreMethodInput<Method>
@@ -83,6 +84,61 @@ const codeWorkspaceFailureDetails = {
   { readonly code: CoreApplicationFailure["code"]; readonly safeMessage: string }
 >
 
+const reviewContextFailureDetails = {
+  authenticationRequired: {
+    code: "REVIEW_AUTHENTICATION_REQUIRED",
+    retryClass: "userAction",
+    safeMessage: "Sign in to the Git provider, then retry this review.",
+  },
+  authorizationRequired: {
+    code: "REVIEW_AUTHORIZATION_REQUIRED",
+    retryClass: "userAction",
+    safeMessage: "The Git provider account cannot access this review.",
+  },
+  providerUnavailable: {
+    code: "REVIEW_PROVIDER_UNAVAILABLE",
+    retryClass: "automatic",
+    safeMessage: "The Git provider is temporarily unable to load this review.",
+  },
+  reviewChanged: {
+    code: "REVIEW_REVISION_CHANGED",
+    retryClass: "automatic",
+    safeMessage: "The review changed while loading. Retry to open the latest revision.",
+  },
+  fallbackFailed: {
+    code: "REVIEW_DIFF_FALLBACK_FAILED",
+    retryClass: "userAction",
+    safeMessage: "The provider diff was unavailable and the exact Git fallback could not load it.",
+  },
+  cacheFull: {
+    code: "REVIEW_CACHE_FULL",
+    retryClass: "userAction",
+    safeMessage: "The managed review cache is full. Clear cached data, then retry.",
+  },
+  contentTooLarge: {
+    code: "REVIEW_CONTENT_TOO_LARGE",
+    retryClass: "notRetryable",
+    safeMessage: "This review contains an individual diff line or hunk that is too large to open.",
+  },
+  cancelled: {
+    code: "REVIEW_ACQUISITION_CANCELLED",
+    retryClass: "automatic",
+    safeMessage: "Review loading was cancelled. Retry to open it again.",
+  },
+  acquisitionFailed: {
+    code: "REVIEW_ACQUISITION_FAILED",
+    retryClass: "userAction",
+    safeMessage: "DiffDash could not acquire this review snapshot.",
+  },
+} as const satisfies Record<
+  ReviewContextFailureCategory,
+  {
+    readonly code: CoreApplicationFailure["code"]
+    readonly retryClass: CoreApplicationFailure["retryClass"]
+    readonly safeMessage: string
+  }
+>
+
 /** Converts an operation failure into bounded method-scoped RPC diagnostics. */
 export const makeCoreApplicationOperationFailure = <Method extends CoreMethodType>(
   method: Method,
@@ -99,6 +155,19 @@ export const makeCoreApplicationOperationFailure = <Method extends CoreMethodTyp
       method,
       code: CoreApplicationFailureCode.make(details.code),
       retryClass: "userAction",
+      safeMessage: details.safeMessage,
+    }
+  }
+  if (Schema.is(ReviewContextError)(error)) {
+    const details = reviewContextFailureDetails[error.category]
+    return {
+      _tag: "CoreApplicationFailure",
+      applicationInstanceId: request.applicationInstanceId,
+      processEpoch: request.processEpoch,
+      requestId: request.requestId,
+      method,
+      code: CoreApplicationFailureCode.make(details.code),
+      retryClass: details.retryClass,
       safeMessage: details.safeMessage,
     }
   }

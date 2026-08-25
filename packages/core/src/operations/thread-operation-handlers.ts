@@ -189,6 +189,7 @@ const requireRequestIdentity = (options: CoreOperationOptions) =>
 const snapshotResolutionError = (cause: Error) =>
   ReviewContextError.make({
     operation: "local.snapshot",
+    category: "acquisitionFailed",
     reason: "The durable review snapshot is unavailable.",
     cause,
   })

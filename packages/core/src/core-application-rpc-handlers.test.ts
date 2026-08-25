@@ -22,6 +22,7 @@ import { CoreMethod } from "./core-contract"
 import { CoreLifecycle, coreLifecycleLayer } from "./core-lifecycle"
 import { CoreRuntimeServices } from "./core-runtime-services"
 import { ReviewLifecycleDiagnostics } from "./review-lifecycle-diagnostics"
+import { ReviewContextError } from "./services/git-provider"
 
 const identity = {
   applicationInstanceId: ApplicationInstanceId.make("app-application-rpc"),
@@ -107,6 +108,31 @@ describe("Core application RPC handlers admission", () => {
       retryClass: "userAction",
       safeMessage: "Git could not resolve the repository's current revision.",
     })
+  })
+
+  it("projects bounded review acquisition failure details", () => {
+    const failure = makeCoreApplicationOperationFailure(
+      CoreMethod.acquireHostedReviewSnapshot,
+      request,
+      ReviewContextError.make({
+        operation: "hosted.snapshot",
+        category: "fallbackFailed",
+        reason: "Internal fallback detail must not cross the RPC boundary.",
+        cause: new Error("Sensitive process output"),
+      }),
+    )
+
+    expect(failure).toMatchObject({
+      _tag: "CoreApplicationFailure",
+      ...request,
+      method: "ReviewSnapshots.acquireHosted",
+      code: "REVIEW_DIFF_FALLBACK_FAILED",
+      retryClass: "userAction",
+      safeMessage:
+        "The provider diff was unavailable and the exact Git fallback could not load it.",
+    })
+    expect(JSON.stringify(failure)).not.toContain("Sensitive process output")
+    expect(JSON.stringify(failure)).not.toContain("Internal fallback detail")
   })
 
   it.effect("rejects requests until Core is ready without invoking the method", () =>

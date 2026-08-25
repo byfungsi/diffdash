@@ -15,6 +15,7 @@ import {
   RepositoryNamespace,
   RepositoryRelativePath,
   ReviewDiffAcquisition,
+  ReviewDiffAvailabilityFailure,
   ReviewDiffByteCompletion,
   ReviewDiffGeneration,
   ReviewDiffGenerationReused,
@@ -24,6 +25,7 @@ import {
 import { gitProviderConformance, reviewDiffSourceConformance } from "@diffdash/git-provider/testing"
 import {
   ProcessExit,
+  ProcessExitError,
   ProcessResult,
   ProcessService,
   type ProcessOutputPolicyInput,
@@ -396,6 +398,44 @@ describe("GitHub provider", () => {
       expect(diffCall?.args).not.toContain("--exclude")
       expect(diffCall?.request.stdout).toMatchObject({ maxBytes: 0, overflow: "truncate" })
       expect(diffCall?.request.env).toMatchObject({ NO_COLOR: "1", CLICOLOR: "0", TERM: "dumb" })
+    })
+  })
+
+  it.effect("classifies generated-diff refusals without exposing provider stderr", () => {
+    const base = fakeProcesses()
+    const processes = processRunner(base.run, (request) =>
+      Stream.fail(
+        ProcessExitError.make({
+          command: request.command,
+          args: request.args,
+          cwd: request.cwd,
+          exitCode: 1,
+          signal: null,
+          stdout: "",
+          stderr: "failed to get pull request diff: HTTP 406: diff is too large (secret detail)",
+          stdoutTruncated: false,
+          stderrTruncated: false,
+          outputTruncated: false,
+          message: "Process exited unsuccessfully",
+        }),
+      ),
+    )
+    return Effect.gen(function* () {
+      const source = yield* createGitHubReviewDiffSource({}, processes, review())
+      const acquisition = ReviewDiffAcquisition.make({
+        generation: ReviewDiffGeneration.make("provider-generation-limit"),
+        expectedRevision: source.offer.expectedRevision,
+      })
+      const outcome = yield* source.unifiedBytes(acquisition).pipe(Stream.runDrain, Effect.result)
+      expect(Result.isFailure(outcome)).toBe(true)
+      if (Result.isFailure(outcome)) {
+        expect(outcome.failure).toBeInstanceOf(ReviewDiffAvailabilityFailure)
+        if (Schema.is(ReviewDiffAvailabilityFailure)(outcome.failure)) {
+          expect(outcome.failure.category).toBe("providerGenerationLimit")
+          expect(outcome.failure.message).not.toContain("secret detail")
+        }
+      }
+      yield* source.close
     })
   })
 

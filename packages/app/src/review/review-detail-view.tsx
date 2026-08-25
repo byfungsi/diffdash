@@ -415,11 +415,14 @@ export const ReviewDetailView = ({
     readonly clientY: number
   } | null>(null)
   const reviewDiffRegistrationsRef = useRef<Map<string, ReviewDiffRegistration>>(new Map())
+  const reviewDiffKeyByHostRef = useRef<WeakMap<HTMLElement, string>>(new WeakMap())
   const navigableThreadIdsRef = useRef({
     key: "",
     value: HashSet.empty<ReviewThreadId>(),
   })
-  const diffSettlementFramesRef = useRef<Map<string, number>>(new Map())
+  const diffHostResizeObserverRef = useRef<ResizeObserver | null>(null)
+  const resizedDiffKeysRef = useRef<Set<string>>(new Set())
+  const diffResizeFrameRef = useRef<number | null>(null)
   const reviewSurfaceRuntime =
     useSourceSurfaceRuntime<PierreFileDiff<ReviewDiffAnnotationMetadata>>()
   const [diffVirtualizer] = useState(() => new DiffVirtualizer(REVIEW_DIFF_VIRTUALIZER_CONFIG))
@@ -527,16 +530,44 @@ export const ReviewDetailView = ({
       diffVirtualizer.setup(node, isHTMLElement(content) ? content : undefined)
     },
   )
-  useEffect(
-    () => () => {
-      for (const frame of diffSettlementFramesRef.current.values()) {
-        window.cancelAnimationFrame(frame)
+  useLayoutEffect(() => {
+    const registrations = reviewDiffRegistrationsRef.current
+    const resizedDiffKeys = resizedDiffKeysRef.current
+    const observer = new ResizeObserver((entries) => {
+      for (const entry of entries) {
+        if (!isHTMLElement(entry.target)) continue
+        const reviewKey = reviewDiffKeyByHostRef.current.get(entry.target)
+        if (reviewKey !== undefined) resizedDiffKeys.add(reviewKey)
       }
-      diffSettlementFramesRef.current.clear()
-      reviewDiffRegistrationsRef.current.clear()
-    },
-    [],
-  )
+      if (resizedDiffKeys.size === 0 || diffResizeFrameRef.current !== null) return
+      diffResizeFrameRef.current = window.requestAnimationFrame(() => {
+        diffResizeFrameRef.current = null
+        const reviewKeys = [...resizedDiffKeys]
+        resizedDiffKeys.clear()
+        diffVirtualizer.markDOMDirty()
+        for (const reviewKey of reviewKeys) {
+          const registration = registrations.get(reviewKey)
+          if (registration === undefined || !registration.host.isConnected) continue
+          diffVirtualizer.requestHeightReconcile(registration.instance)
+        }
+      })
+    })
+    diffHostResizeObserverRef.current = observer
+    for (const registration of registrations.values()) {
+      if (registration.host.isConnected) observer.observe(registration.host)
+    }
+    return () => {
+      observer.disconnect()
+      diffHostResizeObserverRef.current = null
+      resizedDiffKeys.clear()
+      if (diffResizeFrameRef.current !== null) {
+        window.cancelAnimationFrame(diffResizeFrameRef.current)
+        diffResizeFrameRef.current = null
+      }
+      registrations.clear()
+      reviewDiffKeyByHostRef.current = new WeakMap()
+    }
+  }, [diffVirtualizer])
   useLayoutEffect(() => {
     if (aiSettings.diffViewMode !== "auto") return
     const content = reviewDiffContentRef.current
@@ -849,17 +880,24 @@ export const ReviewDetailView = ({
     if (isVirtualizedFileDiff<ReviewDiffAnnotationMetadata>(instance)) {
       const phaseHandlers = {
         unmount: () => {
-          Option.match(Option.fromNullishOr(diffSettlementFramesRef.current.get(reviewKey)), {
-            onNone: () => undefined,
-            onSome: (frame) => window.cancelAnimationFrame(frame),
-          })
-          diffSettlementFramesRef.current.delete(reviewKey)
           const current = reviewDiffRegistrationsRef.current.get(reviewKey)
-          if (current?.host === node && current.instance === instance) {
+          if (
+            current?.generation === generation &&
+            current.host === node &&
+            current.instance === instance
+          ) {
+            diffHostResizeObserverRef.current?.unobserve(node)
+            reviewDiffKeyByHostRef.current.delete(node)
+            resizedDiffKeysRef.current.delete(reviewKey)
             reviewDiffRegistrationsRef.current.delete(reviewKey)
           }
         },
         mount: () => {
+          const previous = reviewDiffRegistrationsRef.current.get(reviewKey)
+          if (previous !== undefined && previous.host !== node) {
+            diffHostResizeObserverRef.current?.unobserve(previous.host)
+            reviewDiffKeyByHostRef.current.delete(previous.host)
+          }
           reviewDiffRegistrationsRef.current.set(reviewKey, {
             generation,
             host: node,
@@ -867,38 +905,15 @@ export const ReviewDetailView = ({
             reviewKey,
             rendered: true,
           })
-          Option.match(Option.fromNullishOr(diffSettlementFramesRef.current.get(reviewKey)), {
-            onNone: () => undefined,
-            onSome: (frame) => window.cancelAnimationFrame(frame),
-          })
-          // Wrapped rows settle after Pierre's estimate; stop once measured height is stable.
-          const settle = (
-            previousHeight: number,
-            stablePasses: number,
-            remainingPasses: number,
-          ) => {
-            const frame = window.requestAnimationFrame(() => {
-              const current = reviewDiffRegistrationsRef.current.get(reviewKey)
-              if (current?.host !== node || current.instance !== instance || !node.isConnected) {
-                diffSettlementFramesRef.current.delete(reviewKey)
-                return
-              }
-              instance.syncVirtualizedTop()
-              diffVirtualizer.markDOMDirty()
-              diffVirtualizer.requestHeightReconcile(instance)
-              const currentHeight = instance.getVirtualizedHeight()
-              const nextStablePasses = currentHeight === previousHeight ? stablePasses + 1 : 0
-              if (nextStablePasses >= 2 || remainingPasses === 1) {
-                diffSettlementFramesRef.current.delete(reviewKey)
-                return
-              }
-              settle(currentHeight, nextStablePasses, remainingPasses - 1)
-            })
-            diffSettlementFramesRef.current.set(reviewKey, frame)
-          }
-          settle(instance.getVirtualizedHeight(), 0, 8)
+          reviewDiffKeyByHostRef.current.set(node, reviewKey)
+          diffHostResizeObserverRef.current?.observe(node)
         },
         update: () => {
+          const previous = reviewDiffRegistrationsRef.current.get(reviewKey)
+          if (previous !== undefined && previous.host !== node) {
+            diffHostResizeObserverRef.current?.unobserve(previous.host)
+            reviewDiffKeyByHostRef.current.delete(previous.host)
+          }
           reviewDiffRegistrationsRef.current.set(reviewKey, {
             generation,
             host: node,
@@ -906,6 +921,8 @@ export const ReviewDetailView = ({
             reviewKey,
             rendered: true,
           })
+          reviewDiffKeyByHostRef.current.set(node, reviewKey)
+          diffHostResizeObserverRef.current?.observe(node)
         },
       } satisfies Readonly<Record<PostRenderPhase, () => void>>
       phaseHandlers[phase]()

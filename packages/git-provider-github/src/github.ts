@@ -30,6 +30,7 @@ import {
   ReviewCommit,
   makeReviewKey,
   ReviewDiffAcquisition,
+  ReviewDiffAvailabilityFailure,
   ReviewDiffByteCompletion,
   ReviewDiffGeneration,
   ReviewDiffGenerationTracker,
@@ -50,6 +51,7 @@ import {
 } from "@diffdash/git-provider"
 import {
   ProcessExit,
+  ProcessExitError,
   processRequest,
   type ProcessOutputPolicyInput,
   type ProcessRunner,
@@ -673,9 +675,12 @@ export const createGitHubReviewDiffSource = Effect.fn("GitHub.createReviewDiffSo
             Stream.mapError(
               (cause): ReviewDiffSourceError =>
                 Schema.is(ReviewDiffRevisionChanged)(cause) ||
+                Schema.is(ReviewDiffAvailabilityFailure)(cause) ||
                 Schema.is(ReviewDiffSourceFailure)(cause)
                   ? cause
-                  : sourceFailure(acquisition.generation, "GitHub raw diff stream failed", cause),
+                  : Schema.is(ProcessExitError)(cause)
+                    ? classifyDiffAvailabilityFailure(acquisition.generation, cause)
+                    : sourceFailure(acquisition.generation, "GitHub raw diff stream failed", cause),
             ),
           )
       }),
@@ -693,6 +698,46 @@ export const createGitHubReviewDiffSource = Effect.fn("GitHub.createReviewDiffSo
     ),
   }
 })
+
+const classifyDiffAvailabilityFailure = (
+  generation: ReviewDiffGeneration,
+  cause: ProcessExitError,
+): ReviewDiffAvailabilityFailure | ReviewDiffSourceFailure => {
+  const diagnostic = `${cause.stderr}\n${cause.message}`.toLowerCase()
+  const availabilityFailure = (
+    category: ReviewDiffAvailabilityFailure["category"],
+    diagnosticCode?: string,
+  ) => {
+    const fields = {
+      generation,
+      method: "unifiedBytes" as const,
+      message: "GitHub could not provide the complete generated review diff",
+      category,
+    }
+    return diagnosticCode === undefined
+      ? ReviewDiffAvailabilityFailure.make(fields)
+      : ReviewDiffAvailabilityFailure.make({ ...fields, diagnosticCode })
+  }
+  if (
+    /\b(?:http\s*)?406\b/.test(diagnostic) ||
+    /diff.{0,32}(?:too large|exceeded)/.test(diagnostic)
+  ) {
+    return availabilityFailure("providerGenerationLimit", "http-406")
+  }
+  if (
+    /\b(?:http\s*)?401\b/.test(diagnostic) ||
+    /authentication required|not authenticated/.test(diagnostic)
+  ) {
+    return availabilityFailure("authenticationRequired", "http-401")
+  }
+  if (/\b(?:http\s*)?403\b/.test(diagnostic) || /permission denied|forbidden/.test(diagnostic)) {
+    return availabilityFailure("authorizationRequired", "http-403")
+  }
+  if (/\b(?:http\s*)?50[0234]\b/.test(diagnostic)) {
+    return availabilityFailure("transientProviderFailure", "http-5xx")
+  }
+  return sourceFailure(generation, "GitHub raw diff stream failed", cause)
+}
 
 /** Inspects installation, authentication, and repository-search support for one GitHub host. */
 export const inspectGitHubCli = (

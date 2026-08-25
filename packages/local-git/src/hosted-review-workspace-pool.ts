@@ -818,6 +818,10 @@ const fetchAndResolveComparison = (
       [input.headRef, "head"],
     ] as const) {
       if (!isFullCommitSha(revision)) continue
+      const available = yield* Effect.option(
+        resolveCommit(filesystem, processes, barePath, revision),
+      )
+      if (Option.isSome(available)) continue
       yield* runManagedGit(filesystem, [barePath], processes, [
         "--git-dir",
         barePath,
