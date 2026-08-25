@@ -80,9 +80,9 @@ export const ReviewExtensionSurface = () => {
   const pullRequestsResult = useAtomValue(repoPullRequestsAtom)
   const refreshPullRequests = useAtomRefresh(repoPullRequestsAtom)
   const workingTreeAtom = localReviewManifestAtom(
-    !host.workspaceRestoring &&
-      host.activeActivity === PROJECT_WORKSPACE_REVIEWS_ACTIVITY_ID &&
-      Option.isNone(selectedReview)
+    active &&
+      !host.workspaceRestoring &&
+      host.activeActivity === PROJECT_WORKSPACE_REVIEWS_ACTIVITY_ID
       ? Option.match(Option.fromNullishOr(host.repo.localPath), {
           onNone: () => "",
           onSome: (localPath) => serializeLocalReviewAtomKey(workingTreeReviewTarget(localPath)),
