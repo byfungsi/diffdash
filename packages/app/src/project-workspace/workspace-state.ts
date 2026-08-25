@@ -1,103 +1,194 @@
-import { makeHostedRepositoryLocator } from "@diffdash/domain/git-provider"
-import type { ProjectWorkspaceRibbon } from "@diffdash/domain/project-workspace"
-import { ProjectWorkspaceState } from "@diffdash/domain/project-workspace"
+import {
+  ProjectWorkspaceActivityResolution,
+  ProjectWorkspaceActivitySelection,
+  type ProjectWorkspaceActivityAvailability,
+  ProjectWorkspaceNavigationContributionId,
+  ProjectWorkspaceNavigationLocation,
+  ProjectWorkspaceState,
+  ProjectWorkspaceSurface,
+  resolveProjectWorkspaceActivity,
+} from "@diffdash/domain/project-workspace"
 import type { Repo } from "@diffdash/domain/repository"
-import { RepositoryComparisonTarget } from "@diffdash/domain/repository-comparison"
-import { HostedReviewTarget } from "@diffdash/domain/review-thread"
-import { Result, Schema } from "effect"
+import { Option, Result, Schema } from "effect"
 
-import type { SelectedReviewTarget } from "@/review/review-subject"
+import type { ProjectNavigationContribution } from "@/extensions/extension-registry"
 
-/** Renderer workspace state after validating persisted data against its active project. */
-export interface ResolvedProjectWorkspaceState {
-  readonly activeRibbon: ProjectWorkspaceRibbon
-  readonly notice: string | null
-  readonly selectedReview: SelectedReviewTarget | null
+/** Registered owner-neutral navigation codec data used to validate or repair durable state. */
+export interface ProjectWorkspaceNavigationAvailability {
+  readonly id: ProjectWorkspaceNavigationContributionId
+  readonly surface: typeof ProjectWorkspaceSurface.Type
+  readonly createDefaultState: ProjectNavigationContribution["createDefaultState"]
+  readonly isValidState: ProjectNavigationContribution["isValidState"]
 }
 
-/** Converts renderer selection into the lossless persisted review-target representation. */
-export const selectedReviewTargetForPersistence = (selection: SelectedReviewTarget | null) => {
-  if (selection === null) return null
-  if (selection.kind === "hosted") {
-    return HostedReviewTarget.make({ kind: "hosted", review: selection.review })
-  }
-  return selection.kind === "repositoryComparison"
-    ? RepositoryComparisonTarget.make({
-        ...selection.target,
-        repository: makeHostedRepositoryLocator(
-          selection.target.repository.providerId,
-          selection.target.repository.namespace,
-          selection.target.repository.name,
-        ),
-      })
-    : selection.target
-}
+/** Renderer workspace state after validating persisted activity and opaque owner navigation. */
+export class ResolvedProjectWorkspaceState extends Schema.TaggedClass<ResolvedProjectWorkspaceState>()(
+  "resolved",
+  {
+    activeSurface: ProjectWorkspaceActivitySelection.fields.activeSurface,
+    activeActivity: ProjectWorkspaceActivitySelection.fields.activeActivity,
+    navigationContributionId: ProjectWorkspaceNavigationContributionId,
+    navigationLocation: ProjectWorkspaceNavigationLocation,
+    notice: Schema.OptionFromNullOr(Schema.String),
+  },
+) {}
 
-/** Restores persisted state only when its project and selected target still match the repository. */
-export const resolveProjectWorkspaceState = <Persisted>(
+/** Renderer workspace state that cannot open because no compatible activity and owner are registered. */
+export class UnresolvedProjectWorkspaceState extends Schema.TaggedClass<UnresolvedProjectWorkspaceState>()(
+  "unresolved",
+  { notice: Schema.OptionFromNullOr(Schema.String) },
+) {}
+
+/** Result of validating persisted workspace state against active activities and navigation owners. */
+export const ProjectWorkspaceStateResolution = Schema.Union([
+  ResolvedProjectWorkspaceState,
+  UnresolvedProjectWorkspaceState,
+]).pipe(Schema.toTaggedUnion("_tag"))
+
+/** Result of validating persisted workspace state against active activities and navigation owners. */
+export type ProjectWorkspaceStateResolution = typeof ProjectWorkspaceStateResolution.Type
+
+/** Restores opaque durable navigation through registered owner codecs and repairs missing owners. */
+export const resolveProjectWorkspaceState = (
   repo: Repo,
-  persisted: Persisted,
-): ResolvedProjectWorkspaceState => {
-  if (persisted === null) return defaultProjectWorkspaceState(null)
+  persisted: ProjectWorkspaceState | null,
+  availableActivities: readonly ProjectWorkspaceActivityAvailability[],
+  availableNavigation: readonly ProjectWorkspaceNavigationAvailability[],
+): ProjectWorkspaceStateResolution => {
+  if (persisted === null) {
+    return defaultProjectWorkspaceState(
+      repo,
+      Option.none(),
+      availableActivities,
+      availableNavigation,
+    )
+  }
 
   const decoded = Schema.decodeUnknownResult(ProjectWorkspaceState)(persisted)
   if (Result.isFailure(decoded)) {
     return defaultProjectWorkspaceState(
-      "Saved workspace state was invalid. Reviews opened without a selected review.",
+      repo,
+      Option.some(
+        "Saved workspace state was invalid. A registered workspace was restored instead.",
+      ),
+      availableActivities,
+      availableNavigation,
     )
   }
 
   const state = decoded.success
   if (state.projectId !== repo.id) {
     return defaultProjectWorkspaceState(
-      "Saved workspace state belonged to another project. Reviews opened without a selected review.",
+      repo,
+      Option.some(
+        "Saved workspace state belonged to another project. A registered workspace was restored instead.",
+      ),
+      availableActivities,
+      availableNavigation,
     )
   }
 
-  const target = state.selectedReviewTarget
-  if (target === null) {
-    return { activeRibbon: state.activeRibbon, notice: null, selectedReview: null }
-  }
-
-  if (target.kind === "hosted") {
-    const belongsToProject = repo.matchesHosted(target.review.repository)
-    return belongsToProject
-      ? {
-          activeRibbon: state.activeRibbon,
-          notice: null,
-          selectedReview: { kind: "hosted", review: target.review },
-        }
-      : defaultProjectWorkspaceState(
-          "The saved pull request no longer belongs to this project. Reviews opened without a selection.",
-        )
-  }
-
-  if (target.kind === "repositoryComparison") {
-    const belongsToProject = repo.matchesHosted(target.repository)
-    return belongsToProject
-      ? {
-          activeRibbon: state.activeRibbon,
-          notice: null,
-          selectedReview: { kind: "repositoryComparison", target },
-        }
-      : defaultProjectWorkspaceState(
-          "The saved repository comparison no longer belongs to this project. Reviews opened without a selection.",
-        )
-  }
-
-  return repo.localPath === target.rootPath
-    ? {
-        activeRibbon: state.activeRibbon,
-        notice: null,
-        selectedReview: { kind: "localDiff", target },
-      }
-    : defaultProjectWorkspaceState(
-        "The saved local review no longer belongs to this checkout. Reviews opened without a selection.",
-      )
+  const activityResolution = resolveProjectWorkspaceActivity(
+    {
+      activeSurface: state.activeSurface,
+      activeActivity: state.activeActivity,
+    },
+    availableActivities,
+  )
+  return ProjectWorkspaceActivityResolution.match(activityResolution, {
+    unresolved: () =>
+      UnresolvedProjectWorkspaceState.make({
+        notice: Option.some("No project activity is currently available."),
+      }),
+    available: ({ selection }) =>
+      resolveProjectWorkspaceNavigation(
+        repo,
+        selection,
+        state.navigation.contributionId,
+        state.navigation.location,
+        Option.none(),
+        availableActivities,
+        availableNavigation,
+      ),
+    repaired: ({ selection }) =>
+      resolveProjectWorkspaceNavigation(
+        repo,
+        selection,
+        state.navigation.contributionId,
+        state.navigation.location,
+        Option.some(
+          "The saved workspace activity is unavailable. A registered activity was restored instead.",
+        ),
+        availableActivities,
+        availableNavigation,
+      ),
+  })
 }
 
-const defaultProjectWorkspaceState = (notice: string | null): ResolvedProjectWorkspaceState => ({
-  activeRibbon: "reviews",
-  notice,
-  selectedReview: null,
-})
+const resolveProjectWorkspaceNavigation = (
+  repo: Repo,
+  selection: ProjectWorkspaceActivitySelection,
+  contributionId: ProjectWorkspaceNavigationContributionId,
+  location: ProjectWorkspaceNavigationLocation,
+  notice: Option.Option<string>,
+  availableActivities: readonly ProjectWorkspaceActivityAvailability[],
+  availableNavigation: readonly ProjectWorkspaceNavigationAvailability[],
+): ProjectWorkspaceStateResolution => {
+  const contribution = availableNavigation.find(
+    (candidate) => candidate.id === contributionId && candidate.surface === selection.activeSurface,
+  )
+  if (contribution !== undefined && contribution.isValidState(location)) {
+    return ResolvedProjectWorkspaceState.make({
+      ...selection,
+      navigationContributionId: contribution.id,
+      navigationLocation: location,
+      notice,
+    })
+  }
+  return defaultProjectWorkspaceState(
+    repo,
+    Option.some(
+      "The saved workspace navigation owner is unavailable. A registered workspace was restored instead.",
+    ),
+    availableActivities,
+    availableNavigation,
+  )
+}
+
+const defaultProjectWorkspaceState = (
+  repo: Repo,
+  notice: Option.Option<string>,
+  availableActivities: readonly ProjectWorkspaceActivityAvailability[],
+  availableNavigation: readonly ProjectWorkspaceNavigationAvailability[],
+): ProjectWorkspaceStateResolution => {
+  const activity =
+    availableActivities.find((candidate) =>
+      candidate.defaultForSurfaces.some((surface) =>
+        availableNavigation.some((navigation) => navigation.surface === surface),
+      ),
+    ) ??
+    availableActivities.find((candidate) =>
+      candidate.supportedSurfaces.some((surface) =>
+        availableNavigation.some((navigation) => navigation.surface === surface),
+      ),
+    )
+  if (activity === undefined) return UnresolvedProjectWorkspaceState.make({ notice })
+  const surface =
+    activity.defaultForSurfaces.find((candidate) =>
+      availableNavigation.some((navigation) => navigation.surface === candidate),
+    ) ??
+    activity.supportedSurfaces.find((candidate) =>
+      availableNavigation.some((navigation) => navigation.surface === candidate),
+    )
+  const contribution = availableNavigation.find((candidate) => candidate.surface === surface)
+  if (surface === undefined || contribution === undefined) {
+    return UnresolvedProjectWorkspaceState.make({ notice })
+  }
+  return ResolvedProjectWorkspaceState.make({
+    activeSurface: ProjectWorkspaceSurface.make(surface),
+    activeActivity: activity.id,
+    navigationContributionId: contribution.id,
+    navigationLocation: contribution.createDefaultState(repo),
+    notice,
+  })
+}

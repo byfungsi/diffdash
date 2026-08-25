@@ -20,6 +20,12 @@ import {
   RepositoryLanguageLocationResult,
 } from "@diffdash/domain/language"
 import { AgentProviderFailure } from "@diffdash/domain/provider-failure"
+import {
+  ProjectWorkspaceActivityId,
+  ProjectWorkspaceNavigationContributionId,
+  ProjectWorkspaceState,
+  ProjectWorkspaceStateInput,
+} from "@diffdash/domain/project-workspace"
 import { AppPrerequisites } from "@diffdash/domain/prerequisites"
 import { LinkedCheckout, Repo, RepositoryCheckoutPath } from "@diffdash/domain/repository"
 import { GitCommitSha, ResolvedRepositoryComparison } from "@diffdash/domain/repository-comparison"
@@ -38,6 +44,7 @@ import {
 import {
   AgentProvidersGetCatalogRpc,
   PrerequisitesGetRpc,
+  ProjectWorkspaceGetRpc,
   RepositoryComparisonsResolveRpc,
   ViewedFilesListLocalRpc,
 } from "@diffdash/core-rpc/application-rpc"
@@ -96,6 +103,8 @@ import { sendProtocolEvent } from "./main/ipc/transport"
 import { createShutdown } from "./main/shutdown"
 import type { RendererIpc } from "./preload/transport"
 import { createRendererTransport } from "./preload/transport"
+
+const filesActivityId = ProjectWorkspaceActivityId.make("diffdash.fixture.files")
 
 describe("IPC contract", () => {
   it("has one schema contract for every protocol-owned invoke channel", () => {
@@ -384,6 +393,38 @@ describe("IPC contract", () => {
     expect(ipc.invoke).toHaveBeenCalledWith(InvokeChannel.aiListOpenCodeSessions, {
       projectId: "project",
       search: null,
+    })
+  })
+
+  it("normalizes a cloned project workspace selection before invoking Electron", async () => {
+    const ipc = rendererIpc({ _tag: "Success", value: null })
+    const transport = createRendererTransport(ipc.api)
+    const input = ProjectWorkspaceStateInput.make({
+      projectId: ReviewProjectId.make("project"),
+      activeSurface: "review",
+      activeActivity: filesActivityId,
+      navigation: {
+        contributionId: ProjectWorkspaceNavigationContributionId.make(
+          "diffdash.fixture.navigation",
+        ),
+        location: { selectedReview: null },
+      },
+    })
+
+    await transport.invoke(InvokeChannel.projectWorkspaceSave, {
+      input: structuredClone(input),
+    })
+
+    expect(ipc.invoke).toHaveBeenCalledWith(InvokeChannel.projectWorkspaceSave, {
+      input: {
+        projectId: "project",
+        activeSurface: "review",
+        activeActivity: filesActivityId,
+        navigation: {
+          contributionId: "diffdash.fixture.navigation",
+          location: { selectedReview: null },
+        },
+      },
     })
   })
 
@@ -1143,6 +1184,63 @@ describe("IPC contract", () => {
     expect(viewedFilesEnvelope.value[0]).toBeInstanceOf(ViewedFileRecord)
   })
 
+  it("re-encodes a Core RPC-decoded project workspace selection for renderer IPC", async () => {
+    const state = ProjectWorkspaceState.make({
+      projectId: ReviewProjectId.make("project"),
+      activeSurface: "review",
+      activeActivity: filesActivityId,
+      navigation: {
+        contributionId: ProjectWorkspaceNavigationContributionId.make(
+          "diffdash.fixture.navigation",
+        ),
+        location: { transformed: ["opaque", null] },
+      },
+      updatedAt: "2026-08-23T00:00:00.000Z",
+    })
+    const coreCodec = Schema.toCodecJson(ProjectWorkspaceGetRpc.successSchema)
+    const mainOwnedState = Schema.decodeUnknownSync(coreCodec)(Schema.encodeSync(coreCodec)(state))
+    const host = hostIpc()
+    const registry = new IpcControllerRegistry(testRendererSecurityPolicy(), host.api, [
+      InvokeChannel.projectWorkspaceGet,
+    ])
+    registry.define(InvokeChannel.projectWorkspaceGet, async () => mainOwnedState)
+    registry.install()
+
+    const response = await host.handler?.(trustedEvent(), { projectId: "project" })
+    const envelope = Schema.decodeUnknownSync(
+      successEnvelope(invokeResponseSchema(InvokeChannel.projectWorkspaceGet)),
+    )(response)
+
+    expect(response).toEqual({
+      _tag: "Success",
+      value: {
+        projectId: "project",
+        activeSurface: "review",
+        activeActivity: filesActivityId,
+        navigation: {
+          contributionId: "diffdash.fixture.navigation",
+          location: { transformed: ["opaque", null] },
+        },
+        updatedAt: "2026-08-23T00:00:00.000Z",
+      },
+    })
+    expect(mainOwnedState).toBeInstanceOf(ProjectWorkspaceState)
+    expect(envelope.value).toBeInstanceOf(ProjectWorkspaceState)
+  })
+
+  it("preserves missing project workspace state as null at renderer IPC", async () => {
+    const host = hostIpc()
+    const registry = new IpcControllerRegistry(testRendererSecurityPolicy(), host.api, [
+      InvokeChannel.projectWorkspaceGet,
+    ])
+    registry.define(InvokeChannel.projectWorkspaceGet, async () => null)
+    registry.install()
+
+    const response = await host.handler?.(trustedEvent(), { projectId: "project" })
+
+    expect(response).toEqual({ _tag: "Success", value: null })
+  })
+
   it("rejects response values that are not owned by the main-process schema runtime", async () => {
     const host = hostIpc()
     const registry = new IpcControllerRegistry(testRendererSecurityPolicy(), host.api, [
@@ -1262,6 +1360,47 @@ describe("IPC contract", () => {
     expect(host.installed.has(InvokeChannel.analyticsCapture)).toBe(true)
     expect(execute).toHaveBeenCalledOnce()
     expect(response).toEqual({ _tag: "Success", value: null })
+  })
+
+  it("decodes project workspace activity input before invoking Core", async () => {
+    const host = hostIpc()
+    const registry = new IpcControllerRegistry(testRendererSecurityPolicy(), host.api, [
+      InvokeChannel.projectWorkspaceSave,
+    ])
+    const execute = vi.fn<
+      (
+        request: InvokeRequest<typeof InvokeChannel.projectWorkspaceSave>,
+      ) => Promise<ProjectWorkspaceState>
+    >(async (request: InvokeRequest<typeof InvokeChannel.projectWorkspaceSave>) => {
+      expect(request.input).toBeInstanceOf(ProjectWorkspaceStateInput)
+      return ProjectWorkspaceState.make({
+        ...request.input,
+        updatedAt: "2026-08-23T00:00:00.000Z",
+      })
+    })
+    registry.defineCore(CoreMethod.projectWorkspaceSave, execute)
+    registry.install()
+
+    const response = await host.handler?.(trustedEvent(), {
+      input: {
+        projectId: "project",
+        activeSurface: "review",
+        activeActivity: filesActivityId,
+        navigation: {
+          contributionId: "diffdash.fixture.navigation",
+          location: { selectedReview: null },
+        },
+      },
+    })
+
+    expect(execute).toHaveBeenCalledOnce()
+    expect(response).toMatchObject({
+      _tag: "Success",
+      value: {
+        activeSurface: "review",
+        activeActivity: filesActivityId,
+      },
+    })
   })
 })
 

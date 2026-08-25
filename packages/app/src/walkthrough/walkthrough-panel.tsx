@@ -10,6 +10,7 @@ import {
   type WalkthroughHunkId,
   type WalkthroughRisk,
 } from "@diffdash/domain/walkthrough"
+import { HashMap, HashSet, Option } from "effect"
 import { Check, Copy, FolderGit2, GitBranch, GitPullRequest, Sparkles, Star } from "lucide-react"
 import { useState } from "react"
 import { stableStringHash32 } from "@/shared/stable-string-hash"
@@ -60,8 +61,8 @@ export const WalkthroughSidebar = ({
   readonly hunkDigest: readonly WalkthroughHunkDigest[]
   readonly scope: string
   readonly state: WalkthroughState
-  readonly visitedStepIndexes: ReadonlySet<number>
-  readonly viewedFileKeys: ReadonlySet<string>
+  readonly visitedStepIndexes: HashSet.HashSet<number>
+  readonly viewedFileKeys: HashSet.HashSet<string>
   readonly onRegenerate: () => void
   readonly onRetry: () => void
   readonly onSelectFile: (stepIndex: number, file: ParsedDiffFile) => void
@@ -147,8 +148,9 @@ export const WalkthroughSidebar = ({
                     const files = focusFilesForWalkthroughHunks(changedFiles, step.hunkIds, scope)
                     const fileSummaries = summarizeWalkthroughHunksByPath(hunkDigest, step.hunkIds)
                     const complete =
-                      files.length > 0 && files.every((file) => viewedFileKeys.has(file.reviewKey))
-                    const visited = visitedStepIndexes.has(index) || complete
+                      files.length > 0 &&
+                      files.every((file) => HashSet.has(viewedFileKeys, file.reviewKey))
+                    const visited = HashSet.has(visitedStepIndexes, index) || complete
                     const additions = fileSummaries.reduce(
                       (total, file) => total + file.additions,
                       0,
@@ -158,10 +160,19 @@ export const WalkthroughSidebar = ({
                       0,
                     )
                     const selected = activeStepIndex === index
+                    let markerClassName =
+                      "border-review-sidebar-border bg-walkthrough-marker-surface text-review-sidebar-muted"
+                    if (visited) {
+                      markerClassName =
+                        "border-review-success bg-review-success text-review-success-foreground"
+                    } else if (selected) {
+                      markerClassName =
+                        "border-review-tree-selected-border bg-review-tree-selected text-review-sidebar-emphasis"
+                    }
                     return (
                       <li key={`${index}:${step.id}`} className="relative">
                         <span
-                          className={`absolute top-[10px] -left-[17px] z-10 flex size-3.5 items-center justify-center rounded-sm border text-[9px] ${visited ? "border-review-success bg-review-success text-review-success-foreground" : selected ? "border-review-tree-selected-border bg-review-tree-selected text-review-sidebar-emphasis" : "border-review-sidebar-border bg-walkthrough-marker-surface text-review-sidebar-muted"}`}
+                          className={`absolute top-[10px] -left-[17px] z-10 flex size-3.5 items-center justify-center rounded-sm border text-[9px] ${markerClassName}`}
                         >
                           {visited ? <Check className="size-2.5" /> : null}
                         </span>
@@ -378,6 +389,9 @@ const WalkthroughErrorNotice = ({
   readonly onRetry: () => void
 }) => {
   const [copyStatus, setCopyStatus] = useState<"idle" | "copied" | "failed">("idle")
+  let copyLabel = "Copy error details"
+  if (copyStatus === "copied") copyLabel = "Copied"
+  if (copyStatus === "failed") copyLabel = "Copy failed"
   const copyError = async () => {
     try {
       await navigator.clipboard.writeText(report)
@@ -419,11 +433,7 @@ const WalkthroughErrorNotice = ({
           onClick={() => void copyError()}
         >
           {copyStatus === "copied" ? <Check className="size-3" /> : <Copy className="size-3" />}
-          {copyStatus === "copied"
-            ? "Copied"
-            : copyStatus === "failed"
-              ? "Copy failed"
-              : "Copy error details"}
+          {copyLabel}
         </Button>
       </div>
     </section>
@@ -462,18 +472,18 @@ const groupWalkthroughSteps = (
   steps: readonly WalkthroughReviewStep[],
 ): readonly WalkthroughStepGroup[] => {
   const groups: WalkthroughStepGroup[] = []
-  const groupIndexes = new Map<string, number>()
+  let groupIndexes = HashMap.empty<string, number>()
   steps.forEach((step, index) => {
     const title = step.chapterTitle ?? "Review"
-    const groupIndex = groupIndexes.get(title)
-    if (groupIndex === undefined) {
-      groupIndexes.set(title, groups.length)
+    const groupIndex = HashMap.get(groupIndexes, title)
+    if (Option.isNone(groupIndex)) {
+      groupIndexes = HashMap.set(groupIndexes, title, groups.length)
       groups.push({ title, steps: [{ index, step }] })
       return
     }
-    const group = groups[groupIndex]
+    const group = groups[groupIndex.value]
     if (group !== undefined)
-      groups[groupIndex] = { ...group, steps: [...group.steps, { index, step }] }
+      groups[groupIndex.value] = { ...group, steps: [...group.steps, { index, step }] }
   })
   return groups
 }

@@ -56,6 +56,7 @@ export interface CoreSnapshotFileDeltaKeySource {
     readonly ordinal: number
     readonly gitOldPath: string
     readonly gitNewPath: string
+    readonly status: FileDeltaIdentity["status"]
   }) => Effect.Effect<FileDeltaIdentity, CoreSnapshotIngestionError>
 }
 
@@ -567,6 +568,7 @@ const consumeBatch = Effect.fn("CoreSnapshotIngestion.consumeBatch")(function* (
               ordinal: event.fileOrdinal,
               gitOldPath: event.gitOldPath,
               gitNewPath: event.gitNewPath,
+              status: event.status,
             })
             if (
               input.manifest.storageSource.kind === "exactGit" &&

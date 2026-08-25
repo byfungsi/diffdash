@@ -10,6 +10,7 @@ import {
 } from "@diffdash/agent-provider"
 import { NoAgentProviderAvailableError } from "@diffdash/agent-provider/registry"
 import type { CodeWorkspaceError } from "@diffdash/domain/code-workspace"
+import type { ProjectWorkspaceState } from "@diffdash/domain/project-workspace"
 import type { LanguageOperationError } from "@diffdash/domain/language"
 import type {
   CommentSubjectMismatchError,
@@ -56,6 +57,7 @@ import type {
 } from "@diffdash/core-rpc/identity"
 import { InvokeChannel } from "@diffdash/protocol/channels"
 import type { InvokeRequest, InvokeResponse } from "@diffdash/protocol/ipc"
+import type { Option } from "effect"
 import type {
   ReviewAgentFinalizeError,
   ReviewAgentProviderFailureError,
@@ -255,6 +257,16 @@ export type CoreFileOpenIntent = typeof CoreFileOpenIntent.Type
 
 /** Result returned by one named Core operation. */
 export type CoreOperationOutput<Method extends CoreMethod> = Method extends
+  | typeof CoreMethod.appOpenLocalRepositoryFile
+  | typeof CoreMethod.appOpenRepositoryComparisonFile
+  | typeof CoreMethod.appOpenRepositoryFile
+  ? CoreFileOpenIntent
+  : Method extends typeof CoreMethod.projectWorkspaceGet
+    ? Option.Option<ProjectWorkspaceState>
+    : CoreMethodOutput<Method>
+
+/** Core RPC-decoded result owned by the native host before IPC projection. */
+export type CoreApplicationRpcOutput<Method extends CoreMethod> = Method extends
   | typeof CoreMethod.appOpenLocalRepositoryFile
   | typeof CoreMethod.appOpenRepositoryComparisonFile
   | typeof CoreMethod.appOpenRepositoryFile

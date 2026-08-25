@@ -185,6 +185,21 @@ export class ReviewDiffSourceFailure extends Schema.TaggedError<ReviewDiffSource
   { ...sourceErrorFields, causeTag: Schema.optional(NonEmptyBoundedString) },
 ) {}
 
+/** The provider could not make a complete generated diff available. */
+export class ReviewDiffAvailabilityFailure extends Schema.TaggedError<ReviewDiffAvailabilityFailure>()(
+  "ReviewDiffAvailabilityFailure",
+  {
+    ...sourceErrorFields,
+    category: Schema.Literals([
+      "providerGenerationLimit",
+      "authenticationRequired",
+      "authorizationRequired",
+      "transientProviderFailure",
+    ]),
+    diagnosticCode: Schema.optional(NonEmptyBoundedString),
+  },
+) {}
+
 /** Expected failures exposed by provider-neutral review diff sources. */
 export type ReviewDiffSourceError =
   | ReviewDiffLimitExceeded
@@ -192,6 +207,7 @@ export type ReviewDiffSourceError =
   | ReviewDiffTruncated
   | ReviewDiffRevisionChanged
   | ReviewDiffGenerationReused
+  | ReviewDiffAvailabilityFailure
   | ReviewDiffSourceFailure
 
 /** Provider-neutral bounded source contract implemented by concrete Git adapters. */

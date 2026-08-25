@@ -3,7 +3,7 @@ import {
   CoreMethod,
   type CoreMethod as CoreMethodType,
   type CoreMethodInput,
-  type CoreOperationOutput,
+  type CoreApplicationRpcOutput,
 } from "@diffdash/core"
 import type {
   CoreApplicationFailure,
@@ -88,7 +88,7 @@ import * as Socket from "effect/unstable/socket/Socket"
 type CoreRpcApplicationRequest<Method extends CoreMethodType> = HostRequestContext &
   CoreMethodInput<Method>
 
-type CoreRpcApplicationOutput<Method extends CoreMethodType> = CoreOperationOutput<Method>
+type CoreRpcApplicationOutput<Method extends CoreMethodType> = CoreApplicationRpcOutput<Method>
 
 type CoreRpcApplicationFailure =
   | CoreApplicationFailure

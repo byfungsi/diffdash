@@ -1,5 +1,6 @@
 import { Command, X } from "lucide-react"
 import { useEffect, useEffectEvent, useRef, useState } from "react"
+import type { ComponentType } from "react"
 import { EmptyState } from "@/shared/ui/empty-state"
 import { Input } from "@/shared/ui/input"
 import { isHTMLElement } from "@/shared/dom"
@@ -12,6 +13,7 @@ export type CommandPaletteItem = {
   readonly keywords: string
   readonly disabled?: boolean
   readonly keepOpen?: boolean
+  readonly icon?: ComponentType<{ readonly className?: string }>
   readonly onSelect: () => void
 }
 

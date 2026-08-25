@@ -36,13 +36,56 @@ changing callback options.
 
 ## Built-In Capabilities
 
+Review Comments (`diffdash.builtin.review-comments`) is the first trusted built-in extension that
+spans project activities plus Code and Review source surfaces. The renderer registry publishes
+immutable snapshots and owns extension and contribution identity, deterministic ordering, and
+owner-scoped disposal. The project activity host owns selection, persistence, surface-preserving
+transitions, and fallback when a saved contribution is unavailable. Ordered project-provider
+contributions keep extension state scoped to the active project without hard-coding a feature at the
+application root.
+
+The same registry has a generic global-navigation lane. Its required host-owned Home contribution
+provides the non-removable fallback, while every global owner provides its own opaque state
+validation, equality, component, and feature policy. AppShell supplies global components only generic
+project-opening and navigation-history controls; it does not build or inject Home content. AppShell and history resolve both global and project
+destinations through registered contribution identity and registration generation.
+The durable project destination uses the same ownership boundary: persistence stores the registered
+navigation contribution identity and bounded encoded JSON without interpreting it. Review owns the
+Review codec, Code owns the Code codec, and a preferred project-opening provider can persist either
+surface only by dispatching through the registry's owner-neutral codec contract.
+
+Review (`diffdash.builtin.review`) and Code (`diffdash.builtin.code`) own the two project source
+surface registrations. Reviews and Files belong to Review; Code owns its repository-tree context and
+source-viewer main slots; Walkthrough (`diffdash.builtin.walkthrough`) owns its activity slot; Review
+Comments owns its context and selected-thread detail slots. Surface ownership is exclusive and
+duplicate registration fails before a partial registry generation becomes visible.
+
+All contribution kinds owned by an extension are removed atomically. The host then resolves a
+registered default for the retained surface or another available surface, rewrites stale navigation
+history entries without adding a new entry, persists the repaired workspace once, and unmounts an
+unavailable source surface so leases and subscriptions are released. This is the deletion invariant
+that built-ins must satisfy before the same semantic contracts can be exposed through a future
+out-of-process user extension API.
+
+Trusted built-ins mount React adapters in-process. Those adapters are application implementation
+details, not public extension contracts. Their source contributions exchange semantic values:
+
+- Code supplies project, workspace revision, Git revision, repository path, line number, and line
+  content. The source host orders line actions and renders registered annotations.
+- Review supplies project, review target, exact base/head revisions, parsed files, and semantic
+  thread navigation. The Review host composes annotations and line actions while retaining
+  responsive pane layout and viewport navigation.
+- The source kernel alone adapts these values to Pierre callbacks, virtualized instances, DOM
+  anchors, and input events.
+
 The current built-in adoption is:
 
 | Capability ID | Provider or input | Governed contribution |
 | --- | --- | --- |
 | `diffdash.builtin.scm-line-changes` | Code workspace line-change provider | Protected SCM gutter decoration |
 | `diffdash.builtin.language-navigation` | Definition and reference providers | Modified-token interaction and Peek |
-| `diffdash.builtin.code-comments` | Comment submission controller | Plain line interaction |
+| `diffdash.builtin.review-comments.code-source` | Review Comments extension | Code line action and draft annotation |
+| `diffdash.builtin.review-comments.review-diff` | Review Comments extension | Review line actions and thread annotations |
 | `diffdash.builtin.code-search` | In-file search | Owner-scoped selection and text highlight |
 | `diffdash.builtin.review-virtualization` | Rendered review diff | Virtualizer registration and settlement |
 | `diffdash.builtin.review-search` | Review search manager | Search highlight reconciliation |
@@ -51,9 +94,9 @@ The current built-in adoption is:
 
 Review's side-aware gutter and line callbacks remain one private `DiffCard` Pierre adapter because
 Pierre supplies old/new-side metadata there that is not present on a bubbled DOM event. The adapter
-invokes only protected review-thread behavior; it is not an extension contribution lane. Render
-lifecycle, virtualization, search, navigation focus, and viewed-file behavior still flow through the
-shared runtime.
+converts Pierre values to the semantic Review contribution lane and renders host-composed
+annotations. Render lifecycle, virtualization, search, navigation focus, and viewed-file behavior
+still flow through the shared runtime.
 
 Language providers compute locations. The generic language-navigation capability owns Cmd-click,
 Alt-click, Cmd+Shift-click, cancellation, result policy, and Peek presentation. Git computes compact

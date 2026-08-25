@@ -35,11 +35,30 @@ const ReviewContextOperation = Schema.Literals([
 
 type ReviewContextOperation = typeof ReviewContextOperation.Type
 
+/** Bounded acquisition failure category safe to project across process boundaries. */
+export const ReviewContextFailureCategory = Schema.Literals([
+  "authenticationRequired",
+  "authorizationRequired",
+  "providerUnavailable",
+  "reviewChanged",
+  "fallbackFailed",
+  "cacheFull",
+  "contentTooLarge",
+  "snapshotInvalid",
+  "cacheCorrupt",
+  "cancelled",
+  "acquisitionFailed",
+])
+
+/** Bounded acquisition failure category safe to project across process boundaries. */
+export type ReviewContextFailureCategory = typeof ReviewContextFailureCategory.Type
+
 /** A typed failure to acquire one coherent review metadata and diff snapshot. */
 export class ReviewContextError extends Schema.TaggedError<ReviewContextError>()(
   "ReviewContextError",
   {
     operation: ReviewContextOperation,
+    category: ReviewContextFailureCategory,
     reason: Schema.String,
     cause: CoreExpectedCause,
   },

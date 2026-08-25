@@ -106,11 +106,57 @@ Electron, SQLite, and concrete-provider leakage.
 
 Code files, review diffs, and source previews are source surfaces. `@diffdash/app` owns one source
 surface kernel that is the sole integration point for Pierre render lifecycle, delegated
-interactions, line selection, decorations, and durable floating-pane anchors. A narrow private
-Review adapter retains Pierre's side-aware gutter payload for protected thread interactions; that
-payload is not exposed as a capability or extension contract. Built-in Git,
-language navigation, search, review navigation, and viewed-file behavior register named
-capabilities with that kernel instead of composing Pierre callbacks directly.
+interactions, line selection, decorations, and durable floating-pane anchors. Trusted built-in
+extensions register ordered project activities and semantic Code or Review contributions in one
+renderer registry that publishes immutable snapshots. The activity host owns selection,
+persistence, and missing-contribution fallback. Source hosts own contribution ordering and
+lifecycle; ordered project providers own extension state without feature-specific application-shell
+composition. The contributing extension owns its policy, state, and UI.
+
+The same registry owns complete project source surfaces, owner-scoped surface lifecycle providers,
+opaque project navigation codecs, generic global destinations, and structured activity pane slots.
+Home is a required host-owned global destination with owner-defined validation, equality, rendering,
+search, repository mutations, and setup policy. The shell constructs registered global destination
+components with only generic project-opening and navigation-history controls; it never injects
+prebuilt destination content. Home is present in every registry generation, cannot be unregistered, and is the guaranteed
+repair target when no optional destination remains. Review and Code are
+independently registered surface contributions; Reviews, Files, Code, Walkthrough, and Comments each
+own their ribbon metadata and context/main/detail slots. An extension registration is atomic across
+its surfaces, activities, navigation, panes, providers, titlebar actions, and source contributions.
+Unregistering an owner publishes one new immutable generation, unmounts its surface, disposes its
+resources through React scope cleanup, removes its ribbon entries, and repairs current and historical
+workspace selections through registry-declared surface defaults. Generic shell and history code do
+not search for built-in activity IDs, privilege Home with a dedicated location shape, or interpret
+extension-owned navigation payloads. Global and project entries are owner-token envelopes. Code and
+Review schema-encode their history state into structured-clone-safe values and own its validation,
+equality, mutation, and restoration. Back and Forward skip payloads whose owner has been removed.
+Persistent navigation provider slots register owner restore handlers with an extension-neutral runtime;
+removing an owner clears its decoded state and handler without remounting the application shell.
+Durable project workspace rows retain `projectId`, active surface, and active activity alongside a
+bounded JSON-safe envelope containing the navigation contribution ID and its opaque encoded location.
+Generic Core, Electron, SQLite, and shell paths never inspect owner payload fields. The registered
+owner codec validates restoration; missing owners repair through registry defaults and persist the
+replacement envelope. Database schema migration v15 is the only legacy Review-target conversion path.
+
+The bundled owners are `diffdash.builtin.review`, `diffdash.builtin.code`,
+`diffdash.builtin.walkthrough`, and `diffdash.builtin.review-comments`. The ribbon and responsive
+workbench layout remain host-owned contribution containers. Their entries, source surfaces, and pane
+content are extension-owned. Each renderer extension defines its own stable persisted activity
+identity; generic domain exposes only the branded activity ID contract and resolution models. Each
+activity supplies its icon and pane slots, while surface-specific behavior flows through capabilities
+owned beneath Code or Review rather than optional policy interpreted by the registry or host.
+Walkthrough additionally owns the mounted operation session,
+cache/generation lifecycle, step visitation, focused-file projection, and file-collapse state through
+its Review surface lifecycle provider. Review retains stable provider slots for its mounted lifetime;
+unregistering Walkthrough deactivates and disposes its controller without remounting Review.
+
+Review Comments is the first trusted built-in spanning both source surfaces. Code exposes semantic
+project/revision/path/line values. Review exposes semantic review identity, exact revisions, parsed
+files, annotations, line actions, and thread-navigation requests. A narrow private Review adapter
+retains Pierre's side-aware gutter payload and converts it to those semantic contracts. Pierre,
+React host adapters, DOM values, and persistence objects are not contribution contracts. Built-in
+Git, language navigation, search, review navigation, and viewed-file behavior register named
+capabilities with the source kernel instead of composing Pierre callbacks directly.
 
 The same capability contracts are the intended boundary for future user-owned extensions, but the
 renderer runtime is not itself an extension sandbox. User code must eventually execute outside the

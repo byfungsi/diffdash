@@ -30,13 +30,13 @@ import { ReviewNavigationAnchorRegistry, reviewFileAnchorKey } from "./review-na
 import type { DiffVirtualizer, VirtualizedFileDiff } from "./pierre"
 import type { ReviewSearchHighlightManager } from "./review-search-highlights"
 import type { ProgressiveReviewContentReader } from "./progressive-review-content-session"
-import type { ReviewThreadAnnotation } from "./thread-annotations"
+import type { ReviewDiffAnnotationMetadata } from "./review-diff-annotation"
 
 /** Runtime Pierre registration retained only by the viewport execution plane. */
 export interface ReviewDiffRegistration {
   readonly generation: number
   readonly host: HTMLElement
-  readonly instance: VirtualizedFileDiff<ReviewThreadAnnotation>
+  readonly instance: VirtualizedFileDiff<ReviewDiffAnnotationMetadata>
   readonly reviewKey: string
   readonly rendered: boolean
 }

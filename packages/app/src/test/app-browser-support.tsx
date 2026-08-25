@@ -15,6 +15,8 @@ import {
   CommentSubmissionReceipt,
   CommentSubmissionUnsupportedError,
   CommentSubject,
+  OpenCodeSessionId,
+  OpenCodeSessionSummary,
 } from "@diffdash/domain/comment"
 import {
   CodeWorkspaceDirectoryPage,
@@ -86,6 +88,7 @@ import {
   ProjectOpened,
   ProjectRemoteCandidate,
   ProjectRemoteSelectionRequired,
+  ProjectWorkspaceActivityId,
   ProjectWorkspaceState,
 } from "@diffdash/domain/project-workspace"
 import {
@@ -219,7 +222,22 @@ import {
 } from "@/review/review-search-highlights"
 import { isMacPlatform } from "@/shell/keyboard-shortcut-platform"
 import { App } from "../app"
-import { lineReviewAnchor } from "../review/thread-annotations"
+import { lineReviewAnchor } from "@/extensions/review-comments/thread-annotations"
+import { PROJECT_WORKSPACE_CODE_ACTIVITY_ID } from "@/extensions/code/code-extension"
+import {
+  codeNavigationContribution,
+  createDefaultCodeNavigationState,
+  decodeCodeNavigationState,
+} from "@/extensions/code/code-navigation"
+import {
+  PROJECT_WORKSPACE_FILES_ACTIVITY_ID,
+  PROJECT_WORKSPACE_REVIEWS_ACTIVITY_ID,
+} from "@/extensions/review/review-extension"
+import {
+  encodeReviewNavigationState,
+  reviewNavigationContribution,
+} from "@/extensions/review/review-navigation"
+import { REVIEW_COMMENTS_ACTIVITY_ID } from "@/extensions/review-comments/review-comments-extension"
 import "../styles.css"
 
 interface ReviewSearchFixtureRequest {
@@ -521,8 +539,7 @@ ${tailChangedLines}`,
 const makeLongReviewThread = (fixture: ReturnType<typeof makeLargeDiffFixture>, lineNumber = 5) => {
   const file = parseUnifiedDiff(fixture.largeDiff.diff).files[0]
   if (file === undefined) throw new Error("Expected a parsed large diff file")
-  const anchor = lineReviewAnchor(file, "additions", lineNumber)
-  if (anchor === null) throw new Error("Expected a reviewable line in the large diff")
+  const anchor = Option.getOrThrow(lineReviewAnchor(file, "additions", lineNumber))
   const threadId = ReviewThreadId.make("thread-long-virtualized")
   const createdAt = "2026-07-23T09:00:00Z"
   const currentBaseRevision = ReviewRevision.make(
@@ -1111,12 +1128,15 @@ type AppBrowserScenarioId =
   | "onboardingTelemetryOptOut"
   | "providerTerminology"
   | "projectOpenChooser"
+  | "projectOpenSupersession"
+  | "projectActivityRepair"
   | "projectReviewFailureRecovery"
   | "projectRestoreRace"
   | "projectStateRestoration"
   | "cleanProjectReviews"
   | "failedProjectReviews"
   | "reviewNavigationLifecycle"
+  | "reviewCommentsConnectionScope"
   | "remoteRepositorySearch"
   | "repositoryInvalidation"
   | "repositorySearchFailure"
@@ -1143,6 +1163,7 @@ type AppBrowserScenarioId =
   | "viewedShortcutPointerTarget"
   | "viewedViewportAnchor"
   | "virtualizedSearch"
+  | "lateDiffHostResize"
   | "walkthroughNoAgent"
   | "walkthroughSettingsPersistence"
   | "workbenchTitlebar"
@@ -1800,6 +1821,9 @@ scenario("workbenchTitlebar", async () => {
   expect(commandCenter?.disabled).toBe(false)
   expect(back).toBeNull()
   expect(titlebar?.querySelector('button[aria-label="Review actions"]')).toBeNull()
+  expect(titlebar?.querySelector("[data-workbench-ai-connection]")?.textContent).toContain(
+    "Connect AI",
+  )
   if (
     titlebar === null ||
     viewport === null ||
@@ -1841,7 +1865,9 @@ scenario("workbenchTitlebar", async () => {
     const dialog = document.querySelector<HTMLDialogElement>('dialog[aria-label="Go anywhere"]')
     expect(dialog).not.toBeNull()
     expect(
-      dialog?.querySelector<HTMLInputElement>('input[placeholder="Search projects and reviews"]'),
+      dialog?.querySelector<HTMLInputElement>(
+        'input[placeholder="Search projects and destinations"]',
+      ),
     ).not.toBeNull()
     return dialog!
   })
@@ -1851,6 +1877,129 @@ scenario("workbenchTitlebar", async () => {
   await vi.waitFor(() => {
     expect(document.querySelector('dialog[aria-label="Go anywhere"]')).toBeNull()
     expect(document.activeElement).toBe(commandCenter)
+  })
+})
+
+scenario("reviewCommentsConnectionScope", async () => {
+  const firstRepo = linkedRepo(repo, "/workspace/diffdash")
+  const secondRepo = Repo.make({
+    ...firstRepo,
+    id: ReviewProjectId.make("repo-2"),
+    source: HostedRepositorySource.make({
+      locator: makeHostedRepositoryLocator("github", "fungsi", "other"),
+    }),
+    checkout: LinkedCheckout.make({
+      remoteUrl: "https://github.com/fungsi/other",
+      path: RepositoryCheckoutPath.make("/workspace/other"),
+    }),
+  })
+  const session = OpenCodeSessionSummary.make({
+    id: OpenCodeSessionId.make("ses_browserComments"),
+    title: "Review with OpenCode",
+    directory: RepositoryCheckoutPath.make("/workspace/diffdash"),
+    updatedAt: Date.now(),
+  })
+  let connectionAttempt = 0
+  const staleConnectionGate: { reject: ((error: Error) => void) | null } = { reject: null }
+  const staleConnection = new Promise<{
+    readonly sessionId: OpenCodeSessionId
+    readonly planMode: boolean
+  }>((_resolve, reject) => {
+    staleConnectionGate.reject = reject
+  })
+  const calls = installDiffDashApi({
+    connectOpenCodeSession: async ({ sessionId }) => {
+      connectionAttempt += 1
+      return connectionAttempt === 1 ? { sessionId, planMode: true } : staleConnection
+    },
+    openCodeSessions: [session],
+    repositories: [firstRepo, secondRepo],
+    openProject: async (localPath) =>
+      ProjectOpened.make({ repo: localPath === secondRepo.localPath ? secondRepo : firstRepo }),
+  })
+  renderApp()
+
+  const chooseOpenCodeSession = async () => {
+    const connectionButton = await vi.waitFor(() => {
+      const button = document.querySelector<HTMLButtonElement>("[data-workbench-ai-connection]")
+      expect(button).not.toBeNull()
+      expect(button?.disabled).toBe(false)
+      return button
+    })
+    connectionButton?.dispatchEvent(
+      new PointerEvent("pointerdown", {
+        bubbles: true,
+        button: 0,
+        composed: true,
+        pointerId: 1,
+        pointerType: "mouse",
+      }),
+    )
+    const openCodeItem = await vi.waitFor(() => {
+      const item = [...document.querySelectorAll<HTMLElement>('[role="menuitem"]')].find(
+        (candidate) => candidate.textContent?.includes("OpenCode") ?? false,
+      )
+      expect(item).not.toBeUndefined()
+      return item
+    })
+    openCodeItem?.dispatchEvent(
+      new PointerEvent("pointermove", { bubbles: true, pointerType: "mouse" }),
+    )
+    const sessionItem = await vi.waitFor(() => {
+      const item = [...document.querySelectorAll<HTMLElement>('[role="menuitem"]')].find(
+        (candidate) => candidate.textContent?.includes(session.title) ?? false,
+      )
+      expect(item).not.toBeUndefined()
+      return item
+    })
+    sessionItem?.click()
+  }
+
+  await openDefaultProject()
+  await chooseOpenCodeSession()
+  await vi.waitFor(() => {
+    expect(calls.connectOpenCodeSession).toHaveBeenCalledWith({
+      sessionId: session.id,
+      projectId: firstRepo.id,
+    })
+    expect(document.querySelector("[data-workbench-ai-connection]")?.textContent).toContain(
+      session.title,
+    )
+  })
+
+  document.querySelector<HTMLButtonElement>('button[aria-label="Back"]')?.click()
+  const secondProject = await vi.waitFor(() => {
+    const button = document.querySelector<HTMLButtonElement>(
+      'button[aria-label="Open project fungsi/other"]',
+    )
+    expect(button).not.toBeNull()
+    return button
+  })
+  secondProject?.click()
+  await vi.waitFor(() => {
+    expect(document.querySelector("[data-workbench-ai-connection]")?.textContent).toContain(
+      "Connect AI",
+    )
+    expect(document.body.textContent).toContain("fungsi/other")
+  })
+
+  await chooseOpenCodeSession()
+  await vi.waitFor(() => expect(calls.connectOpenCodeSession).toHaveBeenCalledTimes(2))
+  document.querySelector<HTMLButtonElement>('button[aria-label="Back"]')?.click()
+  const firstProject = await vi.waitFor(() => {
+    const button = document.querySelector<HTMLButtonElement>(
+      'button[aria-label="Open project fungsi/diffdash"]',
+    )
+    expect(button).not.toBeNull()
+    return button
+  })
+  firstProject?.click()
+  staleConnectionGate.reject?.(new Error("Old project connection failed"))
+  await vi.waitFor(() => {
+    expect(document.querySelector("[data-workbench-ai-connection]")?.textContent).toContain(
+      "Connect AI",
+    )
+    expect(document.body.textContent).not.toContain("Old project connection failed")
   })
 })
 
@@ -1961,6 +2110,61 @@ scenario("projectOpenChooser", async () => {
   })
 })
 
+scenario("projectOpenSupersession", async () => {
+  const firstRepo = linkedRepo(repo, RepositoryCheckoutPath.make("/workspace/first"))
+  const secondRepo = Repo.make({
+    ...linkedRepo(repo, RepositoryCheckoutPath.make("/workspace/second")),
+    id: ReviewProjectId.make("repo-second"),
+    source: HostedRepositorySource.make({
+      locator: makeHostedRepositoryLocator("github", "fungsi", "second"),
+    }),
+  })
+  let releaseFirst: (() => void) | undefined
+  let releaseSecond: (() => void) | undefined
+  const firstGate = new Promise<void>((resolve) => {
+    releaseFirst = resolve
+  })
+  const secondGate = new Promise<void>((resolve) => {
+    releaseSecond = resolve
+  })
+  const calls = installDiffDashApi({
+    selectLocalFolder: "/workspace/second",
+    openProject: async (localPath) => {
+      if (localPath === "/workspace/first") {
+        await firstGate
+        return ProjectOpened.make({ repo: firstRepo })
+      }
+      await secondGate
+      return ProjectOpened.make({ repo: secondRepo })
+    },
+  })
+  renderApp()
+
+  await vi.waitFor(() => expect(document.body.textContent).toContain("Pinned projects"))
+  const openProjectButton = [...document.querySelectorAll<HTMLButtonElement>("button")].find(
+    (button) => button.textContent?.trim() === "Open project",
+  )
+  calls.selectLocalFolder.mockResolvedValueOnce(RepositoryCheckoutPath.make("/workspace/first"))
+  openProjectButton?.click()
+  await vi.waitFor(() => expect(calls.openProject).toHaveBeenCalledOnce())
+  openProjectButton?.click()
+  await vi.waitFor(() => expect(calls.openProject).toHaveBeenCalledTimes(2))
+  releaseSecond?.()
+  await vi.waitFor(() => {
+    expect(document.body.textContent).toContain("fungsi/second")
+    expect(calls.saveProjectWorkspace).toHaveBeenCalledWith(
+      expect.objectContaining({ projectId: secondRepo.id }),
+    )
+  })
+
+  releaseFirst?.()
+  await Promise.resolve()
+  expect(document.body.textContent).toContain("fungsi/second")
+  expect(calls.saveProjectWorkspace).not.toHaveBeenCalledWith(
+    expect.objectContaining({ projectId: firstRepo.id }),
+  )
+})
+
 scenario("codeRibbon", async () => {
   const linked = linkedRepo(repo, "/workspace/diffdash")
   const appPath = RepositoryRelativePath.make("src/app.tsx")
@@ -2023,16 +2227,54 @@ scenario("codeRibbon", async () => {
 
   document.querySelector<HTMLButtonElement>('button[aria-label="Reviews"]')?.click()
   await vi.waitFor(() => {
-    expect(
-      document.querySelector('button[aria-label="Reviews"][aria-pressed="true"]'),
-    ).not.toBeNull()
+    const reviewsButton = document.querySelector(
+      'button[aria-label="Reviews"][aria-pressed="true"]',
+    )
+    expect(reviewsButton).not.toBeNull()
+    expect(document.activeElement).toBe(reviewsButton)
   })
   document.querySelector<HTMLButtonElement>('button[aria-label="Code"]')?.click()
   await vi.waitFor(() => {
-    expect(document.querySelector('button[aria-label="Code"][aria-pressed="true"]')).not.toBeNull()
+    const codeButton = document.querySelector('button[aria-label="Code"][aria-pressed="true"]')
+    expect(codeButton).not.toBeNull()
+    expect(document.activeElement).toBe(codeButton)
     expect(calls.openCodeWorkspace).toHaveBeenCalledTimes(2)
     expect(calls.releaseCodeWorkspace).toHaveBeenCalledTimes(1)
   })
+
+  document.querySelector<HTMLButtonElement>('button[aria-label="Comments"]')?.click()
+  await vi.waitFor(() => {
+    const commentsButton = document.querySelector(
+      'button[aria-label="Comments"][aria-pressed="true"]',
+    )
+    expect(commentsButton).not.toBeNull()
+    expect(document.activeElement).toBe(commentsButton)
+    expect(calls.saveProjectWorkspace).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        activeSurface: "code",
+        activeActivity: REVIEW_COMMENTS_ACTIVITY_ID,
+      }),
+    )
+    expect(calls.releaseCodeWorkspace).toHaveBeenCalledTimes(1)
+    expect(document.querySelector("diffs-container")?.shadowRoot?.textContent).toContain(
+      'export const app = "DiffDash"',
+    )
+    expect(document.body.textContent).toContain("Code comments need OpenCode")
+    expect(
+      document.querySelector<HTMLButtonElement>('button[aria-label="Refresh repository files"]'),
+    ).toBeNull()
+  })
+  const firstCodeLine = document
+    .querySelector("diffs-container")
+    ?.shadowRoot?.querySelector<HTMLElement>('[data-line-index="0"]')
+  expect(firstCodeLine).not.toBeNull()
+  firstCodeLine?.click()
+  await vi.waitFor(() => {
+    expect(document.body.textContent).toContain("src/app.tsx:1")
+    expect(document.body.textContent).toContain("Code comments in DiffDash are not supported yet")
+  })
+  await waitForAnimationFrames(2)
+  expect(calls.openCodeWorkspace).toHaveBeenCalledTimes(2)
 })
 
 scenario("codeRibbonLink", async () => {
@@ -2273,11 +2515,14 @@ scenario("codeRibbonShortcuts", async () => {
 scenario("projectStateRestoration", async () => {
   const persisted = ProjectWorkspaceState.make({
     projectId: ReviewProjectId.make(repo.id),
-    activeRibbon: "reviews",
-    selectedReviewTarget: HostedReviewTarget.make({
-      kind: "hosted",
-      review: pullRequest.locator,
-    }),
+    activeSurface: "review",
+    activeActivity: PROJECT_WORKSPACE_REVIEWS_ACTIVITY_ID,
+    navigation: {
+      contributionId: reviewNavigationContribution.id,
+      location: encodeReviewNavigationState({
+        selectedReview: Option.some({ kind: "hosted", review: pullRequest.locator }),
+      }),
+    },
     updatedAt: "2026-08-02T00:00:00.000Z",
   })
   const calls = installDiffDashApi({ projectWorkspaceState: persisted })
@@ -2291,17 +2536,60 @@ scenario("projectStateRestoration", async () => {
     ).not.toBeNull()
     expect(document.body.textContent).toContain("Opened PR #51")
     expect(getDiffCardPaths()).toEqual(["docs/readme.md", "src/app.tsx"])
+    expect(calls.acquireLocalReviewSnapshot).not.toHaveBeenCalled()
+  })
+})
+
+scenario("projectActivityRepair", async () => {
+  const persisted = ProjectWorkspaceState.make({
+    projectId: ReviewProjectId.make(repo.id),
+    activeSurface: "code",
+    activeActivity: ProjectWorkspaceActivityId.make("example.extension.missing"),
+    navigation: {
+      contributionId: codeNavigationContribution.id,
+      location: createDefaultCodeNavigationState(ReviewProjectId.make(repo.id)),
+    },
+    updatedAt: "2026-08-02T00:00:00.000Z",
+  })
+  const calls = installDiffDashApi({
+    projectWorkspaceState: persisted,
+    repositories: [linkedRepo(repo, "/workspace/diffdash")],
+  })
+  renderApp()
+
+  const projectButton = await vi.waitFor(() => {
+    const button = document.querySelector<HTMLButtonElement>(
+      'button[aria-label="Open project fungsi/diffdash"]',
+    )
+    expect(button).not.toBeNull()
+    return button
+  })
+  projectButton?.click()
+  await vi.waitFor(() => {
+    expect(document.querySelector('button[aria-label="Code"][aria-pressed="true"]')).not.toBeNull()
+    expect(document.body.textContent).toContain(
+      "The saved workspace activity is unavailable. A registered activity was restored instead.",
+    )
+    expect(calls.saveProjectWorkspace).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        activeSurface: "code",
+        activeActivity: PROJECT_WORKSPACE_CODE_ACTIVITY_ID,
+      }),
+    )
   })
 })
 
 scenario("projectReviewFailureRecovery", async () => {
   const persisted = ProjectWorkspaceState.make({
     projectId: ReviewProjectId.make(repo.id),
-    activeRibbon: "files",
-    selectedReviewTarget: HostedReviewTarget.make({
-      kind: "hosted",
-      review: pullRequest.locator,
-    }),
+    activeSurface: "review",
+    activeActivity: PROJECT_WORKSPACE_FILES_ACTIVITY_ID,
+    navigation: {
+      contributionId: reviewNavigationContribution.id,
+      location: encodeReviewNavigationState({
+        selectedReview: Option.some({ kind: "hosted", review: pullRequest.locator }),
+      }),
+    },
     updatedAt: "2026-08-02T00:00:00.000Z",
   })
   const calls = installDiffDashApi({ projectWorkspaceState: persisted })
@@ -2363,6 +2651,7 @@ scenario("projectRestoreRace", async () => {
   renderApp()
 
   await openDefaultProject()
+  expect(calls.acquireLocalReviewSnapshot).not.toHaveBeenCalled()
   document.querySelector<HTMLButtonElement>('button[aria-label^="Open review #51:"]')?.click()
   await vi.waitFor(() => {
     expect(document.querySelector('button[aria-label="Files"][aria-pressed="true"]')).not.toBeNull()
@@ -2800,6 +3089,9 @@ scenario("unavailableProviderRoute", async () => {
   )
   expect(walkthroughTab?.disabled).toBe(false)
   walkthroughTab?.click()
+  await vi.waitFor(() =>
+    expect(document.querySelector("[data-walkthrough-context-pane]")).not.toBeNull(),
+  )
   const settingsButton = document.querySelector<HTMLButtonElement>(
     'button[aria-label="Agent settings"]',
   )
@@ -3254,8 +3546,14 @@ scenario("cliRepositoryComparison", async () => {
     expect(calls.resolveBranch).not.toHaveBeenCalled()
     expect(calls.saveProjectWorkspace).toHaveBeenCalledWith(
       expect.objectContaining({
-        activeRibbon: "files",
-        selectedReviewTarget: expect.objectContaining({ kind: "repositoryComparison" }),
+        activeSurface: "review",
+        activeActivity: PROJECT_WORKSPACE_FILES_ACTIVITY_ID,
+        navigation: expect.objectContaining({
+          contributionId: reviewNavigationContribution.id,
+          location: expect.objectContaining({
+            selectedReview: expect.objectContaining({ kind: "repositoryComparison" }),
+          }),
+        }),
       }),
     )
   })
@@ -3886,7 +4184,7 @@ scenario("threadNavigationConvergence", async () => {
 
   await openHostedReview(77)
   const threadsButton = await vi.waitFor(() => {
-    const button = document.querySelector<HTMLButtonElement>('button[aria-label="Threads"]')
+    const button = document.querySelector<HTMLButtonElement>('button[aria-label="Comments"]')
     expect(button).not.toBeNull()
     return button!
   })
@@ -3952,9 +4250,14 @@ scenario("threadNavigationConvergence", async () => {
     },
     { timeout: 20_000 },
   )
-  const stableTop = mountedLine.getBoundingClientRect().top
-  await waitForAnimationFrames(4)
-  expect(Math.abs(mountedLine.getBoundingClientRect().top - stableTop)).toBeLessThanOrEqual(1)
+  await vi.waitFor(
+    async () => {
+      const stableTop = mountedLine.getBoundingClientRect().top
+      await waitForAnimationFrames(4)
+      expect(Math.abs(mountedLine.getBoundingClientRect().top - stableTop)).toBeLessThanOrEqual(1)
+    },
+    { timeout: 20_000 },
+  )
   expect(getMountedDiffLineCount()).toBeLessThanOrEqual(1_000)
 })
 
@@ -4108,13 +4411,22 @@ scenario("reviewThreadSidebar", async () => {
   const extraFile = parsed.files.find((file) => file.path === previousRevisionPath)
   const lockFile = parsed.files.find((file) => file.path === "pnpm-lock.yaml")
   const appFile = parsed.files.find((file) => file.path === "src/app.tsx")
-  const docsAnchor = docsFile === undefined ? null : lineReviewAnchor(docsFile, "additions", 1)
-  const extraAnchor = extraFile === undefined ? null : lineReviewAnchor(extraFile, "additions", 1)
-  const lockAnchor = lockFile === undefined ? null : lineReviewAnchor(lockFile, "additions", 1)
-  const appAnchor = appFile === undefined ? null : lineReviewAnchor(appFile, "additions", 1)
-  if (docsAnchor === null || extraAnchor === null || lockAnchor === null || appAnchor === null) {
-    throw new Error("Expected summary review anchors")
-  }
+  const { appAnchor, docsAnchor, extraAnchor, lockAnchor } = Option.getOrThrow(
+    Option.all({
+      appAnchor: Option.flatMap(Option.fromNullishOr(appFile), (file) =>
+        lineReviewAnchor(file, "additions", 1),
+      ),
+      docsAnchor: Option.flatMap(Option.fromNullishOr(docsFile), (file) =>
+        lineReviewAnchor(file, "additions", 1),
+      ),
+      extraAnchor: Option.flatMap(Option.fromNullishOr(extraFile), (file) =>
+        lineReviewAnchor(file, "additions", 1),
+      ),
+      lockAnchor: Option.flatMap(Option.fromNullishOr(lockFile), (file) =>
+        lineReviewAnchor(file, "additions", 1),
+      ),
+    }),
+  )
   const reviewThreadDetails = [
     makeReviewThreadDetails({ anchor: docsAnchor, id: "thread-summary-docs" }),
     makeReviewThreadDetails({ anchor: lockAnchor, id: "thread-summary-lock" }),
@@ -4149,7 +4461,7 @@ scenario("reviewThreadSidebar", async () => {
   await openDefaultHostedReview()
   await showWideReviewLayout()
   const railButton = await vi.waitFor(() => {
-    const button = document.querySelector<HTMLButtonElement>('button[aria-label="Threads"]')
+    const button = document.querySelector<HTMLButtonElement>('button[aria-label="Comments"]')
     expect(button).not.toBeNull()
     return button!
   })
@@ -4162,7 +4474,7 @@ scenario("reviewThreadSidebar", async () => {
   const commandCenter = document.querySelector<HTMLButtonElement>("[data-workbench-command-center]")
   expect(activityRail).not.toBeNull()
   expect(treeActivity).not.toBeNull()
-  expect(railButton.textContent).toBe("Threads")
+  expect(railButton.textContent).toBe("Comments")
   expect(titlebar).not.toBeNull()
   expect(workbenchFrame).not.toBeNull()
   expect(reviewWorkspaceFrame).not.toBeNull()
@@ -4482,7 +4794,7 @@ scenario("reviewThreadSidebar", async () => {
       expect(getComputedStyle(bottomRail!).borderTopWidth).toBe("0px")
     })
 
-    document.querySelector<HTMLButtonElement>('button[aria-label="Threads"]')?.click()
+    document.querySelector<HTMLButtonElement>('button[aria-label="Comments"]')?.click()
     await vi.waitFor(() => {
       expect(lockDetail.parentElement?.getAttribute("aria-hidden")).toBe("true")
       expect(
@@ -4588,7 +4900,7 @@ scenario("reviewThreadSidebar", async () => {
     setInputValue(restoredFilterInput, "app")
     restoredFilterInput.dispatchEvent(new Event("input", { bubbles: true }))
   }
-  document.querySelector<HTMLButtonElement>('button[aria-label="Threads"]')?.click()
+  document.querySelector<HTMLButtonElement>('button[aria-label="Comments"]')?.click()
   const docsThreadButton = await vi.waitFor(() => {
     const button = document.querySelector<HTMLButtonElement>(
       'button[aria-label="Open thread details for docs/readme.md R1"]',
@@ -4625,7 +4937,7 @@ scenario("reviewThreadSidebar", async () => {
     { timeout: 10_000 },
   )
 
-  document.querySelector<HTMLButtonElement>('button[aria-label="Threads"]')?.click()
+  document.querySelector<HTMLButtonElement>('button[aria-label="Comments"]')?.click()
   const outdatedButton = await vi.waitFor(() => {
     const button = document.querySelector<HTMLButtonElement>(
       'button[aria-label="Open thread details for src/app.tsx R1"]',
@@ -4743,7 +5055,7 @@ scenario("reviewThreadSidebar", async () => {
   )
   await vi.waitFor(() => {
     const collapsedRailButton = document.querySelector<HTMLButtonElement>(
-      'button[aria-label="Threads"]',
+      'button[aria-label="Comments"]',
     )
     expect(document.querySelector("[data-review-thread-list]")).toBeNull()
     expect(document.activeElement).toBe(collapsedRailButton)
@@ -4837,6 +5149,44 @@ scenario("wrappedFileBuffers", async () => {
     },
     { timeout: 15_000 },
   )
+})
+
+scenario("lateDiffHostResize", async () => {
+  const fixture = makeManyFileDiffFixture()
+  installDiffDashApi({
+    pullRequestDetail: HostedReviewDetail.make({
+      ...detail,
+      summary: fixture.manyPullRequest,
+    }),
+    pullRequestDiff: fixture.manyDiff,
+    reviewRequests: [fixture.manyPullRequest],
+  })
+  renderApp({ strictMode: true })
+
+  await openHostedReview(58)
+  await showResponsiveDiffPane()
+  const host = await vi.waitFor(() => {
+    const candidate = getDiffShadowRoot(fixture.paths[2] ?? "")?.host
+    expect(candidate).toBeInstanceOf(HTMLElement)
+    return candidate as HTMLElement
+  })
+  await waitForAnimationFrames(8)
+
+  type InstrumentedVirtualizer = {
+    readonly requestHeightReconcile: (instance: object) => void
+  }
+  const virtualizer = (window as typeof window & { readonly __INSTANCE?: InstrumentedVirtualizer })
+    .__INSTANCE
+  expect(virtualizer).not.toBeUndefined()
+  if (virtualizer === undefined) return
+  const requestHeightReconcile = vi.spyOn(virtualizer, "requestHeightReconcile")
+  const initialCalls = requestHeightReconcile.mock.calls.length
+
+  host.style.height = `${Math.ceil(host.getBoundingClientRect().height) + 320}px`
+  await vi.waitFor(() => {
+    expect(requestHeightReconcile.mock.calls.length).toBeGreaterThan(initialCalls)
+  })
+  host.style.removeProperty("height")
 })
 
 scenario("multiFileSearchWrap", async () => {
@@ -7005,7 +7355,15 @@ scenario("homeToReview", async () => {
     expect(document.querySelector("diffs-container")?.shadowRoot?.textContent).toContain(
       'export const app = "DiffDash"',
     )
+    const persisted = calls.saveProjectWorkspace.mock.calls.at(-1)?.[0]
+    expect(persisted?.navigation.contributionId).toBe(codeNavigationContribution.id)
+    expect(
+      persisted === undefined
+        ? Option.none()
+        : decodeCodeNavigationState(persisted.navigation.location).path,
+    ).toEqual(Option.some(appPath))
   })
+  const persistenceCountBeforeDefinition = calls.saveProjectWorkspace.mock.calls.length
 
   const definitionToken = await vi.waitFor(() => {
     const tokens = document
@@ -7030,6 +7388,14 @@ scenario("homeToReview", async () => {
     expect(document.querySelector("diffs-container")?.shadowRoot?.textContent).toContain(
       'export const definition = "target"',
     )
+    expect(calls.saveProjectWorkspace).toHaveBeenCalledTimes(persistenceCountBeforeDefinition + 1)
+    const persisted = calls.saveProjectWorkspace.mock.calls.at(-1)?.[0]
+    expect(persisted?.navigation.contributionId).toBe(codeNavigationContribution.id)
+    expect(
+      persisted === undefined
+        ? Option.none()
+        : decodeCodeNavigationState(persisted.navigation.location).path,
+    ).toEqual(Option.some(definitionPath))
   })
 
   dispatchSideMouseButton(3)
@@ -7062,6 +7428,26 @@ scenario("homeToReview", async () => {
       'export const definition = "target"',
     )
     expect(document.querySelector('button[aria-label="Forward"]')).toBeNull()
+  })
+
+  root?.unmount()
+  root = null
+  document.body.replaceChildren()
+  renderApp()
+  const restoredProjectButton = await vi.waitFor(() => {
+    const button = document.querySelector<HTMLButtonElement>(
+      'button[aria-label="Open project fungsi/diffdash"]',
+    )
+    expect(button).not.toBeNull()
+    return button
+  })
+  restoredProjectButton?.click()
+  await vi.waitFor(() => {
+    expect(document.querySelector('button[aria-label="Code"][aria-pressed="true"]')).not.toBeNull()
+    expect(calls.readLocalCheckoutFile).toHaveBeenLastCalledWith(repo.id, definitionPath)
+    expect(document.querySelector("diffs-container")?.shadowRoot?.textContent).toContain(
+      'export const definition = "target"',
+    )
   })
 })
 
@@ -7280,7 +7666,7 @@ const showResponsiveDiffPane = async () => {
 
 const openOnlyReviewThreadInDiff = async (path: string, lineLabel: string) => {
   const threadsButton = await vi.waitFor(() => {
-    const button = document.querySelector<HTMLButtonElement>('button[aria-label="Threads"]')
+    const button = document.querySelector<HTMLButtonElement>('button[aria-label="Comments"]')
     expect(button).not.toBeNull()
     return button!
   })
@@ -7594,6 +7980,7 @@ export const installDiffDashApi = (
     readonly codeWorkspaceReferences?: DiffDashApi["codeWorkspace"]["references"]
     readonly codeWorkspaceChanges?: DiffDashApi["codeWorkspace"]["changes"]
     readonly codeWorkspaceLineChanges?: DiffDashApi["codeWorkspace"]["lineChanges"]
+    readonly connectOpenCodeSession?: DiffDashApi["ai"]["connectOpenCodeSession"]
     readonly expireFirstSnapshotPage?: boolean
     readonly getAppState?: DiffDashApi["appState"]["get"]
     readonly getDiagnostics?: DiffDashApi["diagnostics"]
@@ -7602,6 +7989,7 @@ export const installDiffDashApi = (
       projectId: ReviewProjectId,
     ) => Promise<LocalCheckoutFileListResult>
     readonly openProject?: DiffDashApi["repositories"]["openProject"]
+    readonly openCodeSessions?: readonly OpenCodeSessionSummary[]
     readonly projectWorkspaceState?: ProjectWorkspaceState | null
     readonly pullRequestDetail?: HostedReviewDetail
     readonly pullRequestDiff?: HostedReviewDiff
@@ -7776,6 +8164,12 @@ export const installDiffDashApi = (
     generateWalkthrough: vi.fn<(request: WalkthroughBridgeStartRequest) => void>(),
     getWalkthrough:
       vi.fn<(request: Parameters<DiffDashApi["walkthroughOperations"]["getStored"]>[0]) => void>(),
+    listOpenCodeSessions: vi.fn<DiffDashApi["ai"]["listOpenCodeSessions"]>(async () =>
+      Promise.resolve(options.openCodeSessions ?? []),
+    ),
+    connectOpenCodeSession: vi.fn<DiffDashApi["ai"]["connectOpenCodeSession"]>(
+      options.connectOpenCodeSession ?? (async ({ sessionId }) => ({ sessionId, planMode: true })),
+    ),
     getAppState: vi.fn<DiffDashApi["appState"]["get"]>(
       options.getAppState ?? (async () => appState),
     ),
@@ -8314,8 +8708,8 @@ export const installDiffDashApi = (
       getCatalog: async () => options.agentProviderCatalog ?? readyAgentProviderCatalog,
     },
     ai: {
-      listOpenCodeSessions: async () => [],
-      connectOpenCodeSession: async ({ sessionId }) => ({ sessionId, planMode: true }),
+      listOpenCodeSessions: calls.listOpenCodeSessions,
+      connectOpenCodeSession: calls.connectOpenCodeSession,
       submitComment: async ({ destination, submission }) =>
         CommentDestination.match(destination, {
           OpenCode: ({ connection }) =>

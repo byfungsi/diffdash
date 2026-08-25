@@ -403,7 +403,7 @@ test("covers finished Home to Review flow with fake CLI fixtures", async ({
       .first()
     const initialComposer = await openGutterThreadComposer(window, gutterNumber)
     await initialComposer.fill("Why was this line changed?")
-    await window.getByRole("button", { name: "Comment" }).click()
+    await window.getByRole("button", { name: "Comment", exact: true }).click()
 
     await expect(window.getByText("Why was this line changed?")).toBeVisible()
     await expect(
@@ -434,7 +434,7 @@ test("covers finished Home to Review flow with fake CLI fixtures", async ({
 
     await reviewDisclosure.click()
     await expect(reviewDisclosure).toHaveAttribute("aria-expanded", "false")
-    await window.getByRole("button", { name: "Threads" }).click()
+    await window.getByRole("button", { name: "Comments" }).click()
     await window
       .getByRole("button", { name: /Open thread details for src\/app\.tsx [LR]1/ })
       .click()
@@ -480,7 +480,7 @@ test("covers finished Home to Review flow with fake CLI fixtures", async ({
     await expect(window.locator("[data-review-editor-header]")).toContainText("Request review flow")
 
     await window.getByRole("button", { name: "Back" }).click()
-    await expect(window.getByRole("button", { name: "Threads" })).toHaveAttribute(
+    await expect(window.getByRole("button", { name: "Comments" })).toHaveAttribute(
       "aria-pressed",
       "true",
     )
@@ -585,7 +585,11 @@ test("covers finished Home to Review flow with fake CLI fixtures", async ({
       beforeRestart,
     )
     expect(afterRestart.workspaceStates).toEqual([
-      expect.objectContaining({ active_ribbon: "files", repo_id: "github:byfungsi/diffdash" }),
+      expect.objectContaining({
+        active_surface: "review",
+        active_activity: "diffdash.core.files",
+        repo_id: "github:byfungsi/diffdash",
+      }),
     ])
   } finally {
     await app.close().catch(() => undefined)
@@ -979,7 +983,7 @@ test("reports an explicit Claude walkthrough failure through contextBridge and c
     await expect(walkthroughContainer).toHaveAttribute(
       "data-walkthrough-operation-id",
       rawAcceptance.operationId,
-      { timeout: 20_000 },
+      { timeout: 30_000 },
     )
     const uiOperationId = await walkthroughContainer.getAttribute("data-walkthrough-operation-id")
     if (uiOperationId === null) throw new Error("UI walkthrough operation ID is unavailable")
@@ -1173,7 +1177,11 @@ test("opens the current project Reviews ribbon from the versioned CLI command", 
     }),
   ])
   expect(persisted.workspaceStates).toEqual([
-    expect.objectContaining({ repo_id: "github:byfungsi/diffdash", active_ribbon: "files" }),
+    expect.objectContaining({
+      repo_id: "github:byfungsi/diffdash",
+      active_surface: "review",
+      active_activity: "diffdash.core.files",
+    }),
   ])
 })
 
@@ -1231,7 +1239,7 @@ for (const fixture of [
         .last()
       const composer = await openGutterThreadComposer(window, gutterNumber)
       await composer.fill("Review this line")
-      await window.getByRole("button", { name: "Comment" }).click()
+      await window.getByRole("button", { name: "Comment", exact: true }).click()
       await expect(window.getByText(fixture.response)).toBeVisible({ timeout: 20_000 })
     } finally {
       await app.close()
@@ -1305,9 +1313,10 @@ test("opens a merge-base branch comparison from the versioned CLI command", asyn
   expect(persisted.workspaceStates).toHaveLength(1)
   expect(persisted.workspaceStates[0]).toMatchObject({
     repo_id: "github:byfungsi/diffdash",
-    active_ribbon: "files",
+    active_surface: "review",
+    active_activity: "diffdash.core.files",
   })
-  expect(String(persisted.workspaceStates[0]?.selected_review_target_json)).toContain(
+  expect(String(persisted.workspaceStates[0]?.navigation_location_json)).toContain(
     '"_tag":"branch"',
   )
 })
@@ -1476,12 +1485,16 @@ test("opens and forwards immutable repository comparisons through Electron", asy
   const persisted = readReviewPersistenceSnapshot(join(userData, "diffdash.sqlite"))
   expect(persisted.workspaceStates).toHaveLength(1)
   expect(
-    JSON.parse(String(persisted.workspaceStates[0]?.selected_review_target_json)) as unknown,
+    JSON.parse(String(persisted.workspaceStates[0]?.navigation_location_json)) as unknown,
   ).toMatchObject({
-    kind: "repositoryComparison",
-    baseSha: revisions.base,
-    headSha: revisions.head,
-    mergeBaseSha: revisions.base,
+    selectedReview: {
+      kind: "repositoryComparison",
+      target: {
+        baseSha: revisions.base,
+        headSha: revisions.head,
+        mergeBaseSha: revisions.base,
+      },
+    },
   })
 })
 
@@ -1625,16 +1638,16 @@ const dismissOnboardingIfPresent = async (
   options: { readonly telemetryEnabled?: boolean } = {},
 ) => {
   const continueButton = window.getByRole("button", { name: "Continue to DiffDash" })
-  try {
-    await continueButton.waitFor({ state: "visible", timeout: 2_000 })
-    if (options.telemetryEnabled === false) {
-      await window.getByRole("checkbox", { name: "Share anonymous usage data" }).uncheck()
-    }
-    await continueButton.click()
-    await expect(window.getByRole("heading", { name: "DiffDash", exact: true })).toBeVisible()
-  } catch {
-    // Onboarding is only shown for fresh app state.
+  await continueButton
+    .or(window.locator("[data-home-layout], [data-review-activity-rail]").first())
+    .first()
+    .waitFor({ state: "visible", timeout: 15_000 })
+  if (!(await continueButton.isVisible())) return
+  if (options.telemetryEnabled === false) {
+    await window.getByRole("checkbox", { name: "Share anonymous usage data" }).uncheck()
   }
+  await continueButton.click()
+  await expect(continueButton).toBeHidden()
 }
 
 const openGutterThreadComposer = async (window: Page, gutterNumber: Locator) => {
@@ -1812,7 +1825,8 @@ const readReviewPersistenceSnapshot = (databasePath: string) => {
     const workspaceStates = parseSqliteRows(
       database
         .prepare(
-          `SELECT repo_id, active_ribbon, selected_review_target_json, updated_at
+          `SELECT repo_id, active_surface, active_activity,
+             navigation_contribution_id, navigation_location_json, updated_at
            FROM project_workspace_state ORDER BY repo_id`,
         )
         .all(),

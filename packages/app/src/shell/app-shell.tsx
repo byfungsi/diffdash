@@ -1,91 +1,69 @@
 /* oxlint-disable eslint/no-underscore-dangle -- Domain unions use Effect-compatible _tag discriminants. */
 import { AISettings } from "@diffdash/domain/ai-settings"
 import type { AppState } from "@diffdash/domain/app-state"
-import type { CodeLineChangeRange } from "@diffdash/domain/code-line-change"
-import type { OpenCodeConnectionSelection } from "@diffdash/domain/comment"
+import { type HostedRepositoryLocator, RepositorySource } from "@diffdash/domain/git-provider"
 import {
-  type CodeWorkspaceTarget,
-  ProjectHeadCodeWorkspaceTarget,
-} from "@diffdash/domain/code-workspace"
-import type { DiffFileStatus } from "@diffdash/domain/diff"
-import type { LanguageRange } from "@diffdash/domain/language"
-import {
-  type GitProviderDescriptor,
-  GitProviderId,
-  type HostedRepository,
-  type HostedReviewSummary,
-  type HostedRepositoryLocator,
-  RepositorySource,
-} from "@diffdash/domain/git-provider"
-import { workingTreeReviewTarget } from "@diffdash/domain/local-review"
-import { type ProjectWorkspaceRibbon } from "@diffdash/domain/project-workspace"
-import type { ReviewSnapshotFileInventory } from "@diffdash/domain/review-context"
-import { RepositoryRelativePath } from "@diffdash/domain/repository-path"
-import {
-  RendererLayoutSettings,
-  ReviewContextPaneWidth,
-  ReviewPaneSettings,
-  ReviewThreadDetailPaneWidth,
-} from "@diffdash/domain/renderer-layout-settings"
-import {
-  RepositoryCheckoutPath,
-  RepositoryCheckout,
-  type Repo,
-  type RepositorySearchScope,
-} from "@diffdash/domain/repository"
+  ProjectWorkspaceActivityResolution,
+  ProjectWorkspaceActivitySelection,
+  type ProjectWorkspaceActivityId,
+  type ProjectWorkspaceSurface,
+  resolveProjectWorkspaceActivity,
+  selectProjectWorkspaceActivity,
+} from "@diffdash/domain/project-workspace"
+import { RepositoryCheckoutPath, type Repo } from "@diffdash/domain/repository"
 import { WebUrl } from "@diffdash/domain/web-url"
-import { EMPTY_AGENT_PROVIDER_CATALOG } from "@diffdash/protocol/agent-providers"
 import type { AppUpdateState } from "@diffdash/protocol/app-update"
 import type { CliNavigationCommand } from "@diffdash/protocol/cli-navigation"
 import { EMPTY_APP_PREREQUISITES } from "@diffdash/protocol/prerequisites"
-import { useAtomRefresh, useAtomSet, useAtomValue } from "@effect/atom-react"
-import { Equal, HashMap, Match, Option } from "effect"
+import { useAtomRefresh, useAtomValue } from "@effect/atom-react"
+import { HashSet, Match, Option } from "effect"
 import { AsyncResult } from "effect/unstable/reactivity"
-import { useDeferredValue, useEffect, useEffectEvent, useRef, useState } from "react"
-import { HomeScreen, hostedRepositoryLabel } from "@/home/home-screen"
+import {
+  createElement,
+  type ReactNode,
+  useEffect,
+  useEffectEvent,
+  useLayoutEffect,
+  useRef,
+  useState,
+} from "react"
+import { useTrustedExtensionRegistry } from "@/extensions/extension-registry-context"
+import {
+  type PendingProjectRemoteSelection,
+  type ProjectOpeningResult,
+  type ProjectOpeningRuntime,
+  useProjectOpeningRuntime,
+} from "@/extensions/project-opening-runtime"
+import { RegisteredProjectSurface } from "@/extensions/project-surface-host"
+import { ProjectSurfaceRuntimeProvider } from "@/extensions/project-surface-runtime"
+import { ProjectRepositoryCapabilityProvider } from "@/extensions/project-repository-capability"
+import { useProjectNavigationRuntime } from "@/extensions/project-navigation-runtime"
+import { RegisteredProjectNavigationProviders } from "@/extensions/project-navigation-runtime"
+import type {
+  GlobalNavigationEntry,
+  OwnedExtensionContribution,
+  GlobalNavigationContribution,
+  GlobalNavigationHostControls,
+  ProjectActivityContribution,
+  ProjectNavigationContribution,
+  ProjectNavigationEntry,
+  ProjectNavigationResult,
+} from "@/extensions/extension-registry"
+import { makeRequiredGlobalNavigationFallback } from "@/extensions/extension-registry"
+import { TrustedProjectProviders } from "@/extensions/trusted-project-providers"
+import { TrustedTitlebarActions } from "@/extensions/trusted-titlebar-actions"
 import { diagnosticsAtom } from "@/onboarding/atoms"
 import { OnboardingScreen } from "@/onboarding/onboarding-screen"
 import {
   useDesktopRuntime,
-  useProjectWorkspace,
   useRendererPreferences,
   useRendererStream,
   useRepositories,
   runRendererPromise,
 } from "@/platform/renderer-runtime"
-import {
-  providersAtom,
-  remoteRepositorySearchAtom,
-  remoteSearchAtomKey,
-  repositoriesAtom,
-  repositorySearchAtom,
-  searchScopesAtom,
-} from "@/repositories/atoms"
+import { repositoriesAtom } from "@/repositories/atoms"
 import { useRepositoryMutations } from "@/repositories/use-repository-mutations"
-import { CodeScreen } from "@/project-workspace/code-screen"
 import { ProjectRemoteChooser } from "@/project-workspace/project-remote-chooser"
-import { ReviewsPane } from "@/project-workspace/reviews-pane"
-import { ProjectReviewsOverview } from "@/project-workspace/project-reviews-overview"
-import {
-  projectHostedReviewsLifecycle,
-  projectLocalReviewsLifecycle,
-} from "@/project-workspace/reviews-lifecycle"
-import {
-  hostedReviewManifestAtom,
-  localReviewManifestAtom,
-  repositoryComparisonManifestAtom,
-  pullRequestsAtom,
-  refreshPullRequestsAtom,
-  repoKey,
-  serializeLocalReviewAtomKey,
-} from "@/review/atoms"
-import type { RepositoryLinkState } from "@/review/review-detail-view"
-import { ReviewScreen } from "@/review/review-screen"
-import type { SelectedReviewTarget } from "@/review/review-subject"
-import { reviewSelectionSourceKeys } from "@/review/review-selection"
-import { useReviewSelection } from "@/review/use-review-selection"
-import { useReviewSourceOperations } from "@/review/use-review-source-operations"
-import { agentRouteAvailable } from "@/settings/agent-selection"
 import {
   getSystemColorScheme,
   type ResolvedTheme,
@@ -94,151 +72,281 @@ import {
 } from "@/settings/theme"
 import { useSettingsMutation } from "@/settings/use-settings-mutation"
 import { useCaptureAnalytics } from "@/shared/analytics"
-import { CommentSubmissionProvider } from "@/comments/comment-submission"
 import { formatError } from "@/shared/errors"
 import { Button } from "@/shared/ui/button"
 import { EmptyState } from "@/shared/ui/empty-state"
 import { FloatingPaneWorkspace } from "@/shared/ui/floating-pane"
 import { UpdateBanner } from "@/shared/ui/update-banner"
-import { agentProviderCatalogAtom } from "@/walkthrough/atoms"
 import { CommandPaletteDialog, type CommandPaletteItem } from "./command-palette"
-import { AIConnectionMenu } from "./ai-connection-menu"
 import { KeyboardShortcutReference } from "./keyboard-shortcut-reference"
 import { useKeyboardShortcut } from "./keyboard-shortcuts"
 import { WorkbenchContextActionsProvider } from "./workbench-context-actions"
 import { WorkbenchTitlebar } from "./workbench-titlebar"
-import type { LanguageNavigationDestination } from "@/source-surface/language-navigation-capability"
 import {
   canNavigateHistoryBack,
   canNavigateHistoryForward,
   currentNavigationLocation,
   makeNavigationHistory,
-  navigateHistoryBack,
-  navigateHistoryForward,
+  navigateHistoryBackToAvailable,
+  navigateHistoryForwardToAvailable,
   pushNavigationLocation,
   removeNavigationLocations,
   replaceNavigationLocation,
+  replaceUnavailableCurrentNavigationLocation,
   type NavigationHistory,
 } from "./app-navigation-history"
 
-import {
-  type PendingProjectRemoteSelection,
-  type ProjectOpenIntent,
-  type ProjectSessionProjection,
-  ProjectSession,
-} from "./project-session"
+type Screen = "global" | "project"
+type AppNavigationLocation = GlobalNavigationEntry | ProjectNavigationEntry
 
-type Screen = "home" | "project"
-type ReviewWorkspaceRibbon = Exclude<ProjectWorkspaceRibbon, "code">
-
-type AppNavigationLocation =
-  | { readonly kind: "home" }
-  | {
-      readonly kind: "projectReview"
-      readonly activeRibbon: ReviewWorkspaceRibbon
-      readonly repo: Repo
-      readonly selectedReview: SelectedReviewTarget | null
-    }
-  | {
-      readonly kind: "projectCode"
-      readonly fileStatuses: ReadonlyMap<RepositoryRelativePath, DiffFileStatus>
-      readonly lineChanges: HashMap.HashMap<RepositoryRelativePath, readonly CodeLineChangeRange[]>
-      readonly path: Option.Option<RepositoryRelativePath>
-      readonly repo: Repo
-      readonly revealRange: Option.Option<LanguageRange>
-      readonly selectedReview: SelectedReviewTarget | null
-      readonly target: CodeWorkspaceTarget
-    }
+const matchAppNavigationLocation = <Result,>(
+  location: AppNavigationLocation,
+  cases: {
+    readonly global: (location: GlobalNavigationEntry) => Result
+    readonly project: (location: ProjectNavigationEntry) => Result
+  },
+) =>
+  Match.value(location).pipe(
+    Match.when({ kind: "global" }, cases.global),
+    Match.when({ kind: "project" }, cases.project),
+    Match.exhaustive,
+  )
 
 const MOUSE_BUTTON_BACK = 3
 const MOUSE_BUTTON_FORWARD = 4
-const EMPTY_PROVIDER_DESCRIPTORS: readonly GitProviderDescriptor[] = []
-const EMPTY_REPOSITORY_SEARCH_SCOPES: readonly RepositorySearchScope[] = []
 const EMPTY_REPOS: readonly Repo[] = []
-const EMPTY_HOSTED_REPOSITORIES: readonly HostedRepository[] = []
-const EMPTY_HOSTED_REVIEWS: readonly HostedReviewSummary[] = []
-
 const sameAppNavigationLocation = (
   left: AppNavigationLocation,
   right: AppNavigationLocation,
+  globalContributions: readonly OwnedExtensionContribution<GlobalNavigationContribution>[],
+  contributions: readonly OwnedExtensionContribution<ProjectNavigationContribution>[],
+  activities: readonly {
+    readonly id: ProjectWorkspaceActivityId
+    readonly ownerRegistrationToken: ProjectNavigationEntry["activityRegistrationToken"]
+    readonly supportedSurfaces: readonly ProjectWorkspaceSurface[]
+  }[],
 ): boolean => {
-  if (left.kind !== right.kind) return false
-  if (left.kind === "home" || right.kind === "home") return true
-  if (left.repo.id !== right.repo.id || !Equal.equals(left.selectedReview, right.selectedReview)) {
-    return false
-  }
-  if (left.kind === "projectReview" && right.kind === "projectReview") {
-    return left.activeRibbon === right.activeRibbon
-  }
-  if (left.kind === "projectCode" && right.kind === "projectCode") {
-    return (
-      Equal.equals(left.path, right.path) &&
-      Equal.equals(left.target, right.target) &&
-      Equal.equals(left.revealRange, right.revealRange)
-    )
-  }
-  return false
+  return matchAppNavigationLocation(left, {
+    global: (leftGlobal) =>
+      matchAppNavigationLocation(right, {
+        global: (rightGlobal) => {
+          if (
+            leftGlobal.contributionId !== rightGlobal.contributionId ||
+            leftGlobal.registrationToken !== rightGlobal.registrationToken
+          )
+            return false
+          const contribution = globalContributions.find(
+            ({ id }) => id === leftGlobal.contributionId,
+          )
+          if (contribution?.ownerRegistrationToken !== leftGlobal.registrationToken) return false
+          return contribution.sameState(leftGlobal.state, rightGlobal.state)
+        },
+        project: () => false,
+      }),
+    project: (leftProject) =>
+      matchAppNavigationLocation(right, {
+        global: () => false,
+        project: (rightProject) => {
+          if (
+            leftProject.contributionId !== rightProject.contributionId ||
+            leftProject.registrationToken !== rightProject.registrationToken ||
+            leftProject.repo.id !== rightProject.repo.id ||
+            leftProject.activityId !== rightProject.activityId ||
+            leftProject.activityRegistrationToken !== rightProject.activityRegistrationToken ||
+            leftProject.surface !== rightProject.surface
+          )
+            return false
+          const contribution = contributions.find(({ id }) => id === leftProject.contributionId)
+          const activity = activities.find(({ id }) => id === leftProject.activityId)
+          if (
+            contribution?.ownerRegistrationToken !== leftProject.registrationToken ||
+            contribution.surface !== leftProject.surface ||
+            activity?.ownerRegistrationToken !== leftProject.activityRegistrationToken ||
+            !activity.supportedSurfaces.includes(leftProject.surface)
+          )
+            return false
+          return contribution.sameState(leftProject.state, rightProject.state)
+        },
+      }),
+  })
 }
 
+const isAppNavigationLocationAvailable = (
+  location: AppNavigationLocation,
+  globalContributions: readonly OwnedExtensionContribution<GlobalNavigationContribution>[],
+  contributions: readonly OwnedExtensionContribution<ProjectNavigationContribution>[],
+  activities: readonly {
+    readonly id: ProjectWorkspaceActivityId
+    readonly supportedSurfaces: readonly ProjectWorkspaceSurface[]
+    readonly ownerRegistrationToken: ProjectNavigationEntry["activityRegistrationToken"]
+  }[],
+): boolean => {
+  return matchAppNavigationLocation(location, {
+    global: (globalLocation) => {
+      const contribution = globalContributions.find(
+        ({ id }) => id === globalLocation.contributionId,
+      )
+      return (
+        contribution !== undefined &&
+        contribution.ownerRegistrationToken === globalLocation.registrationToken &&
+        contribution.isValidState(globalLocation.state)
+      )
+    },
+    project: (projectLocation) => {
+      const contribution = contributions.find(({ id }) => id === projectLocation.contributionId)
+      const activity = activities.find(({ id }) => id === projectLocation.activityId)
+      if (
+        contribution === undefined ||
+        contribution.ownerRegistrationToken !== projectLocation.registrationToken ||
+        contribution.surface !== projectLocation.surface ||
+        activity === undefined ||
+        activity.ownerRegistrationToken !== projectLocation.activityRegistrationToken ||
+        !activity.supportedSurfaces.includes(projectLocation.surface)
+      )
+        return false
+      return contribution.isValidState(projectLocation.state)
+    },
+  })
+}
+
+const effectiveAvailableNavigationLocation = (
+  current: AppNavigationLocation,
+  globalContributions: readonly OwnedExtensionContribution<GlobalNavigationContribution>[],
+  navigationContributions: readonly OwnedExtensionContribution<ProjectNavigationContribution>[],
+  activities: readonly OwnedExtensionContribution<ProjectActivityContribution>[],
+): AppNavigationLocation => {
+  if (
+    isAppNavigationLocationAvailable(
+      current,
+      globalContributions,
+      navigationContributions,
+      activities,
+    )
+  ) {
+    return current
+  }
+
+  return matchAppNavigationLocation(current, {
+    global: makeRequiredGlobalNavigationFallback,
+    project: (projectLocation) => {
+      const currentNavigationOwner = navigationContributions.find(
+        (contribution) =>
+          contribution.id === projectLocation.contributionId &&
+          contribution.ownerRegistrationToken === projectLocation.registrationToken &&
+          contribution.surface === projectLocation.surface,
+      )
+      const repairActivities = activities.filter(
+        (activity) =>
+          activity.id !== projectLocation.activityId ||
+          activity.ownerRegistrationToken === projectLocation.activityRegistrationToken,
+      )
+      const resolution = resolveProjectWorkspaceActivity(
+        ProjectWorkspaceActivitySelection.make({
+          activeSurface: projectLocation.surface,
+          activeActivity: projectLocation.activityId,
+        }),
+        repairActivities.map((activity) => ({
+          id: activity.id,
+          ownerRegistrationToken: activity.ownerRegistrationToken,
+          supportedSurfaces: activity.supportedSurfaces,
+          defaultForSurfaces: activity.defaultForSurfaces ?? [],
+        })),
+      )
+      const repairedSelection = ProjectWorkspaceActivityResolution.match(resolution, {
+        available: ({ selection }) => selection,
+        repaired: ({ selection }) => selection,
+        unresolved: () => null,
+      })
+      const repairedActivity =
+        repairedSelection === null
+          ? undefined
+          : activities.find(({ id }) => id === repairedSelection.activeActivity)
+      if (
+        repairedSelection !== null &&
+        repairedSelection.activeSurface === currentNavigationOwner?.surface &&
+        repairedActivity !== undefined
+      ) {
+        return {
+          ...projectLocation,
+          activityId: repairedActivity.id,
+          activityRegistrationToken: repairedActivity.ownerRegistrationToken,
+          state: currentNavigationOwner.createDefaultState(projectLocation.repo),
+        }
+      }
+
+      const fallbackActivity =
+        activities.find((activity) => activity.defaultForSurfaces?.length !== 0) ??
+        activities.find((activity) => activity.supportedSurfaces.length !== 0)
+      const fallbackContribution =
+        fallbackActivity === undefined
+          ? undefined
+          : navigationContributions.find((contribution) =>
+              fallbackActivity.supportedSurfaces.includes(contribution.surface),
+            )
+      if (fallbackActivity === undefined || fallbackContribution === undefined) {
+        return makeRequiredGlobalNavigationFallback()
+      }
+      return {
+        kind: "project",
+        contributionId: fallbackContribution.id,
+        registrationToken: fallbackContribution.ownerRegistrationToken,
+        activityId: fallbackActivity.id,
+        activityRegistrationToken: fallbackActivity.ownerRegistrationToken,
+        surface: fallbackContribution.surface,
+        repo: projectLocation.repo,
+        state: fallbackContribution.createDefaultState(projectLocation.repo),
+      }
+    },
+  })
+}
 /** Application shell coordinating navigation and feature composition. */
 export function AppShell() {
   const captureAnalytics = useCaptureAnalytics()
   const desktop = useDesktopRuntime()
   const preferences = useRendererPreferences()
-  const projectWorkspace = useProjectWorkspace()
+  const projectOpening = useProjectOpeningRuntime()
+  const projectOpeningRef = useRef(projectOpening)
+  projectOpeningRef.current = projectOpening
   const repositories = useRepositories()
-  const [screen, setScreen] = useState<Screen>("home")
+  const {
+    globalNavigation,
+    projectActivities,
+    projectNavigation,
+    projectProviders,
+    projectSurfaces,
+    titlebarActions,
+  } = useTrustedExtensionRegistry()
+  const projectNavigationRuntime = useProjectNavigationRuntime()
+  const projectActivitiesRef = useRef(projectActivities)
+  projectActivitiesRef.current = projectActivities
+  const projectNavigationRef = useRef(projectNavigation)
+  projectNavigationRef.current = projectNavigation
+  const globalNavigationRef = useRef(globalNavigation)
+  globalNavigationRef.current = globalNavigation
+  const fallbackNavigationLocation = makeRequiredGlobalNavigationFallback
+  const [screen, setScreen] = useState<Screen>("global")
   const [selectedRepo, setSelectedRepo] = useState<Repo | null>(null)
-  const [selectedReview, setSelectedReview] = useState<SelectedReviewTarget | null>(null)
-  const [activeRibbon, setActiveRibbon] = useState<ProjectWorkspaceRibbon>("reviews")
-  const [selectedCodePath, setSelectedCodePath] = useState<Option.Option<RepositoryRelativePath>>(
+  const [activeSurface, setActiveSurface] = useState<ProjectWorkspaceSurface | null>(null)
+  const [activeActivity, setActiveActivity] = useState<Option.Option<ProjectWorkspaceActivityId>>(
     Option.none,
   )
-  const [selectedCodeTarget, setSelectedCodeTarget] = useState<CodeWorkspaceTarget | null>(null)
-  const [codeWorkspaceMounted, setCodeWorkspaceMounted] = useState(false)
-  const [codeFileStatuses, setCodeFileStatuses] = useState<
-    ReadonlyMap<RepositoryRelativePath, DiffFileStatus>
-  >(new Map())
-  const [codeLineChanges, setCodeLineChanges] = useState<
-    HashMap.HashMap<RepositoryRelativePath, readonly CodeLineChangeRange[]>
-  >(HashMap.empty())
-  const [codeDefinitionNavigation, setCodeDefinitionNavigation] = useState<
-    Option.Option<{
-      readonly id: number
-      readonly path: RepositoryRelativePath
-      readonly range: LanguageRange
-    }>
-  >(Option.none())
-  const codeDefinitionNavigationSequence = useRef(0)
-  const initialNavigationHistory = makeNavigationHistory<AppNavigationLocation>({ kind: "home" })
+  const initialNavigationHistory = makeNavigationHistory<AppNavigationLocation>(
+    fallbackNavigationLocation(),
+  )
   const navigationHistoryRef =
     useRef<NavigationHistory<AppNavigationLocation>>(initialNavigationHistory)
   const [navigationHistory, setNavigationHistory] = useState(initialNavigationHistory)
-  const [workspaceNotice, setWorkspaceNotice] = useState<string | null>(null)
+  const [workspaceNotice, setWorkspaceNotice] = useState<Option.Option<string>>(Option.none)
+  const [workspaceRestoring, setWorkspaceRestoring] = useState(false)
+  const [workspaceRepairPersistenceRequest, setWorkspaceRepairPersistenceRequest] = useState(0)
   const [pendingRemoteSelection, setPendingRemoteSelection] =
     useState<PendingProjectRemoteSelection | null>(null)
-  const [reviewSidebarExpanded, setReviewSidebarExpanded] = useState(true)
-  const [reviewQuickNavigationRequest, setReviewQuickNavigationRequest] = useState(0)
+  const projectOpenRequestRef = useRef(0)
+  const [sidebarExpanded, setSidebarExpanded] = useState(true)
+  const [projectQuickNavigationRequest, setProjectQuickNavigationRequest] = useState(0)
+  const [visitedSurfaces, setVisitedSurfaces] = useState(HashSet.empty<string>())
   const [contextActionsHost, setContextActionsHost] = useState<HTMLDivElement | null>(null)
-  const [projectSession] = useState(
-    () =>
-      new ProjectSession({
-        loadWorkspace: (projectId) => runRendererPromise(preferences.loadWorkspace(projectId)),
-        openProject: (localPath, selectedRepository) =>
-          runRendererPromise(repositories.openProject(localPath, selectedRepository)),
-        resolveLocalReview: (localPath, branchName) =>
-          runRendererPromise(projectWorkspace.resolveLocalReview(localPath, branchName)),
-        resolveLastCommit: (localPath) =>
-          runRendererPromise(projectWorkspace.resolveLastCommit(localPath)),
-        resolveRepositoryComparison: (command) =>
-          runRendererPromise(projectWorkspace.resolveRepositoryComparison(command)),
-        saveWorkspace: (input) => runRendererPromise(preferences.saveWorkspace(input)),
-      }),
-  )
   const handledMouseNavigationButtonRef = useRef<number | null>(null)
-  const [query, setQuery] = useState("")
-  const [selectedSearchScope, setSelectedSearchScope] = useState<string | null>(null)
-  const [selectedProviderId, setSelectedProviderId] = useState<GitProviderId | null>(null)
   const [actionStatus, setActionStatus] = useState("Search a repo or open a bookmark.")
   const [cliNavigationError, setCliNavigationError] = useState<string | null>(null)
   const [setupActionStatus, setSetupActionStatus] = useState<string | null>(null)
@@ -253,329 +361,182 @@ export function AppShell() {
   )
   const [goToPaletteOpen, setGoToPaletteOpen] = useState(false)
   const [shortcutReferenceOpen, setShortcutReferenceOpen] = useState(false)
-  const [aiConnection, setAIConnection] = useState(Option.none<OpenCodeConnectionSelection>())
   const [updateState, setUpdateState] = useState<AppUpdateState | null>(null)
-  const [debouncedRemoteSearchQuery, setDebouncedRemoteSearchQuery] = useState("")
-  const deferredSearchQuery = useDeferredValue(query.trim())
-  const localSearchQuery =
-    selectedSearchScope === null
-      ? deferredSearchQuery
-      : `${selectedSearchScope}/${deferredSearchQuery}`
-
   useRendererStream(desktop.updates.states, setUpdateState, (error) =>
     setActionStatus(formatError(error, "Could not monitor application updates")),
   )
 
-  useEffect(() => {
-    const trimmedQuery = query.trim()
-    if (trimmedQuery.length === 0) {
-      setDebouncedRemoteSearchQuery("")
-      return undefined
-    }
-
-    const timer = window.setTimeout(() => setDebouncedRemoteSearchQuery(trimmedQuery), 300)
-    return () => window.clearTimeout(timer)
-  }, [query])
-
-  const selectedRepoKey =
-    selectedRepo?.hostedLocator === null || selectedRepo?.hostedLocator === undefined
-      ? ""
-      : repoKey(
-          selectedRepo.hostedLocator.providerId,
-          selectedRepo.hostedLocator.namespace,
-          selectedRepo.hostedLocator.name,
-        )
   const repositoriesResult = useAtomValue(repositoriesAtom)
-  const providersResult = useAtomValue(providersAtom)
-  const availableProviders = AsyncResult.getOrElse(
-    providersResult,
-    () => EMPTY_PROVIDER_DESCRIPTORS,
-  )
-  const activeProviderId = selectedProviderId ?? availableProviders[0]?.id ?? null
-  const selectedProvider =
-    availableProviders.find((provider) => provider.id === activeProviderId) ??
-    availableProviders[0] ??
-    null
   const diagnosticsResult = useAtomValue(diagnosticsAtom)
-  const agentProviderCatalogResult = useAtomValue(agentProviderCatalogAtom)
-  const selectedProviderSearchScopesAtom = searchScopesAtom(
-    selectedProvider?.capabilities.searchScopes === true ? (activeProviderId ?? "") : "",
-  )
-  const searchScopesResult = useAtomValue(selectedProviderSearchScopesAtom)
-  const searchScopes = AsyncResult.getOrElse(
-    searchScopesResult,
-    () => EMPTY_REPOSITORY_SEARCH_SCOPES,
-  )
-  const remoteSearchOwners =
-    selectedProvider?.capabilities.repositorySearch !== true
-      ? []
-      : selectedSearchScope === null
-        ? searchScopes.map((scope) => scope.login)
-        : [selectedSearchScope]
-  const remoteSearchKey =
-    activeProviderId === null
-      ? ""
-      : remoteSearchAtomKey(activeProviderId, debouncedRemoteSearchQuery, remoteSearchOwners)
-  const localSearchAtom = repositorySearchAtom(localSearchQuery)
-  const remoteSearchAtom = remoteRepositorySearchAtom(remoteSearchKey)
-  const selectedRepoPullRequestsAtom = pullRequestsAtom(selectedRepoKey)
-  const selectedWorkingTreeKey =
-    activeRibbon !== "reviews" ||
-    selectedRepo?.localPath === null ||
-    selectedRepo?.localPath === undefined
-      ? ""
-      : serializeLocalReviewAtomKey(workingTreeReviewTarget(selectedRepo.localPath))
-  const selectedWorkingTreeAtom = localReviewManifestAtom(selectedWorkingTreeKey)
-
-  const localResultsResult = useAtomValue(localSearchAtom)
-  const remoteResultsResult = useAtomValue(remoteSearchAtom)
-  const pullRequestsResult = useAtomValue(selectedRepoPullRequestsAtom)
-  const workingTreeResult = useAtomValue(selectedWorkingTreeAtom)
-  const refreshPullRequests = useAtomSet(refreshPullRequestsAtom)
   const refreshRepositories = useAtomRefresh(repositoriesAtom)
-  const refreshProviders = useAtomRefresh(providersAtom)
-  const refreshLocalSearch = useAtomRefresh(localSearchAtom)
-  const refreshRemoteSearch = useAtomRefresh(remoteSearchAtom)
   const refreshDiagnostics = useAtomRefresh(diagnosticsAtom)
-  const refreshAgentProviderCatalog = useAtomRefresh(agentProviderCatalogAtom)
-  const refreshSearchScopes = useAtomRefresh(selectedProviderSearchScopesAtom)
-  const refreshPullRequestsForRepo = (key: string) => {
-    refreshPullRequests(key)
-  }
-  const refreshSelectedPullRequests = useAtomRefresh(selectedRepoPullRequestsAtom)
-  const refreshSelectedWorkingTree = useAtomRefresh(selectedWorkingTreeAtom)
   const repositoryMutations = useRepositoryMutations({
     repositories: refreshRepositories,
-    localSearch: refreshLocalSearch,
-    remoteSearch: refreshRemoteSearch,
-    selectedReviews: refreshSelectedPullRequests,
+    localSearch: () => undefined,
+    remoteSearch: () => undefined,
+    selectedReviews: () => undefined,
   })
 
   const repos = AsyncResult.getOrElse(repositoriesResult, () => EMPTY_REPOS)
-  const projectsStatus = AsyncResult.isFailure(repositoriesResult)
-    ? resultErrorMessage(repositoriesResult, "Could not load projects")
-    : null
-  const providers = availableProviders
-  const hasQuery = query.trim().length > 0
-  const localResults = hasQuery ? AsyncResult.getOrElse(localResultsResult, () => EMPTY_REPOS) : []
-  const remoteResults =
-    hasQuery && query.trim() === debouncedRemoteSearchQuery
-      ? AsyncResult.getOrElse(remoteResultsResult, () => EMPTY_HOSTED_REPOSITORIES)
-      : []
   const diagnostics = AsyncResult.getOrElse(diagnosticsResult, () => EMPTY_APP_PREREQUISITES)
-  const agentProviderCatalog = AsyncResult.getOrElse(
-    agentProviderCatalogResult,
-    () => EMPTY_AGENT_PROVIDER_CATALOG,
-  )
-  const reviewSelection = useReviewSelection(selectedReview, providers)
-  const reviewSourceOperations = useReviewSourceOperations(reviewSelection)
-  const selectedReviewSourceKeys = reviewSelectionSourceKeys(selectedReview)
-  const refreshSelectedHostedReview = useAtomRefresh(
-    hostedReviewManifestAtom(selectedReviewSourceKeys.hosted),
-  )
-  const refreshSelectedLocalReview = useAtomRefresh(
-    localReviewManifestAtom(selectedReviewSourceKeys.local),
-  )
-  const refreshSelectedRepositoryComparison = useAtomRefresh(
-    repositoryComparisonManifestAtom(selectedReviewSourceKeys.comparison),
-  )
   const isLoadingDiagnostics = AsyncResult.isWaiting(diagnosticsResult)
-  const pullRequests = AsyncResult.getOrElse(pullRequestsResult, () => EMPTY_HOSTED_REVIEWS)
-  const reviewRepositoryLinkState: RepositoryLinkState = Option.match(
-    Option.fromNullishOr(selectedReview),
-    {
-      onNone: (): RepositoryLinkState => "not-applicable",
-      onSome: (review) =>
-        Match.value(review).pipe(
-          Match.discriminatorsExhaustive("kind")({
-            localDiff: (): RepositoryLinkState => "not-applicable",
-            repositoryComparison: (): RepositoryLinkState => "not-applicable",
-            hosted: ({ review: hostedReview }): RepositoryLinkState => {
-              const linkedSelectedRepo = Option.fromNullishOr(selectedRepo).pipe(
-                Option.filter((repo) =>
-                  RepositoryCheckout.match(repo.checkout, {
-                    RemoteOnly: () => false,
-                    LinkedCheckout: () => repo.matchesHosted(hostedReview.repository),
-                  }),
-                ),
-              )
-              return Option.match(linkedSelectedRepo, {
-                onSome: () => "linked",
-                onNone: () => {
-                  if (
-                    AsyncResult.isWaiting(repositoriesResult) ||
-                    AsyncResult.isFailure(repositoriesResult)
-                  ) {
-                    return "checking"
-                  }
-                  return repos.some((candidate) =>
-                    RepositoryCheckout.match(candidate.checkout, {
-                      RemoteOnly: () => false,
-                      LinkedCheckout: () => candidate.matchesHosted(hostedReview.repository),
-                    }),
-                  )
-                    ? "linked"
-                    : "unlinked"
-                },
-              })
-            },
-          }),
-        ),
-    },
-  )
-  const knownHostedRepoKeys = new Set(
-    repos.flatMap((repo) =>
-      repo.hostedLocator === null
-        ? []
-        : [
-            repoKey(
-              repo.hostedLocator.providerId,
-              repo.hostedLocator.namespace,
-              repo.hostedLocator.name,
-            ),
-          ],
-    ),
-  )
-  const uniqueRemoteResults = remoteResults.filter(
-    (repo) =>
-      !knownHostedRepoKeys.has(
-        repoKey(repo.locator.providerId, repo.locator.namespace, repo.locator.name),
-      ),
-  )
-  const isSearching =
-    hasQuery &&
-    (query.trim() !== debouncedRemoteSearchQuery ||
-      query.trim() !== deferredSearchQuery ||
-      AsyncResult.isWaiting(searchScopesResult) ||
-      AsyncResult.isWaiting(localResultsResult) ||
-      AsyncResult.isWaiting(remoteResultsResult))
-  const searchError = AsyncResult.isFailure(searchScopesResult)
-    ? resultErrorMessage(searchScopesResult, "Could not load repository owners")
-    : AsyncResult.isFailure(remoteResultsResult)
-      ? resultErrorMessage(
-          remoteResultsResult,
-          `Could not search ${selectedProvider?.displayName ?? "hosted"} repositories`,
+  const applyNavigationLocation = (location: AppNavigationLocation): boolean => {
+    return matchAppNavigationLocation(location, {
+      global: (globalLocation) => {
+        if (
+          !isAppNavigationLocationAvailable(
+            globalLocation,
+            globalNavigationRef.current,
+            projectNavigationRef.current,
+            projectActivitiesRef.current,
+          )
         )
-      : null
-  const applyNavigationLocation = (location: AppNavigationLocation) => {
-    if (location.kind === "home") {
-      setScreen("home")
-      setSelectedRepo(null)
-      setSelectedCodeTarget(null)
-      setCodeWorkspaceMounted(false)
-      setCodeFileStatuses(new Map())
-      setCodeLineChanges(HashMap.empty())
-      setSelectedReview(null)
-      setSelectedCodePath(Option.none())
-      setCodeDefinitionNavigation(Option.none())
-      setActiveRibbon("reviews")
-      setWorkspaceNotice(null)
-      setAIConnection(Option.none())
-      return
-    }
-
-    setAIConnection((current) =>
-      Option.filter(current, (connection) => connection.projectId === location.repo.id),
-    )
-    setScreen("project")
-    setSelectedRepo(location.repo)
-    setSelectedReview(location.selectedReview)
-    if (location.kind === "projectReview") {
-      setActiveRibbon(location.activeRibbon)
-      setCodeDefinitionNavigation(Option.none())
-      if (selectedRepo?.id !== location.repo.id) {
-        setSelectedCodeTarget(ProjectHeadCodeWorkspaceTarget.make({ projectId: location.repo.id }))
-        setSelectedCodePath(Option.none())
-        setCodeFileStatuses(new Map())
-        setCodeLineChanges(HashMap.empty())
-        setCodeWorkspaceMounted(false)
-      }
-      return
-    }
-
-    setActiveRibbon("code")
-    setSelectedCodeTarget(location.target)
-    setSelectedCodePath(location.path)
-    setCodeFileStatuses(location.fileStatuses)
-    setCodeLineChanges(location.lineChanges)
-    setCodeWorkspaceMounted(true)
-    setCodeDefinitionNavigation(
-      Option.flatMap(location.path, (path) =>
-        Option.map(location.revealRange, (range) => {
-          const id = codeDefinitionNavigationSequence.current + 1
-          codeDefinitionNavigationSequence.current = id
-          return { id, path, range }
-        }),
-      ),
-    )
+          return false
+        setScreen("global")
+        setSelectedRepo(null)
+        setActiveSurface(null)
+        setActiveActivity(Option.none())
+        setWorkspaceNotice(Option.none())
+        return true
+      },
+      project: (projectLocation) => {
+        if (
+          !isAppNavigationLocationAvailable(
+            projectLocation,
+            globalNavigationRef.current,
+            projectNavigationRef.current,
+            projectActivitiesRef.current,
+          ) ||
+          !projectNavigationRuntime.restore(projectLocation)
+        )
+          return false
+        const contribution = projectNavigationRef.current.find(
+          ({ id }) => id === projectLocation.contributionId,
+        )
+        if (contribution === undefined) return false
+        setScreen("project")
+        setSelectedRepo(projectLocation.repo)
+        setActiveSurface(projectLocation.surface)
+        setVisitedSurfaces((surfaces) =>
+          HashSet.add(
+            surfaces,
+            `${projectLocation.surface}:${projectLocation.registrationToken.reactKey}`,
+          ),
+        )
+        setActiveActivity(Option.some(projectLocation.activityId))
+        return true
+      },
+    })
   }
 
   const setHistory = (history: NavigationHistory<AppNavigationLocation>) => {
     navigationHistoryRef.current = history
     setNavigationHistory(history)
   }
-  const pushAppNavigationLocation = (location: AppNavigationLocation) => {
-    const next = pushNavigationLocation(
-      navigationHistoryRef.current,
-      location,
-      sameAppNavigationLocation,
+  const pushAppNavigationLocation = (location: AppNavigationLocation): boolean => {
+    if (!applyNavigationLocation(location)) return false
+    const next = pushNavigationLocation(navigationHistoryRef.current, location, (left, right) =>
+      sameAppNavigationLocation(
+        left,
+        right,
+        globalNavigationRef.current,
+        projectNavigationRef.current,
+        projectActivitiesRef.current,
+      ),
     )
     setHistory(next)
-    applyNavigationLocation(currentNavigationLocation(next))
+    return true
   }
-  const replaceAppNavigationLocation = (location: AppNavigationLocation, apply = true) => {
+  const replaceAppNavigationLocation = (location: AppNavigationLocation, apply = true): boolean => {
+    if (apply && !applyNavigationLocation(location)) return false
     const next = replaceNavigationLocation(navigationHistoryRef.current, location)
     setHistory(next)
-    if (apply) applyNavigationLocation(location)
+    return true
   }
+  const reconcileRegisteredProjectActivities = useEffectEvent(() => {
+    const previousHistory = navigationHistoryRef.current
+    const previousCurrent = currentNavigationLocation(previousHistory)
+    const isAvailable = (location: AppNavigationLocation) =>
+      isAppNavigationLocationAvailable(
+        location,
+        globalNavigation,
+        projectNavigation,
+        projectActivities,
+      )
+    if (isAvailable(previousCurrent)) return
+    const replacement = effectiveAvailableNavigationLocation(
+      previousCurrent,
+      globalNavigation,
+      projectNavigation,
+      projectActivities,
+    )
+    const reconciledHistory = replaceUnavailableCurrentNavigationLocation(
+      previousHistory,
+      isAvailable,
+      () => replacement,
+    )
+    setHistory(reconciledHistory)
+    if (screen !== "project" || selectedRepo === null) return
+    const current = currentNavigationLocation(reconciledHistory)
+    applyNavigationLocation(current)
+    matchAppNavigationLocation(current, {
+      global: () => undefined,
+      project: () => {
+        setWorkspaceRepairPersistenceRequest((request) => request + 1)
+        setWorkspaceNotice(
+          Option.some(
+            "The active workspace extension is unavailable. A registered activity was restored instead.",
+          ),
+        )
+      },
+    })
+  })
+
+  useLayoutEffect(() => {
+    reconcileRegisteredProjectActivities()
+  }, [globalNavigation, projectActivities, projectNavigation])
+
   const navigateBack = () => {
-    projectSession.cancelRestore()
+    projectOpenRequestRef.current += 1
+    setPendingRemoteSelection(null)
+    projectOpening?.cancelRestore()
     const current = navigationHistoryRef.current
-    const next = navigateHistoryBack(current)
+    const next = navigateHistoryBackToAvailable(current, (location) =>
+      isAppNavigationLocationAvailable(
+        location,
+        globalNavigation,
+        projectNavigation,
+        projectActivities,
+      ),
+    )
     if (next === current) return
-    setHistory(next)
     const location = currentNavigationLocation(next)
-    applyNavigationLocation(location)
+    if (applyNavigationLocation(location)) setHistory(next)
   }
   const navigateForward = () => {
-    projectSession.cancelRestore()
+    projectOpenRequestRef.current += 1
+    setPendingRemoteSelection(null)
+    projectOpening?.cancelRestore()
     const current = navigationHistoryRef.current
-    const next = navigateHistoryForward(current)
+    const next = navigateHistoryForwardToAvailable(current, (location) =>
+      isAppNavigationLocationAvailable(
+        location,
+        globalNavigation,
+        projectNavigation,
+        projectActivities,
+      ),
+    )
     if (next === current) return
-    setHistory(next)
     const location = currentNavigationLocation(next)
-    applyNavigationLocation(location)
+    if (applyNavigationLocation(location)) setHistory(next)
   }
   const navigateBackFromEffect = useEffectEvent(navigateBack)
   const navigateForwardFromEffect = useEffectEvent(navigateForward)
 
   useEffect(() => {
     refreshRepositories()
-    refreshProviders()
     refreshDiagnostics()
-    refreshAgentProviderCatalog()
-    refreshSearchScopes()
-  }, [
-    refreshDiagnostics,
-    refreshAgentProviderCatalog,
-    refreshRepositories,
-    refreshProviders,
-    refreshSearchScopes,
-  ])
-
-  useEffect(() => {
-    if (
-      providers.length === 0 ||
-      (selectedProviderId !== null &&
-        providers.some((provider) => provider.id === selectedProviderId))
-    )
-      return
-    const firstProvider = providers[0]
-    if (firstProvider !== undefined) {
-      setSelectedProviderId(firstProvider.id)
-      setSelectedSearchScope(null)
-    }
-  }, [providers, selectedProviderId])
+  }, [refreshDiagnostics, refreshRepositories])
 
   useEffect(() => {
     let cancelled = false
@@ -665,324 +626,280 @@ export function AppShell() {
   }, [])
 
   useKeyboardShortcut("shortcuts.open", () => setShortcutReferenceOpen(true))
-  useKeyboardShortcut(
-    "review.toggleSidebar",
-    () => {
-      const activeElement = document.activeElement
-      if (
-        reviewSidebarExpanded &&
-        activeElement !== null &&
-        activeElement.closest("[data-review-sidebar-collapse-region]") !== null
-      ) {
-        document.querySelector<HTMLButtonElement>("[data-workbench-sidebar-toggle]")?.focus()
-      }
-      setReviewSidebarExpanded((expanded) => !expanded)
-    },
-    {
-      enabled: appState?.onboardingCompleted === true && screen === "project",
-    },
-  )
   useKeyboardShortcut("navigation.goAnywhere", () => setGoToPaletteOpen(true), {
     enabled: screen !== "project",
   })
 
   const applyProjectProjection = (
-    projection: ProjectSessionProjection,
+    projection: ProjectNavigationResult,
     mode: "push" | "replace" = "push",
-  ) => {
-    const location: AppNavigationLocation =
-      projection.activeRibbon === "code"
-        ? {
-            kind: "projectCode",
-            repo: projection.repo,
-            selectedReview: projection.selectedReview,
-            target: ProjectHeadCodeWorkspaceTarget.make({ projectId: projection.repo.id }),
-            path: Option.none(),
-            revealRange: Option.none(),
-            fileStatuses: new Map(),
-            lineChanges: HashMap.empty(),
-          }
-        : {
-            kind: "projectReview",
-            repo: projection.repo,
-            selectedReview: projection.selectedReview,
-            activeRibbon: projection.activeRibbon,
-          }
-    if (mode === "replace") replaceAppNavigationLocation(location)
-    else pushAppNavigationLocation(location)
-    setWorkspaceNotice(projection.notice)
-    setReviewSidebarExpanded(true)
-    setActionStatus(`Opened project ${projection.repo.displayIdentity}.`)
-    if (projection.repo.hostedLocator !== null) {
-      refreshPullRequestsForRepo(
-        repoKey(
-          projection.repo.hostedLocator.providerId,
-          projection.repo.hostedLocator.namespace,
-          projection.repo.hostedLocator.name,
-        ),
-      )
+  ): boolean => {
+    const contribution = projectNavigationRef.current.find(
+      (candidate) =>
+        candidate.id === projection.contributionId &&
+        candidate.ownerRegistrationToken === projection.registrationToken &&
+        candidate.surface === projection.activeSurface &&
+        candidate.isValidState(projection.state),
+    )
+    const activity = projectActivitiesRef.current.find(
+      (candidate) =>
+        candidate.id === projection.activeActivity &&
+        candidate.ownerRegistrationToken === projection.activityRegistrationToken &&
+        candidate.supportedSurfaces.includes(projection.activeSurface),
+    )
+    if (contribution === undefined || activity === undefined) return false
+    const location: AppNavigationLocation = {
+      kind: "project",
+      contributionId: contribution.id,
+      registrationToken: contribution.ownerRegistrationToken,
+      activityId: projection.activeActivity,
+      activityRegistrationToken: projection.activityRegistrationToken,
+      surface: projection.activeSurface,
+      repo: projection.repo,
+      state: projection.state,
     }
+    const applied =
+      mode === "replace"
+        ? replaceAppNavigationLocation(location)
+        : pushAppNavigationLocation(location)
+    if (!applied) return false
+    setWorkspaceNotice(projection.notice)
+    setSidebarExpanded(true)
+    setActionStatus(`Opened project ${projection.repo.displayIdentity}.`)
+    return true
   }
 
-  const observeWorkspacePersistence = (persistence: Promise<void>) => {
+  const observeWorkspacePersistence = (persistence: Promise<void | boolean>) => {
     void persistence.catch((error) => {
-      setWorkspaceNotice(formatError(error, "Could not save project workspace"))
+      setWorkspaceNotice(Option.some(formatError(error, "Could not save project workspace")))
     })
   }
+  const persistActiveWorkspace = (
+    repo: Repo,
+    contributionId: ProjectNavigationResult["contributionId"],
+    registrationToken: ProjectNavigationResult["registrationToken"],
+    surface: ProjectWorkspaceSurface,
+    activity: ProjectWorkspaceActivityId,
+    activityRegistrationToken: ProjectNavigationResult["activityRegistrationToken"],
+    state: ProjectNavigationEntry["state"],
+  ) => {
+    const contribution = projectNavigationRef.current.find(
+      (candidate) =>
+        candidate.id === contributionId &&
+        candidate.ownerRegistrationToken === registrationToken &&
+        candidate.surface === surface &&
+        candidate.isValidState(state),
+    )
+    const registeredActivity = projectActivitiesRef.current.find(
+      (candidate) =>
+        candidate.id === activity &&
+        candidate.ownerRegistrationToken === activityRegistrationToken &&
+        candidate.supportedSurfaces.includes(surface),
+    )
+    if (contribution === undefined || registeredActivity === undefined) return
+    if (projectOpening === null) return
+    observeWorkspacePersistence(
+      projectOpening.persistLocation({
+        repo,
+        contributionId: contribution.id,
+        registrationToken,
+        activeSurface: surface,
+        activeActivity: activity,
+        activityRegistrationToken,
+        state,
+        notice: Option.none(),
+      }),
+    )
+  }
+  const persistRepairedWorkspace = useEffectEvent(() => {
+    if (
+      screen !== "project" ||
+      selectedRepo === null ||
+      activeSurface === null ||
+      Option.isNone(activeActivity)
+    )
+      return
+    const location = currentNavigationLocation(navigationHistoryRef.current)
+    matchAppNavigationLocation(location, {
+      global: () => undefined,
+      project: (projectLocation) =>
+        persistActiveWorkspace(
+          selectedRepo,
+          projectLocation.contributionId,
+          projectLocation.registrationToken,
+          activeSurface,
+          activeActivity.value,
+          projectLocation.activityRegistrationToken,
+          projectLocation.state,
+        ),
+    })
+  })
+  useEffect(() => {
+    if (workspaceRepairPersistenceRequest > 0) persistRepairedWorkspace()
+  }, [workspaceRepairPersistenceRequest])
 
   const restoreProject = async (repo: Repo) => {
-    applyProjectProjection(projectSession.initial(repo))
+    const request = projectOpenRequestRef.current + 1
+    projectOpenRequestRef.current = request
+    setWorkspaceRestoring(true)
+    setPendingRemoteSelection(null)
+    const finishRestoration = () => {
+      if (projectOpenRequestRef.current === request) setWorkspaceRestoring(false)
+    }
+    const opening = projectOpeningRef.current
+    if (opening === null) {
+      finishRestoration()
+      setActionStatus("Project opening is unavailable.")
+      applyNavigationLocation(fallbackNavigationLocation())
+      return
+    }
+    const initial = opening.initial(repo)
+    if (Option.isNone(initial)) {
+      finishRestoration()
+      applyNavigationLocation(fallbackNavigationLocation())
+      return
+    }
+    if (!applyProjectProjection(initial.value)) {
+      finishRestoration()
+      return
+    }
     setActionStatus(`Restoring ${repo.displayIdentity}...`)
     try {
-      const restored = await projectSession.restore(repo)
-      const restoredProjection = Match.valueTags(restored, {
-        stale: () => null,
-        restored: (value) => value,
+      const restored = await opening.restore(repo)
+      if (projectOpeningRef.current !== opening || projectOpenRequestRef.current !== request) return
+      Match.valueTags(restored, {
+        stale: () => undefined,
+        unavailable: () => applyNavigationLocation(fallbackNavigationLocation()),
+        restored: (value) => {
+          if (!applyProjectProjection(value.projection, "replace")) return
+          Option.map(value.persistence, (persist) => observeWorkspacePersistence(persist()))
+        },
       })
-      if (restoredProjection === null) return
-      applyProjectProjection(restoredProjection.projection, "replace")
-      if (restoredProjection.persistence !== null)
-        observeWorkspacePersistence(restoredProjection.persistence)
     } catch (error) {
-      applyProjectProjection(
-        projectSession.project(
-          repo,
-          "reviews",
-          null,
-          formatError(error, "Saved workspace state could not be restored"),
-        ),
-        "replace",
+      if (projectOpeningRef.current !== opening || projectOpenRequestRef.current !== request) return
+      const fallback = opening.defaultProject(
+        repo,
+        Option.some(formatError(error, "Saved workspace state could not be restored")),
       )
+      Option.map(fallback, (projection) => applyProjectProjection(projection, "replace"))
+    } finally {
+      finishRestoration()
     }
   }
 
-  const updateProjectRibbon = (ribbon: ProjectWorkspaceRibbon) => {
-    projectSession.cancelRestore()
-    if (selectedRepo === null) return
-    const location: AppNavigationLocation =
-      ribbon === "code"
-        ? {
-            kind: "projectCode",
-            repo: selectedRepo,
-            selectedReview,
-            target: ProjectHeadCodeWorkspaceTarget.make({ projectId: selectedRepo.id }),
-            path: Option.none(),
-            revealRange: Option.none(),
-            fileStatuses: new Map(),
-            lineChanges: HashMap.empty(),
-          }
-        : {
-            kind: "projectReview",
-            repo: selectedRepo,
-            selectedReview,
-            activeRibbon: ribbon,
-          }
-    pushAppNavigationLocation(location)
-    if (selectedRepo !== null) {
-      observeWorkspacePersistence(
-        projectSession.persist(projectSession.project(selectedRepo, ribbon, selectedReview)),
-      )
-    }
-  }
-
-  const openCodeFile = (
-    path: RepositoryRelativePath,
-    target?: CodeWorkspaceTarget,
-    files: readonly ReviewSnapshotFileInventory[] = [],
-    lineChanges: HashMap.HashMap<
-      RepositoryRelativePath,
-      readonly CodeLineChangeRange[]
-    > = HashMap.empty(),
-  ) => {
-    if (selectedRepo === null) return
-    const location: AppNavigationLocation = {
-      kind: "projectCode",
-      repo: selectedRepo,
-      selectedReview,
-      target: target ?? ProjectHeadCodeWorkspaceTarget.make({ projectId: selectedRepo.id }),
-      path: Option.some(path),
-      revealRange: Option.none(),
-      fileStatuses: new Map(
-        files
-          .filter((file) => file.status !== "deleted")
-          .map((file) => [file.path, file.status] as const),
-      ),
-      lineChanges,
-    }
-    pushAppNavigationLocation(location)
-    setReviewSidebarExpanded(true)
-    observeWorkspacePersistence(
-      projectSession.persist(projectSession.project(selectedRepo, "code", selectedReview)),
+  const updateProjectActivity = (activityId: ProjectWorkspaceActivityId) => {
+    projectOpenRequestRef.current += 1
+    setWorkspaceRestoring(false)
+    setPendingRemoteSelection(null)
+    const activity = projectActivities.find((candidate) => candidate.id === activityId)
+    if (activity === undefined) return
+    projectOpening?.cancelRestore()
+    if (selectedRepo === null || activeSurface === null) return
+    const selection = selectProjectWorkspaceActivity(
+      ProjectWorkspaceActivitySelection.make({
+        activeSurface,
+        activeActivity: Option.getOrElse(activeActivity, () => activityId),
+      }),
+      activityId,
+      activity.surfacePolicy,
     )
-  }
-
-  const navigateToCodePath = (path: RepositoryRelativePath | null) => {
-    const current = currentNavigationLocation(navigationHistoryRef.current)
-    if (current.kind !== "projectCode") return
-    pushAppNavigationLocation({
-      ...current,
-      path: Option.fromNullishOr(path),
-      revealRange: Option.none(),
-    })
-  }
-
-  const navigateToDefinition = (destination: LanguageNavigationDestination) => {
-    const current = currentNavigationLocation(navigationHistoryRef.current)
-    if (current.kind !== "projectCode" || Option.isNone(current.path)) return
-    replaceAppNavigationLocation(
-      {
-        ...current,
-        revealRange: Option.some(destination.origin.range),
-      },
-      false,
+    const currentLocation = currentNavigationLocation(navigationHistoryRef.current)
+    const navigationRegistration = projectNavigation.find(
+      (contribution) => contribution.surface === selection.activeSurface,
     )
-    pushAppNavigationLocation({
-      ...current,
-      path: Option.some(destination.location.target.path),
-      revealRange: Option.some(destination.location.targetSelectionRange),
+    const activityRegistration = projectActivities.find(
+      (candidate) => candidate.id === selection.activeActivity,
+    )
+    if (navigationRegistration === undefined || activityRegistration === undefined) return
+    const currentProjectLocation = matchAppNavigationLocation(currentLocation, {
+      global: () => undefined,
+      project: (projectLocation) =>
+        projectLocation.contributionId === navigationRegistration.id &&
+        projectLocation.repo.id === selectedRepo.id
+          ? projectLocation
+          : undefined,
     })
-  }
-
-  const selectProjectReview = (selection: SelectedReviewTarget) => {
-    projectSession.cancelRestore()
-    Match.valueTags(reviewSelection, {
-      none: () => undefined,
-      loading: () => undefined,
-      ready: () => undefined,
-      failure: (failure) => {
-        const selectedSourceKeys = reviewSelectionSourceKeys(selection)
-        Match.value(selection).pipe(
-          Match.discriminatorsExhaustive("kind")({
-            hosted: () => {
-              if (selectedSourceKeys.hosted === failure.sourceKey) refreshSelectedHostedReview()
-            },
-            localDiff: () => {
-              if (selectedSourceKeys.local === failure.sourceKey) refreshSelectedLocalReview()
-            },
-            repositoryComparison: () => {
-              if (selectedSourceKeys.comparison === failure.sourceKey) {
-                refreshSelectedRepositoryComparison()
-              }
-            },
+    let location: AppNavigationLocation
+    if (currentProjectLocation !== undefined) {
+      location = {
+        ...currentProjectLocation,
+        activityId: selection.activeActivity,
+        activityRegistrationToken: activityRegistration.ownerRegistrationToken,
+      }
+    } else {
+      const previousOwnerLocation = navigationHistoryRef.current.entries.reduceRight<
+        ProjectNavigationEntry | undefined
+      >(
+        (found, entry) =>
+          found ??
+          matchAppNavigationLocation(entry, {
+            global: () => undefined,
+            project: (projectEntry) =>
+              projectEntry.contributionId === navigationRegistration.id &&
+              projectEntry.registrationToken === navigationRegistration.ownerRegistrationToken &&
+              projectEntry.repo.id === selectedRepo.id
+                ? projectEntry
+                : undefined,
           }),
-        )
-      },
-    })
-    if (selectedRepo !== null) {
-      pushAppNavigationLocation({
-        kind: "projectReview",
+        undefined,
+      )
+      location = {
+        kind: "project",
+        contributionId: navigationRegistration.id,
+        registrationToken: navigationRegistration.ownerRegistrationToken,
+        activityId: selection.activeActivity,
+        activityRegistrationToken: activityRegistration.ownerRegistrationToken,
+        surface: selection.activeSurface,
         repo: selectedRepo,
-        selectedReview: selection,
-        activeRibbon: "files",
-      })
+        state:
+          previousOwnerLocation !== undefined
+            ? previousOwnerLocation.state
+            : navigationRegistration.createDefaultState(selectedRepo),
+      }
     }
-    setReviewSidebarExpanded(true)
-    setWorkspaceNotice(null)
+    pushAppNavigationLocation(location)
     if (selectedRepo !== null) {
-      observeWorkspacePersistence(
-        projectSession.persist(projectSession.project(selectedRepo, "files", selection)),
+      persistActiveWorkspace(
+        selectedRepo,
+        navigationRegistration.id,
+        navigationRegistration.ownerRegistrationToken,
+        selection.activeSurface,
+        selection.activeActivity,
+        activityRegistration.ownerRegistrationToken,
+        location.state,
       )
     }
-    captureAnalytics({
-      event: "review_opened",
-      reviewType:
-        selection.kind === "hosted"
-          ? "pull_request"
-          : selection.kind === "localDiff"
-            ? "local_diff"
-            : "repository_comparison",
-    })
   }
 
-  const openProjectPath = async (
-    localPath: string,
-    intent: ProjectOpenIntent,
-    selectedRepository?: HostedRepositoryLocator,
+  const applyProjectOpen = async (
+    opening: ProjectOpeningRuntime,
+    request: Promise<ProjectOpeningResult>,
+    fallback = "Could not open project",
   ) => {
+    const generation = projectOpenRequestRef.current + 1
+    projectOpenRequestRef.current = generation
+    setPendingRemoteSelection(null)
     setActionStatus("Opening project...")
     try {
-      const result = await projectSession.open(localPath, intent, selectedRepository)
-      const pendingRemoteSelection = Match.valueTags(result, {
-        remoteSelectionRequired: (value) => value.pending,
-        opened: () => null,
-      })
-      if (pendingRemoteSelection !== null) {
-        setPendingRemoteSelection(pendingRemoteSelection)
+      const result = await request
+      if (projectOpeningRef.current !== opening || projectOpenRequestRef.current !== generation)
         return
-      }
-      const opened = Match.valueTags(result, {
-        remoteSelectionRequired: () => null,
-        opened: (value) => value,
+      Match.valueTags(result, {
+        remoteSelectionRequired: ({ pending }) => setPendingRemoteSelection(pending),
+        unavailable: () => applyNavigationLocation(fallbackNavigationLocation()),
+        opened: (opened) => {
+          setPendingRemoteSelection(null)
+          refreshRepositories()
+          if (applyProjectProjection(opened.projection))
+            observeWorkspacePersistence(opened.persistence())
+        },
       })
-      if (opened === null) return
-      setPendingRemoteSelection(null)
-      refreshRepositories()
-      applyProjectProjection(opened.projection)
-      observeWorkspacePersistence(opened.persistence)
-      if (opened.reviewType !== null) {
-        captureAnalytics({ event: "review_opened", reviewType: opened.reviewType })
-      }
     } catch (error) {
-      const fallback =
-        intent.kind === "branchDiff"
-          ? "Could not resolve comparison branch"
-          : intent.kind === "pullRequest"
-            ? "Could not open repository pull requests"
-            : "Could not open project"
+      if (projectOpeningRef.current !== opening || projectOpenRequestRef.current !== generation)
+        return
       const message = formatError(error, fallback)
       setActionStatus(message)
       setCliNavigationError(message)
-    }
-  }
-
-  const chooseProjectFolder = async () => {
-    setCliNavigationError(null)
-    const localPath = await runRendererPromise(repositories.selectLocalFolder())
-    if (Option.isSome(localPath)) await openProjectPath(localPath.value, { kind: "reviews" })
-  }
-
-  const pinRemote = async (repo: HostedRepository) => {
-    const label = hostedRepositoryLabel(repo)
-    try {
-      await repositoryMutations.favorite(repo)
-      setActionStatus(`Pinned ${label}.`)
-      captureAnalytics({ event: "repository_bookmarked" })
-    } catch (error) {
-      setActionStatus(formatError(error, "Could not pin project"))
-    }
-  }
-
-  const openRemoteRepository = async (repo: HostedRepository) => {
-    try {
-      const saved = await repositoryMutations.rememberRemote(repo)
-      await restoreProject(saved)
-    } catch (error) {
-      setActionStatus(formatError(error, "Could not open hosted project"))
-    }
-  }
-
-  const setRepositoryFavorite = async (repo: Repo, isFavorite: boolean) => {
-    try {
-      await repositoryMutations.setFavorite(repo, isFavorite)
-      setActionStatus(`${isFavorite ? "Pinned" : "Unpinned"} ${repo.displayIdentity}.`)
-    } catch (error) {
-      setActionStatus(formatError(error, "Could not update project pin"))
-    }
-  }
-
-  const forgetRepository = async (repo: Repo) => {
-    try {
-      await repositoryMutations.forget(repo.id)
-      const shouldRemove = (location: AppNavigationLocation) =>
-        location.kind !== "home" && location.repo.id === repo.id
-      const nextHistory = navigationHistoryRef.current.entries.every(shouldRemove)
-        ? makeNavigationHistory<AppNavigationLocation>({ kind: "home" })
-        : removeNavigationLocations(navigationHistoryRef.current, shouldRemove)
-      setHistory(nextHistory)
-      applyNavigationLocation(currentNavigationLocation(nextHistory))
-      setActionStatus(`Forgot ${repo.displayIdentity} from Home. Review artifacts were kept.`)
-    } catch (error) {
-      setActionStatus(formatError(error, "Could not forget project"))
     }
   }
 
@@ -1006,16 +923,22 @@ export function AppShell() {
   }
 
   const installRepositoryLink = async (localPath: string) => {
-    projectSession.cancelRestore()
+    projectOpenRequestRef.current += 1
+    setPendingRemoteSelection(null)
+    projectOpening?.cancelRestore()
     setCliNavigationError(null)
     setActionStatus("Linking local repository...")
     try {
       const linked = await repositoryMutations.install(localPath)
       setActionStatus(`Linked ${linked.displayIdentity} to ${linked.localPath ?? localPath}.`)
       captureAnalytics({ event: "repository_linked" })
-      const projection = projectSession.project(linked, "reviews", null)
-      applyProjectProjection(projection)
-      observeWorkspacePersistence(projectSession.persist(projection))
+      const opening = projectOpeningRef.current
+      if (opening === null) return
+      const projection = opening.defaultProject(linked, Option.none())
+      if (Option.isNone(projection)) return
+      if (applyProjectProjection(projection.value)) {
+        observeWorkspacePersistence(opening.persist(projection.value))
+      }
     } catch (error) {
       const message = formatError(error, "Could not link local repository")
       setActionStatus(message)
@@ -1023,63 +946,43 @@ export function AppShell() {
     }
   }
   const handleCliNavigationCommand = async (command: CliNavigationCommand) => {
-    await Match.valueTags(command, {
-      error: (error) => {
+    const hostHandled = await Match.value(command).pipe(
+      Match.when({ _tag: "error" }, (error) => {
+        projectOpenRequestRef.current += 1
+        setPendingRemoteSelection(null)
         setActionStatus(error.message)
         setCliNavigationError(error.message)
-      },
-      openProject: async (openProject) => {
-        setCliNavigationError(null)
-        await openProjectPath(openProject.localPath, { kind: "reviews" })
-      },
-      openWorkingTree: async (openWorkingTree) => {
-        setCliNavigationError(null)
-        await openProjectPath(openWorkingTree.localPath, { kind: "workingTree" })
-      },
-      linkRepository: async (linkRepository) => {
+        return true
+      }),
+      Match.when({ _tag: "linkRepository" }, async (linkRepository) => {
         setCliNavigationError(null)
         await installRepositoryLink(linkRepository.localPath)
-      },
-      repairRepositoryIdentities: async () => {
+        return true
+      }),
+      Match.when({ _tag: "repairRepositoryIdentities" }, async () => {
         setCliNavigationError(null)
         await repairRepositoryIdentities()
-      },
-      openBranchDiff: async (openBranchDiff) => {
+        return true
+      }),
+      Match.orElse(() => false),
+    )
+    if (hostHandled) return
+    const opening = projectOpeningRef.current
+    if (opening === null) {
+      const message = "No project-opening extension is available."
+      setActionStatus(message)
+      setCliNavigationError(message)
+      return
+    }
+    await Match.valueTags(opening.claimCommand(command), {
+      handled: async ({ request, failureMessage }) => {
         setCliNavigationError(null)
-        await openProjectPath(openBranchDiff.localPath, {
-          kind: "branchDiff",
-          branchName: openBranchDiff.branchName,
-        })
+        await applyProjectOpen(opening, request, failureMessage)
       },
-      openLastCommit: async (openLastCommit) => {
-        setCliNavigationError(null)
-        await openProjectPath(openLastCommit.localPath, { kind: "lastCommit" })
-      },
-      openRepositoryComparison: async (openRepositoryComparison) => {
-        setCliNavigationError(null)
-        setActionStatus("Resolving repository comparison...")
-        try {
-          const comparison = await projectSession.openRepositoryComparison(openRepositoryComparison)
-          applyProjectProjection(comparison.projection)
-          await comparison.persistence
-          captureAnalytics({
-            event: "review_opened",
-            reviewType: comparison.reviewType ?? "repository_comparison",
-          })
-        } catch (error) {
-          const message = formatError(error, "Could not open repository comparison")
-          setActionStatus(message)
-          setCliNavigationError(message)
-        }
-      },
-      openPullRequest: async (openPullRequest) => {
-        setCliNavigationError(null)
-        await openProjectPath(
-          openPullRequest.localPath,
-          openPullRequest.number === null
-            ? { kind: "reviews" }
-            : { kind: "pullRequest", number: openPullRequest.number },
-        )
+      unhandled: () => {
+        const message = "The active project-opening extension did not handle this command."
+        setActionStatus(message)
+        setCliNavigationError(message)
       },
     })
   }
@@ -1109,32 +1012,26 @@ export function AppShell() {
       }),
     )
     Option.map(linkingProjectId, (projectId) => {
-      const entries = navigationHistoryRef.current.entries.map((location) => {
-        if (location.kind === "home" || location.repo.id !== projectId) return location
-        return RepositorySource.match(linked.source, {
-          local: () => location,
-          hosted: ({ locator }) =>
-            location.repo.matchesHosted(locator) ? { ...location, repo: linked } : location,
-        })
-      })
+      const entries = navigationHistoryRef.current.entries.map((location) =>
+        matchAppNavigationLocation<AppNavigationLocation>(location, {
+          global: (globalLocation) => globalLocation,
+          project: (projectLocation) => {
+            if (projectLocation.repo.id !== projectId) return projectLocation
+            return RepositorySource.match(linked.source, {
+              local: () => projectLocation,
+              hosted: ({ locator }) => {
+                if (!projectLocation.repo.matchesHosted(locator)) return projectLocation
+                return { ...projectLocation, repo: linked }
+              },
+            })
+          },
+        }),
+      )
       setHistory({ ...navigationHistoryRef.current, entries })
     })
     setActionStatus(`Linked ${linked.displayIdentity} to ${linked.localPath ?? localPath}.`)
     captureAnalytics({ event: "repository_linked" })
     return true
-  }
-  const linkSelectedReviewRepository = () => {
-    return Option.match(Option.fromNullishOr(selectedReview), {
-      onNone: () => Promise.resolve(false),
-      onSome: (review) =>
-        Match.value(review).pipe(
-          Match.discriminatorsExhaustive("kind")({
-            hosted: ({ review: hostedReview }) => linkHostedRepository(hostedReview.repository),
-            localDiff: () => Promise.resolve(false),
-            repositoryComparison: () => Promise.resolve(false),
-          }),
-        ),
-    })
   }
   const linkSelectedProjectRepository = () =>
     Option.match(Option.fromNullishOr(selectedRepo), {
@@ -1149,40 +1046,6 @@ export function AppShell() {
   useRendererStream(desktop.navigation.commands, handleCliNavigationCommand, (error) =>
     setCliNavigationError(formatError(error, "Could not receive CLI navigation commands")),
   )
-
-  const updateAISettings = (settings: AISettings) => {
-    void settingsMutation.update(settings).catch(() => undefined)
-  }
-  const updateReviewContextWidth = (width: number) => {
-    void settingsMutation
-      .update((current) =>
-        AISettings.make({
-          ...current,
-          layout: RendererLayoutSettings.make({
-            review: ReviewPaneSettings.make({
-              ...current.layout.review,
-              contextWidth: ReviewContextPaneWidth.make(width),
-            }),
-          }),
-        }),
-      )
-      .catch(() => undefined)
-  }
-  const updateReviewThreadDetailWidth = (width: number) => {
-    void settingsMutation
-      .update((current) =>
-        AISettings.make({
-          ...current,
-          layout: RendererLayoutSettings.make({
-            review: ReviewPaneSettings.make({
-              ...current.layout.review,
-              threadDetailWidth: ReviewThreadDetailPaneWidth.make(width),
-            }),
-          }),
-        }),
-      )
-      .catch(() => undefined)
-  }
 
   const recheckPrerequisites = () => {
     setSetupActionStatus("Rechecking setup...")
@@ -1230,368 +1093,391 @@ export function AppShell() {
     }
   }
 
-  const showProjectShell = appState?.onboardingCompleted === true && screen === "project"
-  const reviewWorkbenchReady =
-    showProjectShell &&
-    Match.valueTags(reviewSelection, {
-      ready: () =>
-        Match.valueTags(reviewSourceOperations, { ready: () => true, unavailable: () => false }),
-      loading: () => false,
-      failure: () => false,
-      none: () => false,
-    })
-  const commandLabel = workbenchCommandLabel(selectedRepo, selectedReview, reviewSelection)
+  const currentHistoryLocation = currentNavigationLocation(navigationHistory)
+  const currentHistoryLocationAvailable = isAppNavigationLocationAvailable(
+    currentHistoryLocation,
+    globalNavigation,
+    projectNavigation,
+    projectActivities,
+  )
+  const effectiveNavigationLocation = effectiveAvailableNavigationLocation(
+    currentHistoryLocation,
+    globalNavigation,
+    projectNavigation,
+    projectActivities,
+  )
+  const effectiveProjectLocation = matchAppNavigationLocation(effectiveNavigationLocation, {
+    global: () => null,
+    project: (location) => location,
+  })
+  const effectiveSelectedRepo = effectiveProjectLocation?.repo ?? null
+  const effectiveActiveSurface = effectiveProjectLocation?.surface ?? null
+  const effectiveActiveActivity = effectiveProjectLocation?.activityId ?? null
+  const showProjectShell =
+    appState?.onboardingCompleted === true && effectiveProjectLocation !== null
+  const commandLabel = effectiveSelectedRepo?.displayIdentity ?? "DiffDash"
   const canNavigateBack =
     appState?.onboardingCompleted === true && canNavigateHistoryBack(navigationHistory)
   const canNavigateForward =
     appState?.onboardingCompleted === true && canNavigateHistoryForward(navigationHistory)
-  const reviewRibbon = Option.liftPredicate(
-    activeRibbon,
-    (ribbon): ribbon is ReviewWorkspaceRibbon => ribbon !== "code",
-  )
   const openQuickNavigation = () => {
-    if (reviewWorkbenchReady) {
-      setReviewQuickNavigationRequest((request) => request + 1)
+    if (showProjectShell) {
+      setProjectQuickNavigationRequest((request) => request + 1)
       return
     }
     setGoToPaletteOpen(true)
   }
+  const globalNavigationHost: GlobalNavigationHostControls = {
+    openProject: restoreProject,
+    openProjectDirectory: async (directory) => {
+      setCliNavigationError(null)
+      const opening = projectOpeningRef.current
+      if (opening === null) {
+        setActionStatus("Project opening is unavailable.")
+        return
+      }
+      await applyProjectOpen(opening, opening.openProject(directory))
+    },
+    removeProjectHistory: (projectId) => {
+      projectOpenRequestRef.current += 1
+      setPendingRemoteSelection(null)
+      const shouldRemove = (location: AppNavigationLocation) =>
+        matchAppNavigationLocation(location, {
+          global: () => false,
+          project: (projectLocation) => projectLocation.repo.id === projectId,
+        })
+      const nextHistory = removeNavigationLocations(
+        navigationHistoryRef.current,
+        shouldRemove,
+        fallbackNavigationLocation(),
+      )
+      setHistory(nextHistory)
+      applyNavigationLocation(currentNavigationLocation(nextHistory))
+    },
+  }
+  const renderActiveGlobalDestination = (): ReactNode => {
+    return matchAppNavigationLocation(effectiveNavigationLocation, {
+      global: (globalLocation) => {
+        const contribution = globalNavigation.find(
+          ({ id, ownerRegistrationToken }) =>
+            id === globalLocation.contributionId &&
+            ownerRegistrationToken === globalLocation.registrationToken,
+        )
+        if (contribution === undefined || !contribution.isValidState(globalLocation.state)) {
+          return null
+        }
+        return createElement(contribution.component, {
+          key: contribution.ownerRegistrationToken.reactKey,
+          state: globalLocation.state,
+          host: globalNavigationHost,
+        })
+      },
+      project: () => null,
+    })
+  }
+  const renderCommandPalette = (ownerItems: readonly CommandPaletteItem[]): ReactNode => (
+    <CommandPaletteDialog
+      items={goToPaletteItems({
+        projects: repos,
+        onOpenRepo: (repo) => void restoreProject(repo),
+      }).concat(ownerItems)}
+      open={goToPaletteOpen}
+      placeholder="Search projects and destinations"
+      title="Go anywhere"
+      onOpenChange={setGoToPaletteOpen}
+    />
+  )
+  const renderGlobalContent = (): ReactNode => renderActiveGlobalDestination()
+  const renderProjectContent = (): ReactNode => {
+    if (
+      effectiveSelectedRepo === null ||
+      effectiveActiveActivity === null ||
+      effectiveActiveSurface === null ||
+      effectiveProjectLocation === null
+    ) {
+      return renderGlobalContent()
+    }
+    return (
+      <ProjectRepositoryCapabilityProvider
+        value={{
+          link: (repository) => {
+            if (repository === undefined) return linkSelectedProjectRepository()
+            return linkHostedRepository(repository)
+          },
+        }}
+      >
+        <ProjectSurfaceRuntimeProvider
+          value={{
+            repo: effectiveSelectedRepo,
+            activeActivity: effectiveActiveActivity,
+            activeSurface: effectiveActiveSurface,
+            activities: projectActivities,
+            colorScheme: THEME_DEFINITIONS[resolvedTheme].colorScheme,
+            sidebarExpanded,
+            workspaceRestoring,
+            workspaceNotice,
+            quickNavigationRequest: projectQuickNavigationRequest,
+            navigate: (contribution, activityId, state, mode = "push") => {
+              projectOpenRequestRef.current += 1
+              setWorkspaceRestoring(false)
+              setPendingRemoteSelection(null)
+              const activity = projectActivitiesRef.current.find(
+                (candidate) => candidate.id === activityId,
+              )
+              if (activity === undefined) return false
+              const location: AppNavigationLocation = {
+                kind: "project",
+                contributionId: contribution.id,
+                registrationToken: contribution.ownerRegistrationToken,
+                activityId,
+                activityRegistrationToken: activity.ownerRegistrationToken,
+                surface: contribution.surface,
+                repo: effectiveSelectedRepo,
+                state,
+              }
+              if (mode === "replace") return replaceAppNavigationLocation(location)
+              return pushAppNavigationLocation(location)
+            },
+            persistLocation: async (contribution, activity, state) => {
+              const currentContribution = projectNavigationRef.current.find(
+                (candidate) =>
+                  candidate.id === contribution.id &&
+                  candidate.surface === contribution.surface &&
+                  candidate.ownerRegistrationToken === contribution.ownerRegistrationToken &&
+                  candidate.isValidState(state),
+              )
+              const currentActivity = projectActivitiesRef.current.find(
+                (candidate) =>
+                  candidate.id === activity.id &&
+                  candidate.ownerRegistrationToken === activity.ownerRegistrationToken &&
+                  candidate.supportedSurfaces.includes(currentContribution?.surface ?? "review"),
+              )
+              if (currentContribution === undefined || currentActivity === undefined) return
+              await projectOpening?.persistLocation({
+                repo: effectiveSelectedRepo,
+                contributionId: currentContribution.id,
+                registrationToken: currentContribution.ownerRegistrationToken,
+                activeSurface: currentContribution.surface,
+                activeActivity: activity.id,
+                activityRegistrationToken: activity.ownerRegistrationToken,
+                state,
+                notice: Option.none(),
+              })
+            },
+            selectActivity: updateProjectActivity,
+            setSidebarExpanded,
+          }}
+        >
+          {currentHistoryLocationAvailable &&
+            projectSurfaces.map((surface) =>
+              surface.surface === effectiveActiveSurface ||
+              (surface.keepMountedAfterVisit === true &&
+                HashSet.has(
+                  visitedSurfaces,
+                  `${surface.surface}:${surface.ownerRegistrationToken.reactKey}`,
+                )) ? (
+                <RegisteredProjectSurface
+                  key={`${effectiveSelectedRepo.id}:${surface.id}:${surface.ownerRegistrationToken.reactKey}`}
+                  contributions={projectSurfaces}
+                  surface={surface.surface}
+                />
+              ) : null,
+            )}
+        </ProjectSurfaceRuntimeProvider>
+      </ProjectRepositoryCapabilityProvider>
+    )
+  }
+  const renderMainContent = (): ReactNode => {
+    if (appStateLoadError !== null) {
+      return (
+        <section className="mx-auto flex min-h-full max-w-3xl flex-col justify-center px-8 py-10">
+          <EmptyState>
+            <div className="space-y-4" role="alert">
+              <div className="space-y-1">
+                <h1 className="text-foreground text-base font-semibold">
+                  DiffDash could not load application state
+                </h1>
+                <p>{appStateLoadError}</p>
+              </div>
+              <Button
+                variant="outline"
+                onClick={() => {
+                  setAppState(null)
+                  setAppStateLoadError(null)
+                  setAppStateLoadAttempt((attempt) => attempt + 1)
+                }}
+              >
+                Retry
+              </Button>
+            </div>
+          </EmptyState>
+        </section>
+      )
+    }
+    if (appState === null) {
+      return (
+        <section className="mx-auto flex min-h-full max-w-3xl flex-col justify-center px-8 py-10">
+          <EmptyState>Loading DiffDash...</EmptyState>
+        </section>
+      )
+    }
+    if (!appState.onboardingCompleted) {
+      return (
+        <OnboardingScreen
+          diagnostics={diagnostics}
+          isLoadingDiagnostics={isLoadingDiagnostics}
+          status={setupActionStatus}
+          onComplete={(telemetryEnabled) => void completeOnboarding(telemetryEnabled)}
+          onInstallDiffDashCli={() => void installDiffDashCli()}
+          onOpenDocs={openSetupDocs}
+          onRecheck={recheckPrerequisites}
+        />
+      )
+    }
+    return effectiveProjectLocation === null ? renderGlobalContent() : renderProjectContent()
+  }
 
   return (
-    <CommentSubmissionProvider connection={aiConnection}>
-      <WorkbenchContextActionsProvider host={contextActionsHost}>
-        <div
-          data-workbench-shell
-          className="bg-shell-bevel text-foreground flex h-full min-h-0 flex-col"
-        >
-          <WorkbenchTitlebar
-            aiConnectionControl={
-              <AIConnectionMenu
-                directory={Option.fromNullishOr(selectedRepo?.localPath)}
-                projectId={Option.fromNullishOr(selectedRepo?.id)}
-                selected={aiConnection}
-                onChange={setAIConnection}
-              />
-            }
-            canNavigateBack={canNavigateBack}
-            canNavigateForward={canNavigateForward}
-            commandLabel={commandLabel}
-            commandNavigationDisabled={appState?.onboardingCompleted !== true}
-            showSidebarToggle={showProjectShell}
-            sidebarExpanded={reviewSidebarExpanded}
-            onContextActionsHostChange={setContextActionsHost}
-            onNavigateBack={navigateBack}
-            onNavigateForward={navigateForward}
-            onOpenKeyboardShortcuts={() => setShortcutReferenceOpen(true)}
-            onOpenQuickNavigation={openQuickNavigation}
-            onToggleSidebar={() => setReviewSidebarExpanded((expanded) => !expanded)}
-          />
-          <span className="sr-only" aria-live="polite">
-            {actionStatus}
-          </span>
-          {updateState === null ? null : (
-            <UpdateBanner
-              state={updateState}
-              onCheck={() =>
-                void runRendererPromise(desktop.updates.check()).catch(() => undefined)
-              }
-              onDownload={() => {
-                captureAnalytics({ event: "update_download_started" })
-                void runRendererPromise(desktop.updates.download()).catch(() => undefined)
-              }}
-              onRestart={() => {
-                captureAnalytics({ event: "update_install_started" })
-                void runRendererPromise(desktop.updates.restartAndInstall()).catch(() => undefined)
-              }}
-            />
-          )}
-          {cliNavigationError === null ? null : (
-            <div
-              role="alert"
-              className="bg-destructive text-destructive-foreground fixed top-[calc(var(--shell-titlebar-height)+0.75rem)] left-1/2 z-50 flex max-w-xl -translate-x-1/2 items-center gap-3 rounded-lg px-4 py-3 text-sm shadow-lg"
-            >
-              <span className="min-w-0 flex-1">{cliNavigationError}</span>
-              <Button size="sm" variant="secondary" onClick={() => setCliNavigationError(null)}>
-                Dismiss
-              </Button>
-            </div>
-          )}
-          {showProjectShell && reviewWorkbenchReady && workspaceNotice !== null ? (
-            <output className="bg-popover text-popover-foreground fixed top-[calc(var(--shell-titlebar-height)+0.75rem)] right-4 z-40 flex max-w-md items-center gap-3 rounded-lg border px-4 py-3 text-xs shadow-lg">
-              <span className="min-w-0 flex-1">{workspaceNotice}</span>
-              <Button size="xs" variant="ghost" onClick={() => setWorkspaceNotice(null)}>
-                Dismiss
-              </Button>
-            </output>
-          ) : null}
-          <FloatingPaneWorkspace
-            data-workbench-viewport
-            className="workbench-viewport min-h-0 min-w-0 flex-1"
+    <RegisteredProjectNavigationProviders>
+      <TrustedProjectProviders
+        directory={effectiveSelectedRepo?.localPath ?? null}
+        projectId={effectiveSelectedRepo?.id ?? null}
+        providers={projectProviders}
+      >
+        <WorkbenchContextActionsProvider host={contextActionsHost}>
+          <div
+            data-workbench-shell
+            className="bg-shell-bevel text-foreground flex h-full min-h-0 flex-col"
           >
-            <div
-              data-workbench-frame
-              data-workbench-frame-mode={showProjectShell ? "project" : "route"}
-              className={`min-h-0 min-w-0 overflow-hidden ${
-                showProjectShell ? "bg-shell-bevel" : "workbench-frame bg-workspace-canvas"
-              }`}
-            >
-              <main
-                data-workbench-content
-                className={`h-full min-h-0 ${showProjectShell ? "overflow-hidden" : "overflow-auto"}`}
-              >
-                {appStateLoadError !== null ? (
-                  <section className="mx-auto flex min-h-full max-w-3xl flex-col justify-center px-8 py-10">
-                    <EmptyState>
-                      <div className="space-y-4" role="alert">
-                        <div className="space-y-1">
-                          <h1 className="text-foreground text-base font-semibold">
-                            DiffDash could not load application state
-                          </h1>
-                          <p>{appStateLoadError}</p>
-                        </div>
-                        <Button
-                          variant="outline"
-                          onClick={() => {
-                            setAppState(null)
-                            setAppStateLoadError(null)
-                            setAppStateLoadAttempt((attempt) => attempt + 1)
-                          }}
-                        >
-                          Retry
-                        </Button>
-                      </div>
-                    </EmptyState>
-                  </section>
-                ) : appState === null ? (
-                  <section className="mx-auto flex min-h-full max-w-3xl flex-col justify-center px-8 py-10">
-                    <EmptyState>Loading DiffDash...</EmptyState>
-                  </section>
-                ) : !appState.onboardingCompleted ? (
-                  <OnboardingScreen
-                    diagnostics={diagnostics}
-                    isLoadingDiagnostics={isLoadingDiagnostics}
-                    status={setupActionStatus}
-                    onComplete={(telemetryEnabled) => void completeOnboarding(telemetryEnabled)}
-                    onInstallDiffDashCli={() => void installDiffDashCli()}
-                    onOpenDocs={openSetupDocs}
-                    onRecheck={recheckPrerequisites}
-                  />
-                ) : screen === "project" && selectedRepo !== null ? (
-                  <>
-                    {codeWorkspaceMounted ? (
-                      <CodeScreen
-                        key={selectedRepo.id}
-                        active={activeRibbon === "code"}
-                        codeThemes={aiSettings.codeThemes}
-                        colorScheme={THEME_DEFINITIONS[resolvedTheme].colorScheme}
-                        contextWidth={aiSettings.layout.review.contextWidth}
-                        fileStatuses={codeFileStatuses}
-                        historyDefinitionNavigation={codeDefinitionNavigation}
-                        lineChanges={codeLineChanges}
-                        repo={selectedRepo}
-                        selectedPath={Option.getOrNull(selectedCodePath)}
-                        sidebarExpanded={reviewSidebarExpanded}
-                        target={
-                          selectedCodeTarget ??
-                          ProjectHeadCodeWorkspaceTarget.make({ projectId: selectedRepo.id })
-                        }
-                        threadDetailWidth={aiSettings.layout.review.threadDetailWidth}
-                        onActiveRibbonChange={updateProjectRibbon}
-                        onHistoryDefinitionNavigationHandled={(id) =>
-                          setCodeDefinitionNavigation((current) =>
-                            Option.filter(current, (navigation) => navigation.id !== id),
-                          )
-                        }
-                        onLinkRepository={linkSelectedProjectRepository}
-                        onNavigateToDefinition={navigateToDefinition}
-                        onSelectedPathChange={navigateToCodePath}
-                        onSidebarExpandedChange={setReviewSidebarExpanded}
-                        onSidebarWidthChange={updateReviewContextWidth}
-                        onThreadDetailWidthChange={updateReviewThreadDetailWidth}
-                      />
-                    ) : null}
-                    {Option.match(reviewRibbon, {
-                      onNone: () => null,
-                      onSome: (activeReviewRibbon) => (
-                        <ReviewScreen
-                          activeRibbon={activeReviewRibbon}
-                          detailEnvironment={{
-                            aiAgentAvailable:
-                              agentRouteAvailable(
-                                agentProviderCatalog,
-                                aiSettings.selections.walkthrough,
-                                "walkthrough",
-                              ) || AsyncResult.isWaiting(agentProviderCatalogResult),
-                            aiSettings,
-                            quickNavigationRequest: reviewQuickNavigationRequest,
-                            repositoryLinkState: reviewRepositoryLinkState,
-                            sidebarExpanded: reviewSidebarExpanded,
-                            sidebarWidth: aiSettings.layout.review.contextWidth,
-                            threadDetailWidth: aiSettings.layout.review.threadDetailWidth,
-                            colorScheme: THEME_DEFINITIONS[resolvedTheme].colorScheme,
-                            onAISettingsChange: updateAISettings,
-                            onLinkRepository: linkSelectedReviewRepository,
-                            onOpenCodeFile: openCodeFile,
-                            onSidebarExpandedChange: setReviewSidebarExpanded,
-                            onSidebarWidthChange: updateReviewContextWidth,
-                            onThreadDetailWidthChange: updateReviewThreadDetailWidth,
-                          }}
-                          reviewsContext={
-                            <ReviewsPane
-                              hosted={projectHostedReviewsLifecycle(
-                                selectedRepo,
-                                pullRequestsResult,
-                              )}
-                              local={projectLocalReviewsLifecycle(selectedRepo, workingTreeResult)}
-                              repo={selectedRepo}
-                              onRefreshHosted={refreshSelectedPullRequests}
-                              onRefreshLocal={refreshSelectedWorkingTree}
-                              onLinkRepository={() => void linkSelectedProjectRepository()}
-                              onSelect={selectProjectReview}
-                            />
-                          }
-                          reviewsMain={
-                            <ProjectReviewsOverview
-                              hosted={projectHostedReviewsLifecycle(
-                                selectedRepo,
-                                pullRequestsResult,
-                              )}
-                              local={projectLocalReviewsLifecycle(selectedRepo, workingTreeResult)}
-                              repo={selectedRepo}
-                              onRefreshHosted={refreshSelectedPullRequests}
-                              onRefreshLocal={refreshSelectedWorkingTree}
-                              onLinkRepository={() => void linkSelectedProjectRepository()}
-                              onSelect={selectProjectReview}
-                            />
-                          }
-                          selection={reviewSelection}
-                          sourceOperations={reviewSourceOperations}
-                          workspaceNotice={workspaceNotice}
-                          onActiveRibbonChange={updateProjectRibbon}
-                          onRetrySelection={() => {
-                            refreshSelectedHostedReview()
-                            refreshSelectedLocalReview()
-                            refreshSelectedRepositoryComparison()
-                          }}
-                        />
-                      ),
-                    })}
-                  </>
-                ) : (
-                  <HomeScreen
-                    activeProviderId={activeProviderId}
-                    diagnostics={diagnostics}
-                    hasQuery={hasQuery}
-                    isLoadingDiagnostics={isLoadingDiagnostics}
-                    isSearching={isSearching}
-                    localResults={localResults}
-                    projects={repos}
-                    projectsStatus={projectsStatus}
-                    providers={providers}
-                    query={query}
-                    remoteResults={uniqueRemoteResults}
-                    searchError={searchError}
-                    searchScopes={searchScopes}
-                    selectedProvider={selectedProvider}
-                    selectedSearchScope={selectedSearchScope}
-                    setupStatus={setupActionStatus}
-                    onForget={(repo) => void forgetRepository(repo)}
-                    onInstallDiffDashCli={() => void installDiffDashCli()}
-                    onOpenDocs={openSetupDocs}
-                    onOpenProject={() => void chooseProjectFolder()}
-                    onOpenRepo={(repo) => void restoreProject(repo)}
-                    onPinRemote={(repo) => void pinRemote(repo)}
-                    onQueryChange={setQuery}
-                    onRecheck={recheckPrerequisites}
-                    onRetryProjects={refreshRepositories}
-                    onSelectProvider={(providerId) => {
-                      setSelectedProviderId(GitProviderId.make(providerId))
-                      setSelectedSearchScope(null)
-                    }}
-                    onSelectRemote={(repo) => void openRemoteRepository(repo)}
-                    onSelectScope={(scope) =>
-                      setSelectedSearchScope((current) => (current === scope ? null : scope))
-                    }
-                    onSetFavorite={(repo, isFavorite) =>
-                      void setRepositoryFavorite(repo, isFavorite)
-                    }
-                  />
-                )}
-              </main>
-            </div>
-            <div aria-hidden="true" data-workbench-global-rail />
-          </FloatingPaneWorkspace>
-          <CommandPaletteDialog
-            items={goToPaletteItems({
-              projects: repos,
-              onOpenPullRequest: (pullRequest) =>
-                selectProjectReview({ kind: "hosted", review: pullRequest.locator }),
-              onOpenRepo: (repo) => void restoreProject(repo),
-              pullRequests,
-            })}
-            open={goToPaletteOpen}
-            placeholder="Search projects and reviews"
-            title="Go anywhere"
-            onOpenChange={setGoToPaletteOpen}
-          />
-          <KeyboardShortcutReference
-            open={shortcutReferenceOpen}
-            onOpenChange={setShortcutReferenceOpen}
-          />
-          {pendingRemoteSelection === null ? null : (
-            <ProjectRemoteChooser
-              selection={pendingRemoteSelection.selection}
-              onCancel={() => setPendingRemoteSelection(null)}
-              onSelect={(candidate) =>
-                void openProjectPath(
-                  pendingRemoteSelection.selection.rootPath,
-                  pendingRemoteSelection.intent,
-                  candidate.repository,
-                )
+            <WorkbenchTitlebar
+              titlebarActions={
+                <TrustedTitlebarActions
+                  actions={titlebarActions}
+                  projectId={effectiveSelectedRepo?.id ?? null}
+                />
               }
+              canNavigateBack={canNavigateBack}
+              canNavigateForward={canNavigateForward}
+              commandLabel={commandLabel}
+              commandNavigationDisabled={appState?.onboardingCompleted !== true}
+              showSidebarToggle={showProjectShell}
+              sidebarExpanded={sidebarExpanded}
+              onContextActionsHostChange={setContextActionsHost}
+              onNavigateBack={navigateBack}
+              onNavigateForward={navigateForward}
+              onOpenKeyboardShortcuts={() => setShortcutReferenceOpen(true)}
+              onOpenQuickNavigation={openQuickNavigation}
+              onToggleSidebar={() => setSidebarExpanded((expanded) => !expanded)}
             />
-          )}
-        </div>
-      </WorkbenchContextActionsProvider>
-    </CommentSubmissionProvider>
+            <span className="sr-only" aria-live="polite">
+              {actionStatus}
+            </span>
+            {updateState === null ? null : (
+              <UpdateBanner
+                state={updateState}
+                onCheck={() =>
+                  void runRendererPromise(desktop.updates.check()).catch(() => undefined)
+                }
+                onDownload={() => {
+                  captureAnalytics({ event: "update_download_started" })
+                  void runRendererPromise(desktop.updates.download()).catch(() => undefined)
+                }}
+                onRestart={() => {
+                  captureAnalytics({ event: "update_install_started" })
+                  void runRendererPromise(desktop.updates.restartAndInstall()).catch(
+                    () => undefined,
+                  )
+                }}
+              />
+            )}
+            {cliNavigationError === null ? null : (
+              <div
+                role="alert"
+                className="bg-destructive text-destructive-foreground fixed top-[calc(var(--shell-titlebar-height)+0.75rem)] left-1/2 z-50 flex max-w-xl -translate-x-1/2 items-center gap-3 rounded-lg px-4 py-3 text-sm shadow-lg"
+              >
+                <span className="min-w-0 flex-1">{cliNavigationError}</span>
+                <Button size="sm" variant="secondary" onClick={() => setCliNavigationError(null)}>
+                  Dismiss
+                </Button>
+              </div>
+            )}
+            {showProjectShell && Option.isSome(workspaceNotice) ? (
+              <output className="bg-popover text-popover-foreground fixed top-[calc(var(--shell-titlebar-height)+0.75rem)] right-4 z-40 flex max-w-md items-center gap-3 rounded-lg border px-4 py-3 text-xs shadow-lg">
+                <span className="min-w-0 flex-1">{workspaceNotice.value}</span>
+                <Button size="xs" variant="ghost" onClick={() => setWorkspaceNotice(Option.none())}>
+                  Dismiss
+                </Button>
+              </output>
+            ) : null}
+            <FloatingPaneWorkspace
+              data-workbench-viewport
+              className="workbench-viewport min-h-0 min-w-0 flex-1"
+            >
+              <div
+                data-workbench-frame
+                data-workbench-frame-mode={showProjectShell ? "project" : "route"}
+                className={`min-h-0 min-w-0 overflow-hidden ${
+                  showProjectShell ? "bg-shell-bevel" : "workbench-frame bg-workspace-canvas"
+                }`}
+              >
+                <main
+                  data-workbench-content
+                  className={`h-full min-h-0 ${showProjectShell ? "overflow-hidden" : "overflow-auto"}`}
+                >
+                  {renderMainContent()}
+                </main>
+              </div>
+              <div aria-hidden="true" data-workbench-global-rail />
+            </FloatingPaneWorkspace>
+            {projectOpening === null ? (
+              renderCommandPalette([])
+            ) : (
+              <projectOpening.CommandPaletteItems
+                repo={effectiveSelectedRepo}
+                apply={(projection) => {
+                  projectOpenRequestRef.current += 1
+                  setPendingRemoteSelection(null)
+                  applyProjectProjection(projection)
+                }}
+                render={renderCommandPalette}
+              />
+            )}
+            <KeyboardShortcutReference
+              open={shortcutReferenceOpen}
+              onOpenChange={setShortcutReferenceOpen}
+            />
+            {pendingRemoteSelection === null ? null : (
+              <ProjectRemoteChooser
+                selection={pendingRemoteSelection.selection}
+                onCancel={() => {
+                  projectOpenRequestRef.current += 1
+                  setPendingRemoteSelection(null)
+                }}
+                onSelect={(candidate) =>
+                  projectOpening === null
+                    ? setPendingRemoteSelection(null)
+                    : void applyProjectOpen(
+                        projectOpening,
+                        pendingRemoteSelection.resume(candidate.repository),
+                      )
+                }
+              />
+            )}
+          </div>
+        </WorkbenchContextActionsProvider>
+      </TrustedProjectProviders>
+    </RegisteredProjectNavigationProviders>
   )
-}
-
-const workbenchCommandLabel = (
-  selectedRepo: Repo | null,
-  selectedReview: SelectedReviewTarget | null,
-  selection: ReturnType<typeof useReviewSelection>,
-) => {
-  const reviewLabel = Match.valueTags(selection, {
-    ready: ({ review }) => review.repositoryLabel,
-    loading: () => null,
-    failure: () => null,
-    none: () => null,
-  })
-  if (reviewLabel !== null) return reviewLabel
-  if (selectedRepo !== null) return selectedRepo.displayIdentity
-  if (selectedReview?.kind === "hosted") {
-    return `${selectedReview.review.repository.namespace}/${selectedReview.review.repository.name}`
-  }
-  if (selectedReview?.kind === "localDiff") return selectedReview.target.rootPath
-  if (selectedReview?.kind === "repositoryComparison") {
-    return `${selectedReview.target.repository.namespace}/${selectedReview.target.repository.name}`
-  }
-  return "DiffDash"
 }
 
 const goToPaletteItems = ({
   projects,
-  onOpenPullRequest,
   onOpenRepo,
-  pullRequests,
 }: {
   readonly projects: readonly Repo[]
-  readonly onOpenPullRequest: (pullRequest: HostedReviewSummary) => void
   readonly onOpenRepo: (repo: Repo) => void
-  readonly pullRequests: readonly HostedReviewSummary[]
-}): readonly CommandPaletteItem[] => [
-  ...projects.map((repo) => ({
+}): readonly CommandPaletteItem[] =>
+  projects.map((repo) => ({
     id: `repo:${repo.id}`,
     keywords: `${repo.displayIdentity} project repository`,
     subtitle: Match.valueTags(repo.source, {
@@ -1601,23 +1487,4 @@ const goToPaletteItems = ({
     }),
     title: repo.displayIdentity,
     onSelect: () => onOpenRepo(repo),
-  })),
-  ...pullRequests.map((pullRequest) => ({
-    id: `hosted-review:${pullRequest.locator.repository.namespace}/${pullRequest.locator.repository.name}#${pullRequest.locator.number}`,
-    keywords: `${pullRequest.locator.repository.namespace} ${pullRequest.locator.repository.name} ${pullRequest.title} hosted review`,
-    subtitle: `Open review · ${pullRequest.locator.repository.namespace}/${pullRequest.locator.repository.name}`,
-    title: `#${pullRequest.locator.number} ${pullRequest.title}`,
-    onSelect: () => onOpenPullRequest(pullRequest),
-  })),
-]
-
-const resultErrorMessage = <Value, Failure>(
-  result: AsyncResult.AsyncResult<Value, Failure>,
-  fallback: string,
-) =>
-  AsyncResult.matchWithError(result, {
-    onInitial: () => fallback,
-    onError: (error) => formatError(error, fallback),
-    onDefect: (defect) => formatError(defect, fallback),
-    onSuccess: () => fallback,
-  })
+  }))

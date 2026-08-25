@@ -8,9 +8,14 @@ import {
   ProjectOpenResult,
   ProjectRemoteCandidate,
   ProjectRemoteSelectionRequired,
-  ProjectWorkspaceRibbon,
+  ProjectWorkspaceActivityId,
+  ProjectWorkspaceNavigationContributionId,
+  ProjectWorkspaceNavigationEnvelope,
+  ProjectWorkspaceNavigationLocation,
   ProjectWorkspaceState,
   ProjectWorkspaceStateInput,
+  resolveProjectWorkspaceActivity,
+  selectProjectWorkspaceActivity,
 } from "./project-workspace"
 import { LinkedCheckout, Repo, RepositoryCheckoutPath } from "./repository"
 import { RepositoryComparisonRef } from "./repository-comparison"
@@ -18,6 +23,10 @@ import { ReviewProjectId, ReviewRevision } from "./review-identity"
 import { HostedReviewTarget } from "./review-thread"
 
 const projectId = ReviewProjectId.make("github:fungsi/diffdash")
+const reviewsActivityId = ProjectWorkspaceActivityId.make("diffdash.fixture.reviews")
+const filesActivityId = ProjectWorkspaceActivityId.make("diffdash.fixture.files")
+const codeActivityId = ProjectWorkspaceActivityId.make("diffdash.fixture.code")
+const commentsActivityId = ProjectWorkspaceActivityId.make("diffdash.fixture.comments")
 
 const targets = [
   HostedReviewTarget.make({
@@ -88,27 +97,174 @@ describe("project workspace", () => {
     ).toThrow(/at least 2/)
   })
 
-  it("accepts exactly the supported ribbon values", () => {
-    const decode = Schema.decodeUnknownSync(ProjectWorkspaceRibbon)
+  it("accepts bounded namespaced project activity IDs", () => {
+    const decode = Schema.decodeUnknownSync(ProjectWorkspaceActivityId)
 
-    expect(
-      ["reviews", "files", "code", "walkthrough", "threads"].map((value) => decode(value)),
-    ).toEqual(["reviews", "files", "code", "walkthrough", "threads"])
-    expect(() => decode("settings")).toThrow(/Expected/)
+    expect(decode("diffdash.fixture.comments")).toBe(commentsActivityId)
+    expect(() => decode("comments")).toThrow(/namespaced project workspace activity ID/)
+    expect(() => decode("DiffDash.core.reviews")).toThrow(
+      /namespaced project workspace activity ID/,
+    )
+    expect(() => decode(`diffdash.extension.${"a".repeat(110)}`)).toThrow(/at most 128/)
   })
 
-  it("models no selection and each complete hosted or local review target", () => {
-    const decodeInput = Schema.decodeUnknownSync(ProjectWorkspaceStateInput)
-    const selections = [null, ...targets]
-
-    for (const selectedReviewTarget of selections) {
-      const input = decodeInput({
-        projectId,
-        activeRibbon: "reviews",
-        selectedReviewTarget,
-      })
-      expect(input.selectedReviewTarget).toEqual(selectedReviewTarget)
+  it("selects or preserves the source surface according to activity policy", () => {
+    const reviewSelection = {
+      activeSurface: "review" as const,
+      activeActivity: reviewsActivityId,
     }
+
+    expect(selectProjectWorkspaceActivity(reviewSelection, codeActivityId, "code")).toEqual({
+      activeSurface: "code",
+      activeActivity: codeActivityId,
+    })
+    expect(selectProjectWorkspaceActivity(reviewSelection, filesActivityId, "review")).toEqual({
+      activeSurface: "review",
+      activeActivity: filesActivityId,
+    })
+    expect(selectProjectWorkspaceActivity(reviewSelection, commentsActivityId, "preserve")).toEqual(
+      {
+        activeSurface: "review",
+        activeActivity: commentsActivityId,
+      },
+    )
+  })
+
+  it("repairs unavailable activities based on the retained source surface", () => {
+    const availableActivities = [
+      {
+        id: reviewsActivityId,
+        supportedSurfaces: ["review" as const],
+        defaultForSurfaces: ["review" as const],
+      },
+      {
+        id: codeActivityId,
+        supportedSurfaces: ["code" as const],
+        defaultForSurfaces: ["code" as const],
+      },
+      {
+        id: commentsActivityId,
+        supportedSurfaces: ["review" as const, "code" as const],
+        defaultForSurfaces: [],
+      },
+    ]
+    const availableSelection = {
+      activeSurface: "review" as const,
+      activeActivity: commentsActivityId,
+    }
+
+    expect(resolveProjectWorkspaceActivity(availableSelection, availableActivities)).toEqual({
+      _tag: "available",
+      selection: availableSelection,
+    })
+    expect(
+      resolveProjectWorkspaceActivity(
+        {
+          activeSurface: "code",
+          activeActivity: ProjectWorkspaceActivityId.make("example.extension.missing"),
+        },
+        availableActivities,
+      ),
+    ).toEqual({
+      _tag: "repaired",
+      selection: {
+        activeSurface: "code",
+        activeActivity: codeActivityId,
+      },
+      unavailableActivity: "example.extension.missing",
+    })
+    expect(
+      resolveProjectWorkspaceActivity(
+        {
+          activeSurface: "review",
+          activeActivity: ProjectWorkspaceActivityId.make("example.extension.missing"),
+        },
+        availableActivities,
+      ),
+    ).toEqual({
+      _tag: "repaired",
+      selection: {
+        activeSurface: "review",
+        activeActivity: reviewsActivityId,
+      },
+      unavailableActivity: "example.extension.missing",
+    })
+    expect(
+      resolveProjectWorkspaceActivity(
+        {
+          activeSurface: "review",
+          activeActivity: ProjectWorkspaceActivityId.make("example.extension.missing"),
+        },
+        [
+          {
+            id: filesActivityId,
+            supportedSurfaces: ["review"],
+            defaultForSurfaces: [],
+          },
+        ],
+      ),
+    ).toEqual({
+      _tag: "repaired",
+      selection: {
+        activeSurface: "review",
+        activeActivity: filesActivityId,
+      },
+      unavailableActivity: "example.extension.missing",
+    })
+    expect(
+      resolveProjectWorkspaceActivity(
+        {
+          activeSurface: "code",
+          activeActivity: ProjectWorkspaceActivityId.make("example.extension.missing"),
+        },
+        [
+          {
+            id: reviewsActivityId,
+            supportedSurfaces: ["review"],
+            defaultForSurfaces: ["review"],
+          },
+        ],
+      ),
+    ).toEqual({
+      _tag: "repaired",
+      selection: {
+        activeSurface: "review",
+        activeActivity: reviewsActivityId,
+      },
+      unavailableActivity: "example.extension.missing",
+    })
+    expect(
+      resolveProjectWorkspaceActivity(
+        {
+          activeSurface: "review",
+          activeActivity: ProjectWorkspaceActivityId.make("example.extension.missing"),
+        },
+        [],
+      ),
+    ).toEqual({
+      _tag: "unresolved",
+      unavailableActivity: "example.extension.missing",
+    })
+  })
+
+  it("round trips bounded opaque navigation without interpreting owner fields", () => {
+    const decodeInput = Schema.decodeUnknownSync(ProjectWorkspaceStateInput)
+    const navigation = {
+      contributionId: "example.extension.navigation",
+      location: { transformed: ["opaque", null, { nested: true }] },
+    }
+    const input = decodeInput({
+      projectId,
+      activeSurface: "review",
+      activeActivity: reviewsActivityId,
+      navigation,
+    })
+    expect(Schema.encodeSync(ProjectWorkspaceStateInput)(input)).toEqual({
+      projectId,
+      activeSurface: "review",
+      activeActivity: reviewsActivityId,
+      navigation,
+    })
 
     const branch = targets[2]
     expect(branch.comparison).toEqual(
@@ -121,11 +277,35 @@ describe("project workspace", () => {
     )
   })
 
+  it("bounds serialized navigation locations by UTF-8 bytes", () => {
+    const decode = Schema.decodeUnknownSync(ProjectWorkspaceNavigationLocation)
+    const serializedEmptyPayloadBytes = JSON.stringify({ payload: "" }).length
+    const asciiBoundary = {
+      payload: "x".repeat(1_048_576 - serializedEmptyPayloadBytes),
+    }
+    const multibyteOversized = {
+      payload: "🚀".repeat(Math.floor((1_048_576 - serializedEmptyPayloadBytes) / 4) + 1),
+    }
+
+    expect(JSON.stringify(asciiBoundary)).toHaveLength(1_048_576)
+    expect(decode(asciiBoundary)).toEqual(asciiBoundary)
+    expect(JSON.stringify(multibyteOversized).length).toBeLessThan(1_048_576)
+    expect(() => decode(multibyteOversized)).toThrow(
+      /project workspace navigation location no larger than one MiB/,
+    )
+  })
+
   it("returns persisted state with its update timestamp", () => {
     const state = ProjectWorkspaceState.make({
       projectId,
-      activeRibbon: "threads",
-      selectedReviewTarget: targets[0],
+      activeSurface: "review",
+      activeActivity: commentsActivityId,
+      navigation: ProjectWorkspaceNavigationEnvelope.make({
+        contributionId: ProjectWorkspaceNavigationContributionId.make(
+          "example.extension.navigation",
+        ),
+        location: { selectedReview: null },
+      }),
       updatedAt: "2026-08-02T00:00:00.000Z",
     })
 

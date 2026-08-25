@@ -22,10 +22,21 @@ import { afterEach, describe, expect, it, vi } from "vitest"
 import { page } from "vitest/browser"
 
 import { installDiffDashApi } from "@/test/app-browser-support"
+import { PROJECT_WORKSPACE_CODE_ACTIVITY_ID } from "@/extensions/code/code-extension"
+import { CODE_PROJECT_ACTIVITY, CODE_PROJECT_SURFACE } from "@/extensions/code/code-extension"
 import { FloatingPaneWorkspace } from "@/shared/ui/floating-pane"
 import { isMacPlatform } from "@/shell/keyboard-shortcut-platform"
 
-import { CodeScreen } from "./code-screen"
+import { CodeScreen } from "@/extensions/code/code-screen"
+import {
+  TrustedExtensionId,
+  TrustedExtensionRegistrationToken,
+} from "@/extensions/extension-registry"
+
+const ownerExtensionId = TrustedExtensionId.make("diffdash.test.code-definitions")
+const ownerRegistrationToken = new TrustedExtensionRegistrationToken()
+const ownedActivity = { ...CODE_PROJECT_ACTIVITY, ownerExtensionId, ownerRegistrationToken }
+const ownedSurface = { ...CODE_PROJECT_SURFACE, ownerExtensionId, ownerRegistrationToken }
 
 const repo = Repo.make({
   createdAt: "2026-08-22T00:00:00Z",
@@ -91,16 +102,19 @@ describe("CodeScreen definitions", () => {
       return (
         <CodeScreen
           active
+          activeActivity={PROJECT_WORKSPACE_CODE_ACTIVITY_ID}
+          activities={[ownedActivity]}
           codeThemes={DEFAULT_CODE_THEME_PREFERENCES}
           colorScheme="light"
           contextWidth={280}
           fileStatuses={HashMap.empty()}
           repo={repo}
+          surfaceContribution={ownedSurface}
           selectedPath={selectedPath}
           sidebarExpanded
           target={ProjectHeadCodeWorkspaceTarget.make({ projectId: repo.id })}
           threadDetailWidth={320}
-          onActiveRibbonChange={() => undefined}
+          onActiveActivityChange={() => undefined}
           onLinkRepository={() => undefined}
           onSelectedPathChange={(path) => {
             selectedPathChanges(path)

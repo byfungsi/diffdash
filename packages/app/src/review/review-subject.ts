@@ -23,22 +23,19 @@ import {
   walkthroughRepositoryComparisonScope,
 } from "@diffdash/domain/walkthrough"
 import { Match, Schema } from "effect"
-import type { ReviewThreadScope } from "@/threads/review-threads"
 
-/** Renderer navigation target for a hosted or local review. */
-export type SelectedReviewTarget =
-  | {
-      readonly kind: "hosted"
-      readonly review: HostedReviewLocator
-    }
-  | {
-      readonly kind: "localDiff"
-      readonly target: LocalReviewTarget
-    }
-  | {
-      readonly kind: "repositoryComparison"
-      readonly target: RepositoryComparisonTarget
-    }
+/** Schema-backed renderer navigation target for a hosted, local, or comparison review. */
+export const SelectedReviewTarget = Schema.Union([
+  Schema.Struct({ kind: Schema.Literal("hosted"), review: HostedReviewLocator }),
+  Schema.Struct({ kind: Schema.Literal("localDiff"), target: LocalReviewTarget }),
+  Schema.Struct({
+    kind: Schema.Literal("repositoryComparison"),
+    target: RepositoryComparisonTarget,
+  }),
+])
+
+/** Renderer navigation target for a hosted, local, or comparison review. */
+export type SelectedReviewTarget = typeof SelectedReviewTarget.Type
 
 /** Hosted renderer review with one authoritative source manifest. */
 export class HostedRendererReview extends Schema.TaggedClass<HostedRendererReview>()("hosted", {
@@ -188,30 +185,6 @@ export function projectRendererReview(
     local: (localManifest) => LocalRendererReview.make({ manifest: localManifest }),
     repositoryComparison: (comparisonManifest) =>
       RepositoryComparisonRendererReview.make({ manifest: comparisonManifest }),
-  })
-}
-
-/** Adapts a normalized renderer review into the thread API scope. */
-export const reviewThreadScope = (review: RendererReview): ReviewThreadScope => {
-  return Match.valueTags(review, {
-    hosted: (hostedReview) => ({
-      kind: "hosted" as const,
-      review: hostedReview.target,
-      baseRevision: hostedReview.baseRevision,
-      headRevision: hostedReview.headRevision,
-    }),
-    local: (localReview) => ({
-      kind: "local" as const,
-      target: localReview.target,
-      baseRevision: localReview.baseRevision,
-      headRevision: localReview.headRevision,
-    }),
-    repositoryComparison: (comparisonReview) => ({
-      kind: "repositoryComparison" as const,
-      target: comparisonReview.target,
-      baseRevision: comparisonReview.baseRevision,
-      headRevision: comparisonReview.headRevision,
-    }),
   })
 }
 

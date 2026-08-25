@@ -36,6 +36,9 @@ The pinned package is the compatibility authority because the reference follows 
 - Use `Schema.Class` and `Schema.TaggedError` for shared data and recoverable errors.
 - Use shadcn/ui components from `packages/app/src/components/ui` for reusable UI primitives.
 - Keep feature UI in `packages/app/src` and platform/service logic in `packages/desktop/src/main/services`.
+- When changing project activities or Code/Review source contributions, extend the trusted registry
+  and source hosts described in `docs/source-surface-capabilities.md`; keep feature policy out of
+  activity-rail branches and Pierre callbacks.
 - Run `pnpm format`, `pnpm lint`, `pnpm typecheck`, and `pnpm build` after significant bootstrap or architecture changes.
 - Run `pnpm test` when changing service, parsing, persistence, CLI, or Effect layer behavior.
 - Do not bypass React Doctor findings by adding memoization by default; first prefer simpler component boundaries or stable event patterns.

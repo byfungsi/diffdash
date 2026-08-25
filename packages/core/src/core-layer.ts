@@ -503,6 +503,7 @@ export const createStandaloneCoreLayer = (
     Layer.provideMerge(gitProviderLayer),
     Layer.provideMerge(GitService.layer),
     Layer.provideMerge(processLayer),
+    Layer.provideMerge(hostedReviewWorkspacePoolLayer),
   )
   const reviewAcquisitionLayer = snapshotAcquisitionServiceLayer
   const repositoryWatcherLayer = coreRepositoryWatcherLayer

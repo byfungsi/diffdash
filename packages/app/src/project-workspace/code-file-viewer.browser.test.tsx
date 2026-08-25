@@ -22,11 +22,27 @@ import { isMacPlatform } from "@/shell/keyboard-shortcut-platform"
 import { isHTMLElement } from "@/shared/dom"
 import { FloatingPaneWorkspace } from "@/shared/ui/floating-pane"
 import type { LanguageNavigationDestination } from "@/source-surface/language-navigation-capability"
+import {
+  REVIEW_COMMENTS_CODE_SOURCE_ID,
+  REVIEW_COMMENTS_EXTENSION_ID,
+} from "@/extensions/review-comments/review-comments-extension"
+import { ReviewCommentsCodeSourceContribution } from "@/extensions/review-comments/code-comments-contribution"
+import { ReviewCommentsStateProvider } from "@/extensions/review-comments/review-comments-provider"
+import { TrustedExtensionRegistrationToken } from "@/extensions/extension-registry"
 import { CodeFileViewer } from "./code-file-viewer"
 
 let root: Root | null = null
 const projectId = ReviewProjectId.make("code-viewer-project")
 const revision = ReviewRevision.make("0".repeat(40))
+const CODE_COMMENT_CONTRIBUTIONS = [
+  {
+    id: REVIEW_COMMENTS_CODE_SOURCE_ID,
+    order: 500,
+    ownerExtensionId: REVIEW_COMMENTS_EXTENSION_ID,
+    ownerRegistrationToken: new TrustedExtensionRegistrationToken(),
+    component: ReviewCommentsCodeSourceContribution,
+  },
+]
 
 afterEach(() => {
   root?.unmount()
@@ -266,14 +282,17 @@ describe("CodeFileViewer", () => {
     root = createRoot(container)
     flushSync(() => {
       root?.render(
-        <CodeFileViewer
-          codeThemes={DEFAULT_CODE_THEME_PREFERENCES}
-          colorScheme="light"
-          contents={'export const greeting = "hello"\n'}
-          path={RepositoryRelativePath.make("src/greeting.ts")}
-          projectId={projectId}
-          revision={revision}
-        />,
+        <ReviewCommentsStateProvider connection={Option.none()} projectId={projectId}>
+          <CodeFileViewer
+            codeThemes={DEFAULT_CODE_THEME_PREFERENCES}
+            colorScheme="light"
+            contents={'export const greeting = "hello"\n'}
+            contributions={CODE_COMMENT_CONTRIBUTIONS}
+            path={RepositoryRelativePath.make("src/greeting.ts")}
+            projectId={projectId}
+            revision={revision}
+          />
+        </ReviewCommentsStateProvider>,
       )
     })
 
@@ -301,14 +320,17 @@ describe("CodeFileViewer", () => {
     root = createRoot(container)
     flushSync(() => {
       root?.render(
-        <CodeFileViewer
-          codeThemes={DEFAULT_CODE_THEME_PREFERENCES}
-          colorScheme="light"
-          contents={'export const greeting = "hello"\n'}
-          path={RepositoryRelativePath.make("src/greeting.ts")}
-          projectId={projectId}
-          revision={revision}
-        />,
+        <ReviewCommentsStateProvider connection={Option.none()} projectId={projectId}>
+          <CodeFileViewer
+            codeThemes={DEFAULT_CODE_THEME_PREFERENCES}
+            colorScheme="light"
+            contents={'export const greeting = "hello"\n'}
+            contributions={CODE_COMMENT_CONTRIBUTIONS}
+            path={RepositoryRelativePath.make("src/greeting.ts")}
+            projectId={projectId}
+            revision={revision}
+          />
+        </ReviewCommentsStateProvider>,
       )
     })
 

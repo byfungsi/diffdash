@@ -7,6 +7,11 @@ describe("App shell browser interactions", () => {
     await appBrowserScenario("workbenchTitlebar")()
   })
 
+  it("keeps the Review Comments connection scoped to its project", async () => {
+    expect.hasAssertions()
+    await appBrowserScenario("reviewCommentsConnectionScope")()
+  })
+
   it("shows a retryable error instead of onboarding when application state is unavailable", async () => {
     expect.hasAssertions()
     await appBrowserScenario("appStateRecovery")()
@@ -15,6 +20,11 @@ describe("App shell browser interactions", () => {
   it("cancels or completes project opening through the accessible remote chooser", async () => {
     expect.hasAssertions()
     await appBrowserScenario("projectOpenChooser")()
+  })
+
+  it("supersedes an older directory project open before applying or persisting it", async () => {
+    expect.hasAssertions()
+    await appBrowserScenario("projectOpenSupersession")()
   })
 
   it("browses, opens, rejects, and refreshes checkout files in the Code ribbon", async () => {
@@ -40,6 +50,11 @@ describe("App shell browser interactions", () => {
   it("restores a selected review while keeping Reviews active", async () => {
     expect.hasAssertions()
     await appBrowserScenario("projectStateRestoration")()
+  })
+
+  it("repairs and reports an unavailable activity without changing Code", async () => {
+    expect.hasAssertions()
+    await appBrowserScenario("projectActivityRepair")()
   })
 
   it("recovers a failed restored review when the same review is selected again", async () => {

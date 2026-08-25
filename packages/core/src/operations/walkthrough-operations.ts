@@ -630,6 +630,7 @@ const expectedFailure = (category: WalkthroughExpectedFailureCategory, code: str
 const snapshotReviewError = (cause: Error) =>
   ReviewContextError.make({
     operation: "local.snapshot",
+    category: "acquisitionFailed",
     reason: "The durable review snapshot is unavailable to the walkthrough operation.",
     cause,
   })

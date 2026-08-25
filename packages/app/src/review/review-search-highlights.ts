@@ -6,7 +6,7 @@ import {
   VirtualizedFileDiff,
 } from "./pierre"
 import { findRenderedDiffLine } from "./review-rendered-line"
-import type { ReviewThreadAnnotation } from "./thread-annotations"
+import type { ReviewDiffAnnotationMetadata } from "./review-diff-annotation"
 import { isTextNode } from "@/shared/dom"
 import type { ReviewSnapshotSearchMatch } from "@diffdash/protocol/review-snapshot"
 import { Effect, Ref } from "effect"
@@ -41,12 +41,12 @@ type ReviewSearchScrollTarget = {
 
 type SearchDiffRegistration = {
   readonly host: HTMLElement
-  readonly instance: VirtualizedFileDiff<ReviewThreadAnnotation>
+  readonly instance: VirtualizedFileDiff<ReviewDiffAnnotationMetadata>
   readonly observer: MutationObserver
 }
 
 type PierrePostRenderInstance = Parameters<
-  NonNullable<FileDiffOptions<ReviewThreadAnnotation>["onPostRender"]>
+  NonNullable<FileDiffOptions<ReviewDiffAnnotationMetadata>["onPostRender"]>
 >[1]
 
 /** Bridges parsed review occurrences to Pierre's virtualized shadow-DOM lines. */
@@ -114,7 +114,7 @@ export class ReviewSearchHighlightManager {
       return
     }
 
-    if (!isVirtualizedFileDiff<ReviewThreadAnnotation>(instance)) return
+    if (!isVirtualizedFileDiff<ReviewDiffAnnotationMetadata>(instance)) return
     const current = this.registrations.get(reviewKey)
     if (current?.host === host && current.instance === instance) {
       if (this.occurrencesByFile.has(reviewKey)) this.observeRegistration(current)

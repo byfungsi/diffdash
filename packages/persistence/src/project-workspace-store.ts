@@ -2,27 +2,32 @@ import { Context, Effect, Layer, Option, Schema } from "effect"
 import * as SqlClient from "effect/unstable/sql/SqlClient"
 
 import {
-  ProjectWorkspaceRibbon,
-  ProjectWorkspaceReviewTarget,
+  ProjectWorkspaceActivityId,
+  ProjectWorkspaceNavigationContributionId,
+  ProjectWorkspaceNavigationEnvelope,
+  ProjectWorkspaceNavigationLocation,
   ProjectWorkspaceState,
+  ProjectWorkspaceSurface,
   type ProjectWorkspaceStateInput,
 } from "@diffdash/domain/project-workspace"
 import { ReviewProjectId } from "@diffdash/domain/review-identity"
 import { type DatabaseRow, makeDatabase } from "./database"
 
-const ReviewTargetJson = Schema.fromJsonString(ProjectWorkspaceReviewTarget)
+const NavigationLocationJson = Schema.fromJsonString(ProjectWorkspaceNavigationLocation)
 
 const ProjectWorkspaceStateRow = Schema.Struct({
   repo_id: ReviewProjectId,
-  active_ribbon: ProjectWorkspaceRibbon,
-  selected_review_target_json: Schema.NullOr(ReviewTargetJson),
+  active_surface: ProjectWorkspaceSurface,
+  active_activity: ProjectWorkspaceActivityId,
+  navigation_contribution_id: ProjectWorkspaceNavigationContributionId,
+  navigation_location_json: NavigationLocationJson,
   updated_at: Schema.String,
 })
 
 const ProjectWorkspaceStoreOperation = Schema.Literals([
   "get.query",
   "get.decode",
-  "save.encodeTarget",
+  "save.encodeLocation",
   "save.query",
   "save.get",
 ])
@@ -37,13 +42,13 @@ export class ProjectWorkspaceStoreError extends Schema.TaggedError<ProjectWorksp
   },
 ) {}
 
-/** Domain-oriented persistence for the last workspace state of each review project. */
+/** Domain-oriented persistence for the last workspace state of each project. */
 export class ProjectWorkspaceStore extends Context.Service<
   ProjectWorkspaceStore,
   {
     readonly get: (
       projectId: ReviewProjectId,
-    ) => Effect.Effect<ProjectWorkspaceState | null, ProjectWorkspaceStoreError>
+    ) => Effect.Effect<Option.Option<ProjectWorkspaceState>, ProjectWorkspaceStoreError>
     readonly save: (
       input: ProjectWorkspaceStateInput,
     ) => Effect.Effect<ProjectWorkspaceState, ProjectWorkspaceStoreError>
@@ -65,7 +70,6 @@ export class ProjectWorkspaceStore extends Context.Service<
             Effect.flatMap((row) =>
               Option.map(row, (value) => decodeStateRow("get.decode", value)).pipe(
                 Effect.transposeOption,
-                Effect.map(Option.getOrNull),
               ),
             ),
           )
@@ -74,26 +78,35 @@ export class ProjectWorkspaceStore extends Context.Service<
       const save = Effect.fn("ProjectWorkspaceStore.save")(function* (
         input: ProjectWorkspaceStateInput,
       ) {
-        const selectedReviewTargetJson =
-          input.selectedReviewTarget === null
-            ? null
-            : yield* Schema.encodeEffect(ReviewTargetJson)(input.selectedReviewTarget).pipe(
-                Effect.mapError((cause) =>
-                  ProjectWorkspaceStoreError.make({ operation: "save.encodeTarget", cause }),
-                ),
-              )
+        const navigationLocationJson = yield* Schema.encodeEffect(NavigationLocationJson)(
+          input.navigation.location,
+        ).pipe(
+          Effect.mapError((cause) =>
+            ProjectWorkspaceStoreError.make({ operation: "save.encodeLocation", cause }),
+          ),
+        )
         const updatedAt = new Date().toISOString()
 
         yield* database
           .run(
             `INSERT INTO project_workspace_state (
-              repo_id, active_ribbon, selected_review_target_json, updated_at
-            ) VALUES (?, ?, ?, ?)
+              repo_id, active_surface, active_activity,
+              navigation_contribution_id, navigation_location_json, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?)
             ON CONFLICT(repo_id) DO UPDATE SET
-              active_ribbon = excluded.active_ribbon,
-              selected_review_target_json = excluded.selected_review_target_json,
+              active_surface = excluded.active_surface,
+              active_activity = excluded.active_activity,
+              navigation_contribution_id = excluded.navigation_contribution_id,
+              navigation_location_json = excluded.navigation_location_json,
               updated_at = excluded.updated_at`,
-            [input.projectId, input.activeRibbon, selectedReviewTargetJson, updatedAt],
+            [
+              input.projectId,
+              input.activeSurface,
+              input.activeActivity,
+              input.navigation.contributionId,
+              navigationLocationJson,
+              updatedAt,
+            ],
           )
           .pipe(
             Effect.mapError((cause) =>
@@ -102,13 +115,13 @@ export class ProjectWorkspaceStore extends Context.Service<
           )
 
         const state = yield* get(input.projectId)
-        if (state === null) {
+        if (Option.isNone(state)) {
           return yield* ProjectWorkspaceStoreError.make({
             operation: "save.get",
             cause: new Error("Project workspace state was not found after save."),
           })
         }
-        return state
+        return state.value
       })
 
       return ProjectWorkspaceStore.of({ get, save })
@@ -122,8 +135,12 @@ const decodeStateRow = (operation: ProjectWorkspaceStoreOperation, input: Databa
     Effect.map((row) =>
       ProjectWorkspaceState.make({
         projectId: row.repo_id,
-        activeRibbon: row.active_ribbon,
-        selectedReviewTarget: row.selected_review_target_json,
+        activeSurface: row.active_surface,
+        activeActivity: row.active_activity,
+        navigation: ProjectWorkspaceNavigationEnvelope.make({
+          contributionId: row.navigation_contribution_id,
+          location: row.navigation_location_json,
+        }),
         updatedAt: row.updated_at,
       }),
     ),

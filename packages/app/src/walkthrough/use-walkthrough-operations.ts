@@ -1,5 +1,6 @@
-import type { ReviewThreadTarget } from "@diffdash/domain/review-thread"
-import { useEffect, useMemo, useSyncExternalStore } from "react"
+import { ReviewThreadTarget } from "@diffdash/domain/review-thread"
+import { Schema } from "effect"
+import { useEffect, useMemo, useRef, useSyncExternalStore } from "react"
 
 import { useWalkthroughOperationsFactory } from "@/platform/renderer-runtime"
 import type {
@@ -20,7 +21,13 @@ export const useWalkthroughOperations = (
   target: ReviewThreadTarget,
 ): WalkthroughOperationController => {
   const operations = useWalkthroughOperationsFactory()
-  const session = useMemo(() => operations.open(target), [operations, target])
+  const targetIdentity = JSON.stringify(Schema.encodeSync(ReviewThreadTarget)(target))
+  const stableTargetRef = useRef({ identity: targetIdentity, target })
+  if (stableTargetRef.current.identity !== targetIdentity) {
+    stableTargetRef.current = { identity: targetIdentity, target }
+  }
+  const stableTarget = stableTargetRef.current.target
+  const session = useMemo(() => operations.open(stableTarget), [operations, stableTarget])
   useEffect(() => () => session.dispose(), [session])
   const state = useSyncExternalStore(session.subscribe, session.state, session.state)
 
