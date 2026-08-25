@@ -21,6 +21,7 @@ export interface ProjectSurfaceRuntime {
   readonly activities: readonly OwnedExtensionContribution<ProjectActivityContribution>[]
   readonly colorScheme: "light" | "dark"
   readonly sidebarExpanded: boolean
+  readonly workspaceRestoring: boolean
   readonly workspaceNotice: Option.Option<string>
   readonly quickNavigationRequest: number
   readonly persistLocation: (

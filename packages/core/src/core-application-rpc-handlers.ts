@@ -120,6 +120,16 @@ const reviewContextFailureDetails = {
     retryClass: "notRetryable",
     safeMessage: "This review contains an individual diff line or hunk that is too large to open.",
   },
+  snapshotInvalid: {
+    code: "REVIEW_SNAPSHOT_INVALID",
+    retryClass: "notRetryable",
+    safeMessage: "The provider returned review data that did not form a coherent snapshot.",
+  },
+  cacheCorrupt: {
+    code: "REVIEW_CACHE_CORRUPT",
+    retryClass: "userAction",
+    safeMessage: "The acquired review could not be verified. Clear cached data, then retry.",
+  },
   cancelled: {
     code: "REVIEW_ACQUISITION_CANCELLED",
     retryClass: "automatic",

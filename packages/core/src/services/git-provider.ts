@@ -44,6 +44,8 @@ export const ReviewContextFailureCategory = Schema.Literals([
   "fallbackFailed",
   "cacheFull",
   "contentTooLarge",
+  "snapshotInvalid",
+  "cacheCorrupt",
   "cancelled",
   "acquisitionFailed",
 ])

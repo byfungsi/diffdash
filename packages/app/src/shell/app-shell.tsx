@@ -337,6 +337,7 @@ export function AppShell() {
     useRef<NavigationHistory<AppNavigationLocation>>(initialNavigationHistory)
   const [navigationHistory, setNavigationHistory] = useState(initialNavigationHistory)
   const [workspaceNotice, setWorkspaceNotice] = useState<Option.Option<string>>(Option.none)
+  const [workspaceRestoring, setWorkspaceRestoring] = useState(false)
   const [workspaceRepairPersistenceRequest, setWorkspaceRepairPersistenceRequest] = useState(0)
   const [pendingRemoteSelection, setPendingRemoteSelection] =
     useState<PendingProjectRemoteSelection | null>(null)
@@ -740,19 +741,28 @@ export function AppShell() {
   const restoreProject = async (repo: Repo) => {
     const request = projectOpenRequestRef.current + 1
     projectOpenRequestRef.current = request
+    setWorkspaceRestoring(true)
     setPendingRemoteSelection(null)
+    const finishRestoration = () => {
+      if (projectOpenRequestRef.current === request) setWorkspaceRestoring(false)
+    }
     const opening = projectOpeningRef.current
     if (opening === null) {
+      finishRestoration()
       setActionStatus("Project opening is unavailable.")
       applyNavigationLocation(fallbackNavigationLocation())
       return
     }
     const initial = opening.initial(repo)
     if (Option.isNone(initial)) {
+      finishRestoration()
       applyNavigationLocation(fallbackNavigationLocation())
       return
     }
-    if (!applyProjectProjection(initial.value)) return
+    if (!applyProjectProjection(initial.value)) {
+      finishRestoration()
+      return
+    }
     setActionStatus(`Restoring ${repo.displayIdentity}...`)
     try {
       const restored = await opening.restore(repo)
@@ -772,11 +782,14 @@ export function AppShell() {
         Option.some(formatError(error, "Saved workspace state could not be restored")),
       )
       Option.map(fallback, (projection) => applyProjectProjection(projection, "replace"))
+    } finally {
+      finishRestoration()
     }
   }
 
   const updateProjectActivity = (activityId: ProjectWorkspaceActivityId) => {
     projectOpenRequestRef.current += 1
+    setWorkspaceRestoring(false)
     setPendingRemoteSelection(null)
     const activity = projectActivities.find((candidate) => candidate.id === activityId)
     if (activity === undefined) return
@@ -1201,10 +1214,12 @@ export function AppShell() {
             activities: projectActivities,
             colorScheme: THEME_DEFINITIONS[resolvedTheme].colorScheme,
             sidebarExpanded,
+            workspaceRestoring,
             workspaceNotice,
             quickNavigationRequest: projectQuickNavigationRequest,
             navigate: (contribution, activityId, state, mode = "push") => {
               projectOpenRequestRef.current += 1
+              setWorkspaceRestoring(false)
               setPendingRemoteSelection(null)
               const activity = projectActivitiesRef.current.find(
                 (candidate) => candidate.id === activityId,

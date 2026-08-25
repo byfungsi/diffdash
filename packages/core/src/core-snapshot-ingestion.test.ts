@@ -181,6 +181,53 @@ const makeLayer = (
 }
 
 describe("CoreSnapshotIngestion", () => {
+  it.effect("uses streamed status for an added file beyond the first hundred entries", () =>
+    Effect.gen(function* () {
+      const directory = yield* tempDirectory
+      const patch = encoder.encode(
+        Array.from({ length: 103 }, (_, index) => {
+          const path = `src/file-${index + 1}.ts`
+          return index === 102
+            ? `diff --git a/${path} b/${path}\nnew file mode 100644\n--- /dev/null\n+++ b/${path}\n@@ -0,0 +1 @@\n+added\n`
+            : `diff --git a/${path} b/${path}\n--- a/${path}\n+++ b/${path}\n@@ -1 +1 @@\n-old\n+new\n`
+        }).join(""),
+      )
+      const closed = { count: 0 }
+      const harness = makeLayer(directory, patch)
+
+      yield* Effect.gen(function* () {
+        const resources = yield* ResourceCatalog
+        const ingestion = yield* CoreSnapshotIngestion
+        const store = yield* SnapshotBlockStore
+        yield* Effect.promise(() => mkdir(harness.rootPath, { recursive: true }))
+        yield* resources.registerRoot({ id: rootId, path: harness.rootPath, createdAtMs: 0 })
+
+        const result = yield* ingestion.ingest({
+          ...input(source(patch, closed)),
+          fileDeltaKeys: {
+            resolve: ({ ordinal, status }) =>
+              Effect.succeed(
+                FileDeltaIdentity.make({
+                  ...exactIdentity,
+                  oldContentId: `blob:old:${ordinal}`,
+                  newContentId: `blob:new:${ordinal}`,
+                  status,
+                }),
+              ),
+          },
+        })
+        const snapshot = yield* store.getSnapshot(StoredSnapshotId.make(snapshotId))
+
+        expect(result.fileCount).toBe(103)
+        expect(snapshot.files[102]).toMatchObject({
+          path: "src/file-103.ts",
+          status: "added",
+        })
+      }).pipe(Effect.provide(harness.layer))
+      expect(closed.count).toBe(1)
+    }),
+  )
+
   it.effect("persists closed hunks from arbitrary bounded batches and publishes last", () =>
     Effect.gen(function* () {
       const directory = yield* tempDirectory

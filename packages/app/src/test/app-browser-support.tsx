@@ -2651,6 +2651,7 @@ scenario("projectRestoreRace", async () => {
   renderApp()
 
   await openDefaultProject()
+  expect(calls.acquireLocalReviewSnapshot).not.toHaveBeenCalled()
   document.querySelector<HTMLButtonElement>('button[aria-label^="Open review #51:"]')?.click()
   await vi.waitFor(() => {
     expect(document.querySelector('button[aria-label="Files"][aria-pressed="true"]')).not.toBeNull()

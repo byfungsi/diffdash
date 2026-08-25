@@ -59,6 +59,7 @@ export type IncrementalDiffEvent =
       readonly fileOrdinal: number
       readonly gitOldPath: string
       readonly gitNewPath: string
+      readonly status: DiffFileStatus
       readonly line: string
     }
   | {
@@ -108,6 +109,7 @@ interface DraftFile {
   readonly ordinal: number
   readonly gitOldPath: string
   readonly gitNewPath: string
+  readonly startLine: string
   additions: number
   deletions: number
   hunkLineCounts: number[]
@@ -232,6 +234,7 @@ export class IncrementalUnifiedDiffParser {
         ordinal: this.#nextFileOrdinal,
         gitOldPath,
         gitNewPath,
+        startLine: line,
         additions: 0,
         deletions: 0,
         hunkLineCounts: [],
@@ -247,13 +250,6 @@ export class IncrementalUnifiedDiffParser {
         status: null,
       }
       this.#nextFileOrdinal += 1
-      this.#emit({
-        _tag: "FileStarted",
-        fileOrdinal: this.#file.ordinal,
-        gitOldPath,
-        gitNewPath,
-        line,
-      })
       return null
     }
     const file = this.#file
@@ -409,6 +405,14 @@ export class IncrementalUnifiedDiffParser {
   #emitPrelude(file: DraftFile): void {
     if (file.preludeEmitted) return
     file.preludeEmitted = true
+    this.#emit({
+      _tag: "FileStarted",
+      fileOrdinal: file.ordinal,
+      gitOldPath: file.gitOldPath,
+      gitNewPath: file.gitNewPath,
+      status: inferStatus(file),
+      line: file.startLine,
+    })
     this.#emit({ _tag: "FilePrelude", fileOrdinal: file.ordinal, lines: file.prelude })
     file.prelude = []
     file.preludeBytes = 0

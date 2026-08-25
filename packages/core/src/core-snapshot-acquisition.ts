@@ -2,11 +2,7 @@ import { createHash, randomUUID } from "node:crypto"
 import { open, type FileHandle } from "node:fs/promises"
 import { basename, join, relative } from "node:path"
 
-import {
-  type ChangedFile,
-  type HostedReviewDetail,
-  type HostedReviewLocator,
-} from "@diffdash/domain/git-provider"
+import { type HostedReviewDetail, type HostedReviewLocator } from "@diffdash/domain/git-provider"
 import { type LocalReviewTarget } from "@diffdash/domain/local-review"
 import { RepositoryCheckoutPath } from "@diffdash/domain/repository"
 import {
@@ -71,7 +67,7 @@ import {
   processRequest,
   type ProcessExecutionError,
 } from "@diffdash/process"
-import { Clock, Context, Deferred, Effect, Layer, Match, Schema, Stream } from "effect"
+import { Clock, Context, Deferred, Effect, Layer, Match, Schema, Semaphore, Stream } from "effect"
 
 import { toCoreExpectedCause } from "./core-error-cause"
 import { CoreAbsolutePath } from "./core-configuration"
@@ -100,6 +96,8 @@ const DIFF_OPTIONS = "--no-ext-diff --no-color"
 const FILE_DELTA_IDENTITY_VERSION = 1
 const MANAGED_SPOOL_QUOTA_CAUSE_TAG = "managed-spool-quota"
 const GIT_METADATA_MAX_BYTES = 64 * 1024 * 1024
+const ACQUISITION_DIAGNOSTIC_MAX_BYTES = 256 * 1024
+const ACQUISITION_DIAGNOSTIC_FILE = "acquisition-diagnostics.jsonl"
 
 /** Filesystem and quota policy for durable managed review spools. */
 export interface CoreSnapshotAcquisitionOptions {
@@ -159,6 +157,12 @@ export const coreSnapshotAcquisitionLayer = (
       const repositories = yield* RepositoryLinker
       const resources = yield* ResourceCatalog
       const resourceCollection = yield* ResourceCollection
+      const diagnosticLock = yield* Semaphore.make(1)
+      const recordFailure = (
+        stage: ReviewContextError["operation"],
+        cause: CoreSnapshotAcquisitionInternalFailure,
+      ) =>
+        diagnosticLock.withPermits(1)(persistAcquisitionDiagnostic(options.rootPath, stage, cause))
       const hostedCompleted = new Map<string, HostedReviewSnapshotManifest>()
       const hostedInFlight = new Map<
         string,
@@ -175,7 +179,6 @@ export const coreSnapshotAcquisitionLayer = (
         readonly baseRevision: ReviewRevision
         readonly descriptor: import("@diffdash/domain/review-context").ReviewDescriptor
         readonly repositoryPath: RepositoryCheckoutPath | null
-        readonly statusByPath: ReadonlyMap<string, FileDeltaIdentity["status"]>
       }) {
         const source = input.source
         const reviewKey = source.offer.target.reviewKey
@@ -184,7 +187,6 @@ export const coreSnapshotAcquisitionLayer = (
           const sourceMaterial = yield* sourceMaterialization(
             source,
             input.repositoryPath,
-            input.statusByPath,
             processes,
           )
           const prepared =
@@ -229,9 +231,10 @@ export const coreSnapshotAcquisitionLayer = (
       ) {
         const project = yield* repositories.ensureHosted(review.repository, "preserve")
         const key = JSON.stringify(review)
-        const detail = yield* providers
-          .getHostedReviewDetail(review)
-          .pipe(Effect.mapError(reviewFailure("hosted.detailAfter")))
+        const detail = yield* providers.getHostedReviewDetail(review).pipe(
+          Effect.tapError((cause) => recordFailure("hosted.detailAfter", cause)),
+          Effect.mapError(reviewFailure("hosted.detailAfter")),
+        )
         const cached = hostedCompleted.get(key)
         if (
           cached !== undefined &&
@@ -245,9 +248,10 @@ export const coreSnapshotAcquisitionLayer = (
             detail: { summary: detail.summary },
           })
         }
-        const source = yield* providers
-          .getReviewDiffSource(review)
-          .pipe(Effect.mapError(reviewFailure("hosted.diff")))
+        const source = yield* providers.getReviewDiffSource(review).pipe(
+          Effect.tapError((cause) => recordFailure("hosted.diff", cause)),
+          Effect.mapError(reviewFailure("hosted.diff")),
+        )
         const revisions = yield* hostedRevisions(detail, source).pipe(
           Effect.onError(() => source.close.pipe(Effect.ignore)),
         )
@@ -267,7 +271,6 @@ export const coreSnapshotAcquisitionLayer = (
           baseRevision: revisions.base,
           descriptor,
           repositoryPath: project.localPath,
-          statusByPath: changedFileStatuses(detail.files),
         })
         const result = yield* direct.pipe(
           Effect.catch((error) =>
@@ -347,7 +350,6 @@ export const coreSnapshotAcquisitionLayer = (
                                       baseRevision: revisions.base,
                                       descriptor,
                                       repositoryPath,
-                                      statusByPath: new Map(),
                                     }),
                                   ),
                                 ),
@@ -358,6 +360,7 @@ export const coreSnapshotAcquisitionLayer = (
                 })
               : Effect.fail(error),
           ),
+          Effect.tapError((cause) => recordFailure("hosted.snapshot", cause)),
           Effect.mapError(reviewFailure("hosted.snapshot")),
         )
         const manifest = HostedReviewSnapshotManifest.make({
@@ -395,9 +398,10 @@ export const coreSnapshotAcquisitionLayer = (
       const acquireLocalOnce = Effect.fn("CoreSnapshotAcquisition.acquireLocalOnce")(function* (
         requestedTarget: LocalReviewTarget,
       ) {
-        const target = yield* git
-          .validateLocalReviewTarget(requestedTarget)
-          .pipe(Effect.mapError(reviewFailure("local.snapshot")))
+        const target = yield* git.validateLocalReviewTarget(requestedTarget).pipe(
+          Effect.tapError((cause) => recordFailure("local.snapshot", cause)),
+          Effect.mapError(reviewFailure("local.snapshot")),
+        )
         const project = yield* repositories.ensureLocal(target.rootPath)
         const reviewKey = makeLocalReviewKey(target.rootPath, target.comparison)
         const source = yield* makeLocalReviewDiffSource({
@@ -444,9 +448,11 @@ export const coreSnapshotAcquisitionLayer = (
           },
         }).pipe(
           Effect.provideService(ProcessService, processes),
+          Effect.tapError((cause) => recordFailure("local.snapshot", cause)),
           Effect.mapError(reviewFailure("local.snapshot")),
         )
         const baseRevision = yield* localBaseRevision(target, processes).pipe(
+          Effect.tapError((cause) => recordFailure("local.snapshot", cause)),
           Effect.mapError(reviewFailure("local.snapshot")),
           Effect.onError(() => source.close.pipe(Effect.ignore)),
         )
@@ -477,8 +483,10 @@ export const coreSnapshotAcquisitionLayer = (
             fetchedAt: new Date(now).toISOString(),
           }),
           repositoryPath: target.rootPath,
-          statusByPath: new Map(),
-        }).pipe(Effect.mapError(reviewFailure("local.snapshot")))
+        }).pipe(
+          Effect.tapError((cause) => recordFailure("local.snapshot", cause)),
+          Effect.mapError(reviewFailure("local.snapshot")),
+        )
         const detail = {
           rootPath: target.rootPath,
           repoName: basename(target.rootPath) || target.rootPath,
@@ -547,7 +555,6 @@ export const coreSnapshotAcquisitionLayer = (
                 fetchedAt: new Date(now).toISOString(),
               }),
               repositoryPath,
-              statusByPath: new Map(),
             }).pipe(Effect.mapError(comparisonFailure("acquire.ingestion")))
             const detail = {
               target,
@@ -575,7 +582,6 @@ const freshAcquisition = (source: ReviewDiffSource): ReviewDiffAcquisition =>
 const sourceMaterialization = Effect.fn("CoreSnapshotAcquisition.sourceMaterialization")(function* (
   source: ReviewDiffSource,
   repositoryPath: RepositoryCheckoutPath | null,
-  statusByPath: ReadonlyMap<string, FileDeltaIdentity["status"]>,
   processes: ProcessService["Service"],
 ) {
   if (
@@ -623,7 +629,7 @@ const sourceMaterialization = Effect.fn("CoreSnapshotAcquisition.sourceMateriali
         headObject: exact.headObject,
         diffPolicyIdentity: exact.diffPolicyIdentity,
       } satisfies SnapshotStorageSource,
-      fileDeltaKeys: identityResolver(identities, source, statusByPath),
+      fileDeltaKeys: identityResolver(identities, source),
     }
   }
   if (repositoryPath !== null && Schema.is(LocalReviewDiffSourceTarget)(source.offer.target)) {
@@ -647,12 +653,12 @@ const sourceMaterialization = Effect.fn("CoreSnapshotAcquisition.sourceMateriali
     )
     return {
       storageSource: null,
-      fileDeltaKeys: identityResolver(identities, source, statusByPath),
+      fileDeltaKeys: identityResolver(identities, source),
     }
   }
   return {
     storageSource: null,
-    fileDeltaKeys: identityResolver(new Map(), source, statusByPath),
+    fileDeltaKeys: identityResolver(new Map(), source),
   }
 })
 
@@ -782,14 +788,10 @@ const parseBinaryPaths = (output: string): ReadonlySet<string> => {
 const identityResolver = (
   identities: ReadonlyMap<string, ExactGitFileIdentity>,
   source: ReviewDiffSource,
-  statusByPath: ReadonlyMap<string, FileDeltaIdentity["status"]>,
 ): CoreSnapshotFileDeltaKeySource => ({
-  resolve: ({ ordinal, gitOldPath, gitNewPath }) => {
+  resolve: ({ ordinal, gitOldPath, gitNewPath, status }) => {
     const exact = identities.get(`${gitOldPath}\u0000${gitNewPath}`) ?? identities.get(gitNewPath)
     if (exact !== undefined) return Effect.succeed(exact.identity)
-    const status =
-      statusByPath.get(gitNewPath) ??
-      (Schema.is(LocalReviewDiffSourceTarget)(source.offer.target) ? "added" : "modified")
     return Effect.succeed(
       FileDeltaIdentity.make({
         oldContentId: `source:${source.offer.semanticIdentity}:old:${ordinal}:${gitOldPath}`,
@@ -1015,11 +1017,6 @@ const manifestIdentity = (
   fileCount: result.fileCount,
 })
 
-const changedFileStatuses = (
-  files: ReadonlyArray<ChangedFile>,
-): ReadonlyMap<string, FileDeltaIdentity["status"]> =>
-  new Map(files.map((file) => [file.path, file.changeType]))
-
 const exactObjectIdentity = (
   object: string,
   semanticIdentity: string,
@@ -1049,6 +1046,33 @@ type CoreSnapshotAcquisitionInternalFailure =
   | ProcessExecutionError
   | ResourceCatalogError
   | ReviewDiffSourceFailure
+
+const persistAcquisitionDiagnostic = (
+  rootPath: string,
+  stage: ReviewContextError["operation"],
+  cause: CoreSnapshotAcquisitionInternalFailure,
+): Effect.Effect<void> => {
+  const details = reviewFailureDetails(cause)
+  const typedReason = Schema.is(CoreSnapshotIngestionError)(cause) ? cause.reason : details.category
+  const line = `${JSON.stringify({
+    timestamp: new Date().toISOString(),
+    stage,
+    category: details.category,
+    typedReason,
+  })}\n`
+  return Effect.tryPromise(async () => {
+    const file = await open(join(rootPath, ACQUISITION_DIAGNOSTIC_FILE), "a+", 0o600)
+    try {
+      const stat = await file.stat()
+      if (stat.size + Buffer.byteLength(line) > ACQUISITION_DIAGNOSTIC_MAX_BYTES) {
+        await file.truncate(0)
+      }
+      await file.writeFile(line)
+    } finally {
+      await file.close()
+    }
+  }).pipe(Effect.catch(() => Effect.void))
+}
 
 const reviewFailure =
   (operation: ReviewContextError["operation"]) =>
@@ -1127,6 +1151,21 @@ const reviewFailureDetails = (
     return {
       category: "cacheFull",
       reason: "The managed review cache is full; clear cached data and retry",
+    }
+  }
+  if (
+    Schema.is(CoreSnapshotIngestionError)(cause) &&
+    (cause.reason === "identityMismatch" || cause.reason === "invalidEventOrder")
+  ) {
+    return {
+      category: "snapshotInvalid",
+      reason: "The streamed review data did not form a coherent snapshot",
+    }
+  }
+  if (Schema.is(CoreSnapshotIngestionError)(cause) && cause.reason === "verificationFailed") {
+    return {
+      category: "cacheCorrupt",
+      reason: "The managed review cache could not verify the acquired snapshot",
     }
   }
   if (Schema.is(ProcessCancellationError)(cause)) {

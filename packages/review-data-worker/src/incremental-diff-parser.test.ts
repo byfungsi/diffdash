@@ -56,6 +56,31 @@ diff --git a/next.txt b/next.txt
 `
 
 describe("IncrementalUnifiedDiffParser", () => {
+  it("carries an added status beyond a provider's first hundred summary files", () => {
+    const diff = Array.from({ length: 103 }, (_, index) => {
+      const path = `src/file-${index + 1}.ts`
+      return index === 102
+        ? `diff --git a/${path} b/${path}\nnew file mode 100644\n--- /dev/null\n+++ b/${path}\n@@ -0,0 +1 @@\n+added\n`
+        : `diff --git a/${path} b/${path}\n--- a/${path}\n+++ b/${path}\n@@ -1 +1 @@\n-old\n+new\n`
+    }).join("")
+    const parser = new IncrementalUnifiedDiffParser()
+    const accepted = parser.accept(new TextEncoder().encode(diff))
+    const finished = parser.finish()
+    const started = [accepted, finished]
+      .flatMap((result) =>
+        Match.valueTags(result, { Failure: () => [], Success: ({ batches }) => batches }),
+      )
+      .flatMap(({ events }) => events)
+      .filter((event) => event._tag === "FileStarted")
+
+    expect(started).toHaveLength(103)
+    expect(started[102]).toMatchObject({
+      fileOrdinal: 102,
+      gitNewPath: "src/file-103.ts",
+      status: "added",
+    })
+  })
+
   it("does not synthesize an empty hunk line after a trailing newline", () => {
     const parser = new IncrementalUnifiedDiffParser()
     const accepted = parser.accept(

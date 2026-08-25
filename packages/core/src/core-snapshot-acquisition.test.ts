@@ -485,6 +485,15 @@ describe("CoreSnapshotAcquisition", () => {
         _tag: "ReviewContextError",
         category: "cacheFull",
       })
+      const diagnostic = JSON.parse(
+        readFileSync(join(directory, "managed", "acquisition-diagnostics.jsonl"), "utf8").trim(),
+      )
+      expect(diagnostic).toMatchObject({
+        stage: "hosted.snapshot",
+        category: "cacheFull",
+        typedReason: "cacheFull",
+      })
+      expect(JSON.stringify(diagnostic)).not.toContain("fungsi")
       expect(closed.count).toBe(1)
     }),
   )
