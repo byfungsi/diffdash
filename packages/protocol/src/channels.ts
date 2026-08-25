@@ -98,3 +98,11 @@ export const EventChannel = {
 
 /** One valid host-to-renderer event channel. */
 export type EventChannel = (typeof EventChannel)[keyof typeof EventChannel]
+
+/** Canonical renderer-to-host MessagePort stream channels. */
+export const StreamChannel = {
+  readCodeWorkspaceFile: "codeWorkspace:streamFile",
+} as const
+
+/** One valid renderer-to-host MessagePort stream channel. */
+export type StreamChannel = (typeof StreamChannel)[keyof typeof StreamChannel]

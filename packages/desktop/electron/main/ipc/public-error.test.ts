@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest"
+import { CodeWorkspaceError } from "@diffdash/domain/code-workspace"
 
 import { toPublicIpcError } from "./public-error"
 
@@ -31,6 +32,23 @@ describe("toPublicIpcError", () => {
     ).toMatchObject({
       code: "INTERNAL_ERROR",
       message: "DiffDash could not complete the request.",
+    })
+  })
+
+  it("preserves the established public Code workspace failure code", () => {
+    expect(
+      toPublicIpcError(
+        CodeWorkspaceError.make({
+          operation: "streamFile",
+          reason: "leaseExpired",
+          message: "Internal lease detail",
+        }),
+        "codeWorkspace:streamFile",
+      ),
+    ).toMatchObject({
+      code: "CODE_WORKSPACE_LEASE_EXPIRED",
+      message: "The Code workspace lease expired.",
+      operation: "codeWorkspace:streamFile",
     })
   })
 })

@@ -13,7 +13,7 @@ import { Effect, Fiber, Schema, Stream } from "effect"
 import { TestClock } from "effect/testing"
 import { describe, expect, it } from "@effect/vitest"
 
-import { invokePreload, preloadEventStream } from "./renderer-api-error"
+import { invokePreload, invokePreloadCancelable, preloadEventStream } from "./renderer-api-error"
 import { consumeRendererStream, runRendererPromise } from "./renderer-runtime"
 
 describe("invokePreload", () => {
@@ -113,6 +113,32 @@ describe("invokePreload", () => {
     )
 
     await expect(runRendererPromise(Effect.fail(failure))).rejects.toBe(failure)
+  })
+
+  it("runs preload cancellation when the renderer Effect is interrupted", async () => {
+    let markRegistered = (): void => undefined
+    const registered = new Promise<void>((resolve) => {
+      markRegistered = resolve
+    })
+    let cancelled = false
+    const operation = invokePreloadCancelable(
+      InvokeChannel.readCodeWorkspaceFile,
+      (registerCancellation) =>
+        new Promise((resolve) => {
+          registerCancellation(() => {
+            cancelled = true
+            resolve({ _tag: "Failure", error: transportError("CANCELLED", "Cancelled") })
+          })
+          markRegistered()
+        }),
+    )
+    const controller = new AbortController()
+    const running = runRendererPromise(operation, controller.signal)
+
+    await registered
+    controller.abort()
+    await expect(running).rejects.toMatchObject({ name: "AbortError" })
+    expect(cancelled).toBe(true)
   })
 })
 

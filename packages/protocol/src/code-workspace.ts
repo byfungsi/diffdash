@@ -1,6 +1,9 @@
 import {
   CodeWorkspaceDirectoryPage,
   CodeWorkspaceChangesResult,
+  CodeWorkspaceFileContent,
+  CodeWorkspaceFileReadRejected,
+  type CodeWorkspaceFileReadRejectionReason,
   CodeWorkspaceFileReadResult,
   CodeWorkspaceLease,
   CodeWorkspaceLeaseId,
@@ -95,9 +98,13 @@ export type CodeWorkspaceReferencesRequest = typeof CodeWorkspaceReferencesReque
 export {
   CodeWorkspaceDirectoryPage,
   CodeWorkspaceChangesResult,
+  CodeWorkspaceFileContent,
+  CodeWorkspaceFileReadRejected,
   CodeWorkspaceFileReadResult,
   CodeWorkspaceLease,
   CodeWorkspaceLineChangesResult,
   CodeWorkspaceSearchResult,
   RepositoryLanguageLocationResult,
 }
+
+export type { CodeWorkspaceFileReadRejectionReason }

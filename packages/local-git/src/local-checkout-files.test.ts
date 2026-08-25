@@ -1,12 +1,13 @@
 import { expect, it } from "@effect/vitest"
 import {
+  LOCAL_CHECKOUT_FILE_CHUNK_BYTES,
   LocalCheckoutFileContent,
   LocalCheckoutFileReadRejected,
   LOCAL_CHECKOUT_FILE_MAX_BYTES,
 } from "@diffdash/domain/local-checkout-file"
 import { RepositoryCheckoutPath } from "@diffdash/domain/repository"
 import { RepositoryRelativePath } from "@diffdash/domain/repository-path"
-import { Effect } from "effect"
+import { Effect, Result, Stream } from "effect"
 import { execFileSync } from "node:child_process"
 import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
@@ -68,6 +69,13 @@ it.live("reads UTF-8 text and returns typed recoverable file rejections", () =>
         _tag: "rejected",
         reason: "oversized",
       })
+      const streamedLargeFile = yield* Effect.result(
+        Stream.runDrain(files.stream(rootPath, RepositoryRelativePath.make("large.txt"))),
+      )
+      expect(Result.isFailure(streamedLargeFile)).toBe(true)
+      if (Result.isFailure(streamedLargeFile)) {
+        expect(streamedLargeFile.failure).toMatchObject({ reason: "oversized" })
+      }
       expect(yield* files.read(rootPath, RepositoryRelativePath.make("directory"))).toMatchObject({
         _tag: "rejected",
         reason: "notRegularFile",
@@ -77,6 +85,30 @@ it.live("reads UTF-8 text and returns typed recoverable file rejections", () =>
       ).toMatchObject({ _tag: "rejected", reason: "unsafeSymlink" })
 
       rmSync(outsidePath, { force: true })
+    }),
+  ).pipe(Effect.provide(localCheckoutFilesLayer)),
+)
+
+it.live("streams large UTF-8 files in bounded chunks without splitting decoded content", () =>
+  withRepository((rootPath) =>
+    Effect.gen(function* () {
+      const content = `${"a".repeat(LOCAL_CHECKOUT_FILE_CHUNK_BYTES - 1)}😀tail`
+      writeFileSync(join(rootPath, "large-source.ts"), content)
+      const files = yield* LocalCheckoutFiles
+
+      const chunks = Array.from(
+        yield* Stream.runCollect(
+          files.stream(rootPath, RepositoryRelativePath.make("large-source.ts")),
+        ).pipe(Effect.orDie),
+      )
+
+      expect(chunks).toHaveLength(2)
+      expect(chunks.every(({ bytes }) => bytes.byteLength <= LOCAL_CHECKOUT_FILE_CHUNK_BYTES)).toBe(
+        true,
+      )
+      expect(Buffer.concat(chunks.map(({ bytes }) => Buffer.from(bytes))).toString("utf8")).toBe(
+        content,
+      )
     }),
   ).pipe(Effect.provide(localCheckoutFilesLayer)),
 )

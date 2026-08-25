@@ -11,6 +11,11 @@ import type {
   E2eReviewLifecycleHold,
 } from "@diffdash/core-rpc/application-rpc"
 import type {
+  CoreCodeWorkspaceFileChunk,
+  CoreCodeWorkspaceFileError,
+  CoreCodeWorkspaceFileRequest,
+} from "@diffdash/core-rpc/code-workspace-rpc"
+import type {
   AppStateReadFailure,
   AppStateGetAdmissionFailure,
   CoreAuthorizeDatabaseOwnershipFailure,
@@ -213,6 +218,12 @@ export class CoreRpcClient extends Context.Service<
     readonly searchReview: (
       request: CoreReviewSearchRequest,
     ) => Stream.Stream<CoreReviewSearchPublication, CoreProgressiveReviewFailure>
+    readonly streamCodeWorkspaceFile: (
+      request: CoreCodeWorkspaceFileRequest,
+    ) => Stream.Stream<
+      CoreCodeWorkspaceFileChunk,
+      CoreCodeWorkspaceFileError | CoreTransportAuthenticationFailure | RpcClientError
+    >
     readonly shutdown: (
       request: HostRequestContext,
     ) => Effect.Effect<
@@ -555,6 +566,10 @@ export const coreRpcClientLayer = (options: CoreRpcClientOptions) => {
         client("Search.scan", request).pipe(
           Stream.provideService(RpcClient.CurrentHeaders, authenticationHeaders),
         )
+      const streamCodeWorkspaceFile = (request: CoreCodeWorkspaceFileRequest) =>
+        client("CodeWorkspace.streamFile", request).pipe(
+          Stream.provideService(RpcClient.CurrentHeaders, authenticationHeaders),
+        )
 
       const replayEvents = Effect.fn("CoreRpcClient.replayEvents")(
         (request: CoreEventReplayRequest) => authenticated(client("CoreEvents.replay", request)),
@@ -591,6 +606,7 @@ export const coreRpcClientLayer = (options: CoreRpcClientOptions) => {
             waitForReviewRange,
             resolveReviewTarget,
             searchReview,
+            streamCodeWorkspaceFile,
             shutdown,
             startWalkthrough,
           }),

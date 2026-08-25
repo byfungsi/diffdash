@@ -12,6 +12,7 @@
     "./channels": "./src/channels.ts",
     "./cli-navigation": "./src/cli-navigation.ts",
     "./code-workspace": "./src/code-workspace.ts",
+    "./code-workspace-stream": "./src/code-workspace-stream.ts",
     "./e2e-review-lifecycle": "./src/e2e-review-lifecycle.ts",
     "./hosted-git": "./src/hosted-git.ts",
     "./ipc": "./src/ipc.ts",

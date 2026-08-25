@@ -108,6 +108,7 @@ const unusedApplicationMethods: Omit<
   waitForReviewRange: () => Effect.die("Not used by bootstrap tests."),
   resolveReviewTarget: () => Effect.die("Not used by bootstrap tests."),
   searchReview: () => Stream.die("Not used by bootstrap tests."),
+  streamCodeWorkspaceFile: () => Stream.die("Not used by bootstrap tests."),
 }
 import { VerifiedCoreArtifact } from "./core-artifact"
 

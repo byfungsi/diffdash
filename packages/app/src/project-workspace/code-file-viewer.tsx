@@ -9,6 +9,7 @@ import type { RepositoryRelativePath } from "@diffdash/domain/repository-path"
 import type { GitCommitSha } from "@diffdash/domain/repository-comparison"
 import type { ReviewRevision } from "@diffdash/domain/review-identity"
 import type { ReviewProjectId } from "@diffdash/domain/review-identity"
+import { isVeryLargeSourceFile } from "@diffdash/domain/large-diff-policy"
 import { Effect, Option } from "effect"
 import { ChevronDown, ChevronUp, Search, X } from "lucide-react"
 import { type KeyboardEvent, useEffect, useEffectEvent, useMemo, useRef, useState } from "react"
@@ -119,6 +120,8 @@ export const CodeFileViewer = ({
   readonly onDefinitionNavigationHandled?: (id: number) => void
 }) => {
   const codeViewRef = useRef<CodeViewHandle<CodeSourceHostAnnotation>>(null)
+  const renderAsPlainText = isVeryLargeSourceFile(contents)
+  const tokenizeMaxLength = renderAsPlainText ? 0 : 100_000
   const scrollRootRef = useRef<HTMLDivElement>(null)
   const surfaceRuntime = useSourceSurfaceRuntime<CodeSurfaceInstance>()
   const publishSurfaceRender = useMemo(
@@ -359,7 +362,10 @@ export const CodeFileViewer = ({
     >
       <CodeViewThemeSync codeThemes={codeThemes} />
       {codeSourceHost.mounts}
-      <div className="relative flex h-full min-h-0 flex-col bg-diff-canvas">
+      <div
+        data-code-render-mode={renderAsPlainText ? "plain" : "highlighted"}
+        className="relative flex h-full min-h-0 flex-col bg-diff-canvas"
+      >
         {searchOpen ? (
           <CodeSearchToolbar
             activeIndex={normalizedActiveMatchIndex}
@@ -390,6 +396,7 @@ export const CodeFileViewer = ({
             theme: codeThemes,
             themeType: colorScheme,
             tokenizeMaxLineLength: 2_000,
+            tokenizeMaxLength,
             unsafeCSS: `
             :host {
               --diffs-bg: var(--diff-canvas);

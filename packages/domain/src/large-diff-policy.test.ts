@@ -3,8 +3,10 @@ import { describe, expect, it } from "@effect/vitest"
 import {
   isVeryLargeDiff,
   isVeryLargeDiffFile,
+  isVeryLargeSourceFile,
   VERY_LARGE_DIFF_CHANGED_LINE_THRESHOLD,
   VERY_LARGE_DIFF_CHARACTER_THRESHOLD,
+  VERY_LARGE_SOURCE_FILE_CHARACTER_THRESHOLD,
 } from "./large-diff-policy"
 
 describe("large diff policy", () => {
@@ -40,6 +42,15 @@ describe("large diff policy", () => {
         patch: "x".repeat(VERY_LARGE_DIFF_CHARACTER_THRESHOLD + 1),
       }),
     ).toBe(true)
+  })
+
+  it("uses plain rendering only above the source-file character threshold", () => {
+    expect(isVeryLargeSourceFile("x".repeat(VERY_LARGE_SOURCE_FILE_CHARACTER_THRESHOLD))).toBe(
+      false,
+    )
+    expect(isVeryLargeSourceFile("x".repeat(VERY_LARGE_SOURCE_FILE_CHARACTER_THRESHOLD + 1))).toBe(
+      true,
+    )
   })
 
   it("applies the same thresholds across an aggregate review", () => {

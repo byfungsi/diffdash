@@ -11,10 +11,19 @@ import type { StartReviewAgentOperationRequest } from "@diffdash/core-rpc/review
 import type { ReviewThreadTarget } from "@diffdash/domain/review-thread"
 import { WalkthroughOperationReviewGeneration } from "@diffdash/domain/walkthrough-operation"
 import { Context, Effect, Layer, Option } from "effect"
+import type { Stream } from "effect"
+import type { CodeWorkspaceError, CodeWorkspaceLeaseId } from "@diffdash/domain/code-workspace"
+import type {
+  LocalCheckoutFileChunk,
+  LocalCheckoutFileReadError,
+} from "@diffdash/domain/local-checkout-file"
+import type { RepositoryRelativePath } from "@diffdash/domain/repository-path"
+import type { ApplicationInstanceId, CoreProcessEpoch } from "@diffdash/core-rpc"
 
 import type { CoreThreadResolutionFailure } from "./core-contract"
 import { CoreEventHub } from "./core-event-hub"
 import { CoreStartupError } from "./core-startup-error"
+import { CodeWorkspaceService } from "./services/code-workspace"
 import { makeAnalyticsOperationHandlers } from "./operations/analytics-operation-handlers"
 import { makeApplicationOperationHandlers } from "./operations/application-operation-handlers"
 import { makeCodeWorkspaceOperationHandlers } from "./operations/code-workspace-operation-handlers"
@@ -51,6 +60,14 @@ export type CoreReviewAgentStartError =
 interface CoreOperationServiceShape {
   readonly start: Effect.Effect<void, CoreStartupError>
   readonly methods: OperationHandlers
+  readonly streamCodeWorkspaceFile: (
+    leaseId: CodeWorkspaceLeaseId,
+    owner: {
+      readonly applicationInstanceId: ApplicationInstanceId
+      readonly processEpoch: CoreProcessEpoch
+    },
+    path: RepositoryRelativePath,
+  ) => Stream.Stream<LocalCheckoutFileChunk, CodeWorkspaceError | LocalCheckoutFileReadError>
   readonly walkthroughs: WalkthroughOperations & {
     readonly resolveGeneration: (
       target: ReviewThreadTarget,
@@ -85,6 +102,7 @@ export const coreOperationLayer = Layer.effect(
     const walkthroughOperationStore = yield* WalkthroughOperationStore
     const walkthroughStore = yield* WalkthroughStore
     const events = yield* CoreEventHub
+    const codeWorkspaces = yield* CodeWorkspaceService
     const reviews = yield* makeReviewResolution
     const walkthroughs = yield* makeWalkthroughOperations(reviews)
     const resolveWalkthroughGeneration = Effect.fn("Core.Walkthroughs.resolveGeneration")(
@@ -180,6 +198,7 @@ export const coreOperationLayer = Layer.effect(
     } satisfies OperationHandlers
 
     return CoreOperationService.of({
+      streamCodeWorkspaceFile: codeWorkspaces.streamFile,
       start: Effect.gen(function* () {
         yield* reviewAgentOperations.recoverInterrupted.pipe(
           Effect.mapError((cause) =>

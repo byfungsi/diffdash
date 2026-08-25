@@ -6,6 +6,7 @@ import { WalkthroughBusinessRpcs } from "./walkthrough-rpc"
 import { ReviewAgentBusinessRpcs, ReviewAgentStartRpc } from "./review-agent-rpc"
 import { CoreApplicationRpcs } from "./application-rpc"
 import { CoreProgressiveReviewRpcs } from "./review-session-rpc"
+import { CoreCodeWorkspaceFileRpcs } from "./code-workspace-rpc"
 import * as RpcGroup from "effect/unstable/rpc/RpcGroup"
 
 /** Private native RPC header carrying the one-time Core transport credential. */
@@ -85,6 +86,11 @@ export const AuthenticatedProgressiveReviewRpcs = CoreProgressiveReviewRpcs.midd
   CoreTransportAuthenticationMiddleware,
 )
 
+/** Authenticated streamed Code workspace file methods. */
+export const AuthenticatedCodeWorkspaceFileRpcs = CoreCodeWorkspaceFileRpcs.middleware(
+  CoreTransportAuthenticationMiddleware,
+)
+
 /** Authenticated control and durable review-agent server group. */
 export const AuthenticatedCoreReviewAgentServerRpcs = AuthenticatedCoreControlRpcs.merge(
   AuthenticatedReviewAgentBusinessRpcs,
@@ -103,6 +109,7 @@ export const AuthenticatedCoreApplicationRpcs = AuthenticatedCoreControlRpcs.mer
   .merge(AuthenticatedAppStateUpdateRpcs)
   .merge(AuthenticatedWalkthroughBusinessRpcs)
   .merge(AuthenticatedReviewAgentBusinessRpcs)
+  .merge(AuthenticatedCodeWorkspaceFileRpcs)
   .merge(AuthenticatedProgressiveReviewRpcs)
   .merge(AuthenticatedCoreStateDeliveryRpcs)
 

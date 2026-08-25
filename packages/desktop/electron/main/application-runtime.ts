@@ -7,6 +7,10 @@ import {
 } from "@diffdash/core"
 import type { DiffDashApi } from "@diffdash/protocol/api"
 import type { ProgressiveReviewApi } from "@diffdash/protocol/review-session"
+import type {
+  CodeWorkspaceFileChunk,
+  CodeWorkspaceFileStreamRequest,
+} from "@diffdash/protocol/code-workspace-stream"
 import type { WalkthroughOperationBridgeHint } from "@diffdash/protocol/walkthrough-operation-state"
 
 type ApplicationCoreOperation<Method extends CoreMethodType> = (
@@ -143,5 +147,10 @@ export interface ApplicationRuntime {
     readonly replayHints: () => Promise<readonly WalkthroughOperationBridgeHint[]>
   }
   readonly progressiveReviews: ProgressiveReviewApi
+  readonly codeWorkspaceFiles: {
+    readonly stream: (
+      request: CodeWorkspaceFileStreamRequest,
+    ) => AsyncIterable<CodeWorkspaceFileChunk>
+  }
   readonly dispose: () => Promise<void>
 }

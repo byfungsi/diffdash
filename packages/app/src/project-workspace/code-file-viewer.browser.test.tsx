@@ -11,6 +11,7 @@ import {
 import { ReviewRevision } from "@diffdash/domain/review-identity"
 import { RepositoryRelativePath } from "@diffdash/domain/repository-path"
 import { ReviewProjectId } from "@diffdash/domain/review-identity"
+import { VERY_LARGE_SOURCE_FILE_CHARACTER_THRESHOLD } from "@diffdash/domain/large-diff-policy"
 import { Option } from "effect"
 import { flushSync } from "react-dom"
 import { createRoot, type Root } from "react-dom/client"
@@ -51,6 +52,30 @@ afterEach(() => {
 })
 
 describe("CodeFileViewer", () => {
+  it("disables whole-file syntax highlighting for very large source files", async () => {
+    const container = document.createElement("div")
+    container.style.height = "480px"
+    container.style.width = "800px"
+    document.body.append(container)
+    root = createRoot(container)
+    root.render(
+      <CodeFileViewer
+        codeThemes={DEFAULT_CODE_THEME_PREFERENCES}
+        colorScheme="light"
+        contents={"x".repeat(VERY_LARGE_SOURCE_FILE_CHARACTER_THRESHOLD + 1)}
+        path={RepositoryRelativePath.make("src/generated-large.ts")}
+        projectId={projectId}
+        revision={revision}
+      />,
+    )
+
+    await vi.waitFor(() => {
+      expect(
+        container.querySelector("[data-code-render-mode]")?.getAttribute("data-code-render-mode"),
+      ).toBe("plain")
+    })
+  })
+
   it("preserves another runtime's search highlights when one viewer is removed", async () => {
     const container = document.createElement("div")
     container.style.height = "480px"

@@ -8,6 +8,7 @@ import {
   ProjectRevisionCodeWorkspaceTarget,
 } from "@diffdash/domain/code-workspace"
 import { CodeLineChangeRange } from "@diffdash/domain/code-line-change"
+import { LocalCheckoutFileChunk } from "@diffdash/domain/local-checkout-file"
 import { LocalRepositorySource } from "@diffdash/domain/git-provider"
 import {
   LastCommitComparison,
@@ -43,7 +44,7 @@ import {
   LanguageAdapterDescriptor,
   type LanguageAdapterRegistration,
 } from "@diffdash/language-provider"
-import { Deferred, Effect, Fiber, Layer, Option, Ref, Result } from "effect"
+import { Deferred, Effect, Fiber, Layer, Option, Ref, Result, Stream } from "effect"
 import { TestClock } from "effect/testing"
 
 import { AgentWorkspaceResources } from "../agent-workspace-resources"
@@ -565,6 +566,13 @@ describe("CodeWorkspaceService", () => {
             read: (_root, path) =>
               Effect.succeed(
                 CodeWorkspaceFileContent.make({ path, content: "export const a = 1" }),
+              ),
+            stream: (_root, path) =>
+              Stream.succeed(
+                LocalCheckoutFileChunk.make({
+                  path,
+                  bytes: new TextEncoder().encode("export const a = 1"),
+                }),
               ),
           }),
         ),

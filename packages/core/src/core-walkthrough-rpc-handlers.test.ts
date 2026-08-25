@@ -64,6 +64,7 @@ import {
   Ref,
   Schema,
   Scope,
+  Stream,
 } from "effect"
 import * as RpcClient from "effect/unstable/rpc/RpcClient"
 import * as RpcSerialization from "effect/unstable/rpc/RpcSerialization"
@@ -248,6 +249,7 @@ const unavailableMethods = {
 const operationsLayer = Layer.succeed(
   CoreOperationService,
   CoreOperationService.of({
+    streamCodeWorkspaceFile: () => Stream.die("Not used by walkthrough tests."),
     start: Effect.void,
     methods: unavailableMethods,
     reviewAgents: unusedReviewAgents,
@@ -443,6 +445,7 @@ describe("Core walkthrough RPC handlers", () => {
         const cancellationOperationsLayer = Layer.succeed(
           CoreOperationService,
           CoreOperationService.of({
+            streamCodeWorkspaceFile: () => Stream.die("Not used by walkthrough tests."),
             start: Effect.void,
             methods: unavailableMethods,
             reviewAgents: unusedReviewAgents,
@@ -529,6 +532,7 @@ describe("Core walkthrough RPC handlers", () => {
       const startOperationsLayer = Layer.succeed(
         CoreOperationService,
         CoreOperationService.of({
+          streamCodeWorkspaceFile: () => Stream.die("Not used by walkthrough tests."),
           start: Effect.void,
           methods: unavailableMethods,
           reviewAgents: unusedReviewAgents,
@@ -619,6 +623,7 @@ describe("Core walkthrough RPC handlers", () => {
         Effect.gen(function* () {
           const workers = yield* FiberSet.make<void, never>()
           return CoreOperationService.of({
+            streamCodeWorkspaceFile: () => Stream.die("Not used by walkthrough tests."),
             start: Effect.void,
             methods: unavailableMethods,
             reviewAgents: unusedReviewAgents,
@@ -720,6 +725,7 @@ describe("Core walkthrough RPC handlers", () => {
       const pressureOperationsLayer = Layer.succeed(
         CoreOperationService,
         CoreOperationService.of({
+          streamCodeWorkspaceFile: () => Stream.die("Not used by walkthrough tests."),
           start: Effect.void,
           methods: unavailableMethods,
           reviewAgents: unusedReviewAgents,

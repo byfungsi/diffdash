@@ -8,9 +8,11 @@ import {
   ReviewThreadAnchorInvalidError,
   ReviewThreadRevisionChangedError,
 } from "@diffdash/domain/review-thread"
+import { CodeWorkspaceError } from "@diffdash/domain/code-workspace"
 import { Match, Option, Schema } from "effect"
 
-type TransportFailure = Schema.Json | object | bigint | symbol | undefined
+/** Untrusted failure value accepted by the Electron public-error boundary. */
+export type TransportFailure = Schema.Json | object | bigint | symbol | undefined
 
 /** Adapts one main-process failure to bounded renderer-safe protocol data. */
 export const toPublicIpcError = <A>(error: A, operation: string) => {
@@ -28,6 +30,67 @@ export const toPublicIpcError = <A>(error: A, operation: string) => {
         "INVALID_REVIEW_ANCHOR",
         "Review thread anchor does not exist in the expected review revision.",
         operation,
+      ),
+    ),
+    Match.when(Schema.is(CodeWorkspaceError), (failure) =>
+      Match.value(failure.reason).pipe(
+        Match.when("invalidPath", () =>
+          transportError(
+            "CODE_WORKSPACE_INVALID_PATH",
+            "The requested repository path is invalid.",
+            operation,
+          ),
+        ),
+        Match.when("leaseExpired", () =>
+          transportError(
+            "CODE_WORKSPACE_LEASE_EXPIRED",
+            "The Code workspace lease expired.",
+            operation,
+          ),
+        ),
+        Match.when("leaseNotFound", () =>
+          transportError(
+            "CODE_WORKSPACE_LEASE_NOT_FOUND",
+            "The Code workspace lease is no longer available.",
+            operation,
+          ),
+        ),
+        Match.when("repositoryNotFound", () =>
+          transportError(
+            "CODE_WORKSPACE_REPOSITORY_NOT_FOUND",
+            "The repository is no longer available.",
+            operation,
+          ),
+        ),
+        Match.when("repositoryUnavailable", () =>
+          transportError(
+            "CODE_WORKSPACE_REPOSITORY_UNAVAILABLE",
+            "The linked repository checkout is unavailable.",
+            operation,
+          ),
+        ),
+        Match.when("revisionUnavailable", () =>
+          transportError(
+            "CODE_WORKSPACE_REVISION_UNAVAILABLE",
+            "Git could not resolve the repository's current revision.",
+            operation,
+          ),
+        ),
+        Match.when("snapshotUnavailable", () =>
+          transportError(
+            "CODE_WORKSPACE_SNAPSHOT_UNAVAILABLE",
+            "The review snapshot is no longer available.",
+            operation,
+          ),
+        ),
+        Match.when("workspaceUnavailable", () =>
+          transportError(
+            "CODE_WORKSPACE_UNAVAILABLE",
+            "The Code workspace could not be prepared.",
+            operation,
+          ),
+        ),
+        Match.exhaustive,
       ),
     ),
     Match.when(

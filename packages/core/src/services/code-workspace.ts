@@ -14,7 +14,11 @@ import {
   CodeWorkspaceTarget,
   type LocalReviewSnapshotCodeWorkspaceTarget,
 } from "@diffdash/domain/code-workspace"
-import { LocalCheckoutFileReadResult } from "@diffdash/domain/local-checkout-file"
+import {
+  type LocalCheckoutFileChunk,
+  type LocalCheckoutFileReadError,
+  LocalCheckoutFileReadResult,
+} from "@diffdash/domain/local-checkout-file"
 import { LocalReviewComparison } from "@diffdash/domain/local-review"
 import { AgentRunId } from "@diffdash/domain/agent-run-id"
 import {
@@ -52,6 +56,7 @@ import {
   Schedule,
   Schema,
   Scope,
+  Stream,
 } from "effect"
 
 import { AgentWorkspaceResources } from "../agent-workspace-resources"
@@ -160,6 +165,11 @@ export class CodeWorkspaceService extends Context.Service<
       import("@diffdash/domain/code-workspace").CodeWorkspaceFileReadResult,
       CodeWorkspaceError
     >
+    readonly streamFile: (
+      leaseId: CodeWorkspaceLeaseId,
+      owner: CodeWorkspaceOwner,
+      path: RepositoryRelativePath,
+    ) => Stream.Stream<LocalCheckoutFileChunk, CodeWorkspaceError | LocalCheckoutFileReadError>
     readonly changes: (
       leaseId: CodeWorkspaceLeaseId,
       owner: CodeWorkspaceOwner,
@@ -299,18 +309,14 @@ export class CodeWorkspaceService extends Context.Service<
             `${registration.descriptor.displayName} does not support ${operationName}.`,
           )
         }
-        const source = yield* checkoutFiles.read(session.localPath, path)
-        yield* LocalCheckoutFileReadResult.match<Effect.Effect<void, LanguageOperationError>>(
-          source,
-          {
-            content: () => Effect.void,
-            rejected: () =>
-              languageFailure(
-                operationName,
-                "serverUnavailable",
-                "The source file is unavailable for language analysis.",
-              ),
-          },
+        yield* Stream.runDrain(checkoutFiles.stream(session.localPath, path)).pipe(
+          Effect.mapError(() =>
+            LanguageOperationError.make({
+              operation: operationName,
+              reason: "serverUnavailable",
+              message: "The source file is unavailable for language analysis.",
+            }),
+          ),
         )
         const adapter = yield* Option.match(
           HashMap.get(session.languageSessions, registration.descriptor.id),
@@ -715,6 +721,12 @@ export class CodeWorkspaceService extends Context.Service<
             },
           })
         }),
+        streamFile: (leaseId, owner, path) =>
+          Stream.unwrap(
+            getSession(leaseId, owner).pipe(
+              Effect.map((session) => checkoutFiles.stream(session.localPath, path)),
+            ),
+          ),
         changes: Effect.fn("CodeWorkspaceService.changes")(function* (leaseId, owner) {
           const session = yield* getSession(leaseId, owner)
           return yield* Option.match(session.workingTreePath, {
