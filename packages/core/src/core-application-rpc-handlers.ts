@@ -25,6 +25,7 @@ import { CoreLifecycle } from "./core-lifecycle"
 import { CoreRuntimeServices } from "./core-runtime-services"
 import type { OperationHandlers } from "./operations/operation-handlers"
 import { ReviewContextError, type ReviewContextFailureCategory } from "./services/git-provider"
+import { OpenCodeConnectionError } from "./services/opencode-connection"
 
 type ApplicationRpcRequest<Method extends CoreMethodType> = HostRequestContext &
   CoreMethodInput<Method>
@@ -179,6 +180,18 @@ export const makeCoreApplicationOperationFailure = <Method extends CoreMethodTyp
       code: CoreApplicationFailureCode.make(details.code),
       retryClass: details.retryClass,
       safeMessage: details.safeMessage,
+    }
+  }
+  if (Schema.is(OpenCodeConnectionError)(error)) {
+    return {
+      _tag: "CoreApplicationFailure",
+      applicationInstanceId: request.applicationInstanceId,
+      processEpoch: request.processEpoch,
+      requestId: request.requestId,
+      method,
+      code: CoreApplicationFailureCode.make(error.code),
+      retryClass: "userAction",
+      safeMessage: error.safeMessage,
     }
   }
   return {

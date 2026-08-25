@@ -165,7 +165,17 @@ describe("comment operation handlers", () => {
             path.startsWith("/api/session/")
               ? JSON.stringify({ data: { id: sessionId, location: { directory } } })
               : JSON.stringify({ _tag: "AgentNotFoundError" }),
-          Post: () => JSON.stringify({ data: { id: "msg_example", sessionID: sessionId } }),
+          Post: () =>
+            JSON.stringify({
+              data: {
+                id: "msg_example",
+                sessionID: sessionId,
+                timeCreated: 1,
+                type: "user",
+                payload: { text: "accepted" },
+                delivery: "queue",
+              },
+            }),
         }),
       ),
     )

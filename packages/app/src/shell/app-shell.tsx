@@ -420,7 +420,7 @@ export function AppShell() {
         setVisitedSurfaces((surfaces) =>
           HashSet.add(
             surfaces,
-            `${projectLocation.surface}:${projectLocation.registrationToken.reactKey}`,
+            `${projectLocation.repo.id}:${projectLocation.surface}:${projectLocation.registrationToken.reactKey}`,
           ),
         )
         setActiveActivity(Option.some(projectLocation.activityId))
@@ -1277,20 +1277,29 @@ export function AppShell() {
           }}
         >
           {currentHistoryLocationAvailable &&
-            projectSurfaces.map((surface) =>
-              surface.surface === effectiveActiveSurface ||
-              (surface.keepMountedAfterVisit === true &&
-                HashSet.has(
-                  visitedSurfaces,
-                  `${surface.surface}:${surface.ownerRegistrationToken.reactKey}`,
-                )) ? (
-                <RegisteredProjectSurface
+            projectSurfaces.map((surface) => {
+              const surfaceActive = surface.surface === effectiveActiveSurface
+              return surfaceActive ||
+                (surface.keepMountedAfterVisit === true &&
+                  HashSet.has(
+                    visitedSurfaces,
+                    `${effectiveSelectedRepo.id}:${surface.surface}:${surface.ownerRegistrationToken.reactKey}`,
+                  )) ? (
+                <div
                   key={`${effectiveSelectedRepo.id}:${surface.id}:${surface.ownerRegistrationToken.reactKey}`}
-                  contributions={projectSurfaces}
-                  surface={surface.surface}
-                />
-              ) : null,
-            )}
+                  data-project-surface={surface.surface}
+                  data-project-surface-active={surfaceActive ? "true" : "false"}
+                  className="h-full min-h-0"
+                  hidden={!surfaceActive}
+                  inert={!surfaceActive}
+                >
+                  <RegisteredProjectSurface
+                    contributions={projectSurfaces}
+                    surface={surface.surface}
+                  />
+                </div>
+              ) : null
+            })}
         </ProjectSurfaceRuntimeProvider>
       </ProjectRepositoryCapabilityProvider>
     )

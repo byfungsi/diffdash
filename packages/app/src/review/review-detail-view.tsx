@@ -314,6 +314,7 @@ const reviewDiffHighlighterOptions = (
 
 /** Source-neutral review detail composition with its coupled ephemeral interaction state. */
 export const ReviewDetailView = ({
+  active,
   activeActivity,
   activities,
   environment,
@@ -323,6 +324,7 @@ export const ReviewDetailView = ({
   surfaceContribution,
   onActiveActivityChange,
 }: {
+  readonly active: boolean
   readonly activeActivity: ProjectWorkspaceActivityId
   readonly activities: readonly OwnedExtensionContribution<ProjectActivityContribution>[]
   readonly environment: ReviewDetailEnvironment
@@ -400,6 +402,7 @@ export const ReviewDetailView = ({
     idle: () => false,
   })
   const diffScrollContainerRef = useRef<HTMLDivElement>(null)
+  const retainedDiffScrollTopRef = useRef(0)
   const reviewDiffContentRef = useRef<HTMLElement>(null)
   const stickyReviewChromeRef = useRef<HTMLDivElement>(null)
   const reviewSearchInputRef = useRef<HTMLInputElement>(null)
@@ -461,10 +464,15 @@ export const ReviewDetailView = ({
   const reviewSearchTotalMatches = reviewSearchToolbar.totalMatches
   const activeReviewSearchIndex = reviewSearchToolbar.activeGlobalIndex
   useEffect(() => {
+    if (active) return
+    setGoToPaletteOpen(false)
+    setActionPaletteOpen(false)
+  }, [active])
+  useEffect(() => {
     if (quickNavigationRequestRef.current === quickNavigationRequest) return
     quickNavigationRequestRef.current = quickNavigationRequest
-    setGoToPaletteOpen(true)
-  }, [quickNavigationRequest])
+    if (active) setGoToPaletteOpen(true)
+  }, [active, quickNavigationRequest])
   useEffect(() => {
     const previouslyExpanded = previousSidebarExpandedRef.current
     previousSidebarExpandedRef.current = sidebarExpanded
@@ -520,12 +528,15 @@ export const ReviewDetailView = ({
   }, [manifest.snapshotId, progressiveInventory, reviewNavigationAnchors])
   const setDiffScrollContainer = useStableCallback<(node: HTMLDivElement | null) => void>(
     (node) => {
-      diffScrollContainerRef.current = node
       if (node === null) {
+        retainedDiffScrollTopRef.current = diffScrollContainerRef.current?.scrollTop ?? 0
+        diffScrollContainerRef.current = null
         diffVirtualizer.cleanUp()
         return
       }
 
+      diffScrollContainerRef.current = node
+      node.scrollTop = retainedDiffScrollTopRef.current
       const content = node.firstElementChild
       diffVirtualizer.setup(node, isHTMLElement(content) ? content : undefined)
     },
@@ -1344,6 +1355,7 @@ export const ReviewDetailView = ({
   }, [sourceOperations.decision])
 
   useEffect(() => {
+    if (!active) return undefined
     const handleReviewShortcut = (event: KeyboardEvent) => {
       const key = event.key.toLowerCase()
       if (navigationLocked && key === "escape") {
@@ -1451,6 +1463,7 @@ export const ReviewDetailView = ({
     window.addEventListener("keydown", handleReviewShortcut, true)
     return () => window.removeEventListener("keydown", handleReviewShortcut, true)
   }, [
+    active,
     actionPaletteOpen,
     activeActivity,
     activePane,
@@ -1551,7 +1564,8 @@ export const ReviewDetailView = ({
         revision: comparisonReview.target.headSha,
       }),
   })
-  const openRepositoryFile = (path: RepositoryRelativePath) =>
+  const openRepositoryFile = (path: RepositoryRelativePath) => {
+    onSelectPath(path)
     onOpenCodeFile(
       path,
       codeWorkspaceTarget,
@@ -1562,6 +1576,7 @@ export const ReviewDetailView = ({
         ),
       ),
     )
+  }
   const approvePullRequest = async () => {
     const decisionOperations = Match.valueTags(sourceOperations.decision, {
       supported: (operations) => Option.some(operations),
@@ -1815,7 +1830,11 @@ export const ReviewDetailView = ({
                       {review.title}
                     </span>
                   </div>
-                  <DiffViewSettingsMenu settings={aiSettings} onChange={onAISettingsChange} />
+                  <DiffViewSettingsMenu
+                    active={active}
+                    settings={aiSettings}
+                    onChange={onAISettingsChange}
+                  />
                 </div>
                 <div className="sr-only" aria-live="polite">
                   {Option.getOrElse(
@@ -2032,10 +2051,12 @@ export const ReviewDetailView = ({
         onOpenChange={setActionPaletteOpen}
       />
       <WorkbenchContextActions>
-        <ReviewActionsMenu items={reviewActionItems} />
+        {active ? <ReviewActionsMenu items={reviewActionItems} /> : null}
       </WorkbenchContextActions>
     </>
   )
+
+  if (!active) return null
 
   return (
     <WorkerPoolContextProvider
@@ -2137,13 +2158,18 @@ const reviewActionIcon = (id: string) => {
 }
 
 const DiffViewSettingsMenu = ({
+  active,
   settings,
   onChange,
 }: {
+  readonly active: boolean
   readonly settings: AISettings
   readonly onChange: (settings: AISettings) => void
 }) => {
   const [open, setOpen] = useState(false)
+  useEffect(() => {
+    if (!active) setOpen(false)
+  }, [active])
 
   return (
     <DropdownMenu.Root open={open} onOpenChange={setOpen}>

@@ -45,6 +45,9 @@ import {
 /** Registered Review surface entrypoint resolved from the trusted extension registry. */
 export const ReviewExtensionSurface = () => {
   const host = useProjectSurfaceRuntime()
+  const retainedActivityRef = useRef(host.activeActivity)
+  const active = host.activeSurface === "review"
+  if (active) retainedActivityRef.current = host.activeActivity
   const environment = useReviewSurfaceEnvironment(host.colorScheme)
   const navigation = useReviewNavigationController()
   const captureAnalytics = useCaptureAnalytics()
@@ -90,17 +93,21 @@ export const ReviewExtensionSurface = () => {
   const refreshWorkingTree = useAtomRefresh(workingTreeAtom)
   const agentCatalogResult = useAtomValue(agentProviderCatalogAtom)
   const agentCatalog = AsyncResult.getOrElse(agentCatalogResult, () => EMPTY_AGENT_PROVIDER_CATALOG)
-  useKeyboardShortcut("review.toggleSidebar", () => {
-    const activeElement = document.activeElement
-    if (
-      host.sidebarExpanded &&
-      activeElement !== null &&
-      activeElement.closest("[data-review-sidebar-collapse-region]") !== null
-    ) {
-      document.querySelector<HTMLButtonElement>("[data-workbench-sidebar-toggle]")?.focus()
-    }
-    host.setSidebarExpanded(!host.sidebarExpanded)
-  })
+  useKeyboardShortcut(
+    "review.toggleSidebar",
+    () => {
+      const activeElement = document.activeElement
+      if (
+        host.sidebarExpanded &&
+        activeElement !== null &&
+        activeElement.closest("[data-review-sidebar-collapse-region]") !== null
+      ) {
+        document.querySelector<HTMLButtonElement>("[data-workbench-sidebar-toggle]")?.focus()
+      }
+      host.setSidebarExpanded(!host.sidebarExpanded)
+    },
+    { enabled: active },
+  )
   if (reviewContribution === undefined || reviewSurfaceContribution === undefined) return null
   const selectReview = (next: NonNullable<typeof selectedReviewTarget>) => {
     const activity = host.activities.find(
@@ -201,7 +208,8 @@ export const ReviewExtensionSurface = () => {
     <ReviewSurfaceCapabilityProvider>
       <PersistentReviewSurfaceProviders>
         <ReviewScreen
-          activeActivity={host.activeActivity}
+          active={active}
+          activeActivity={retainedActivityRef.current}
           activities={host.activities}
           projectId={host.repo.id}
           detailEnvironment={{
