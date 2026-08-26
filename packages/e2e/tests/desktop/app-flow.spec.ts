@@ -372,6 +372,8 @@ test("covers finished Home to Review flow with fake CLI fixtures", async ({
     await expect(openPullRequest).toBeVisible()
     await openPullRequest.click()
 
+    await expect(window.locator("[data-hosted-review-detail]")).toContainText("Request review flow")
+    await window.getByRole("button", { name: "Open diff" }).click()
     await expect(window.locator("[data-review-editor-header]")).toContainText("Request review flow")
     await expect(window.getByRole("button", { name: "Back" })).toBeVisible()
     await expect(window.getByRole("button", { name: "Collapse sidebar" })).toBeVisible()
@@ -571,6 +573,10 @@ test("covers finished Home to Review flow with fake CLI fixtures", async ({
       }),
     ).toEqual({ appearance: "dark", provider: "codex", telemetryEnabled: false })
     await restartedWindow.getByRole("button", { name: "Open project byfungsi/diffdash" }).click()
+    await expect(restartedWindow.locator("[data-hosted-review-detail]")).toContainText(
+      "Request review flow",
+    )
+    await restartedWindow.getByRole("button", { name: "Open diff" }).click()
     await expect(restartedWindow.locator("[data-review-editor-header]")).toContainText(
       "Request review flow",
     )
@@ -2547,13 +2553,17 @@ if (args[0] === "pr" && args[1] === "view") {
 
   console.log(JSON.stringify({
     ...pullRequest,
+    comments: [],
     commits: [],
     files: [{
       additions: 1,
       changeType: "modified",
       deletions: 1,
       path: "src/app.tsx"
-    }]
+    }],
+    mergeable: "MERGEABLE",
+    mergeStateStatus: "CLEAN",
+    reviews: []
   }))
   process.exit(0)
 }
