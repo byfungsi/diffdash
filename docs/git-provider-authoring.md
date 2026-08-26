@@ -54,7 +54,19 @@ Implement `diagnose` and only advertise operations the registration actually sup
 
 - Repository search and search scopes.
 - Assigned and repository review listing.
-- Review detail, diff, immutable revisions, and decisions.
+- Review detail, diff, immutable revisions, and decision lookup.
+- Review submission, closure, and merge as independent capabilities. Review submissions carry a
+  provider-neutral decision plus a Markdown body; merges use an explicit `merge`, `squash`, or
+  `rebase` method, the immutable expected head revision, and an explicit rules-bypass choice so
+  adapters never prompt interactively. Advertise `reviewMergeBypass` independently only when the
+  provider can perform privileged merges; it requires `reviewMerge` support.
+- Hosted review checks as an independent read capability. Providers own check retrieval, status
+  normalization, and details URLs; provider-specific workflow, CLI, and URL concepts must not cross
+  the `GitProviderRegistration` boundary.
+- Merge readiness is provider-normalized on `HostedReviewDetail` as `ready`, `blocked`,
+  `conflicting`, `behind`, `checking`, or `unavailable`, with a display-safe reason. Branch updates
+  are a separate `reviewBranchUpdates` capability and must merge the base branch without rewriting
+  review history or prompting interactively.
 - Repository, file, and review URLs.
 - Remote workspace bootstrap and checkout specifications.
 
@@ -84,6 +96,11 @@ composition proves the one-package plus one-registration path.
 - Run `gitProviderConformance` from `@diffdash/git-provider/testing` with deterministic remote,
   namespace, repository, and review fixtures.
 - Unit test provider-specific parsing, diagnostics, errors, and every advertised capability.
+- For CLI-backed review mutations, assert exact argument arrays for each supported decision, normal
+  and rules-bypassing merge method, and branch update, including the expected-head guard, review
+  bodies, and self-hosted repository targeting.
+- For hosted checks, cover every provider status mapping, data-bearing nonzero exits, malformed
+  required fields, and unsupported-capability behavior.
 - Add a desktop or packaged E2E smoke flow when composition, persistence, renderer vocabulary, or
   remote workspace behavior changes.
 - Use fake provider clients and CLI binaries. Tests must not require credentials, local auth, or

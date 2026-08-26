@@ -9,7 +9,10 @@ import {
   HostedRepositoryLocator,
   ResolvedHostedRepository,
   HostedReviewDetail,
+  HostedReviewCheck,
+  HostedReviewMergeMethod,
   HostedReviewLocator,
+  HostedReviewSubmission,
   HostedReviewSummary,
   ReviewDecision,
   ReviewRevision,
@@ -42,9 +45,14 @@ export {
   ProviderRepositoryId,
   ResolvedHostedRepository,
   HostedReviewDetail,
+  HostedReviewCheck,
+  HostedReviewMergeMethod,
+  HostedReviewMergeState,
   HostedReviewLocator,
+  HostedReviewSubmission,
   HostedReviewNumber,
   HostedReviewSummary,
+  HostedReviewComment,
   ProviderActor,
   ProviderActorId,
   RepositoryNamespace,
@@ -160,6 +168,12 @@ export interface GitProviderRegistration {
   readonly getReview: (
     review: HostedReviewLocator,
   ) => Effect.Effect<HostedReviewDetail, GitProviderOperationError>
+  readonly listReviewChecks?: (
+    review: HostedReviewLocator,
+  ) => Effect.Effect<readonly HostedReviewCheck[], GitProviderOperationError>
+  readonly updateReviewBranch?: (
+    review: HostedReviewLocator,
+  ) => Effect.Effect<void, GitProviderOperationError>
   /** Opens the bounded source for one hosted review without materializing a complete diff string. */
   readonly getReviewDiffSource: (
     review: HostedReviewLocator,
@@ -169,7 +183,16 @@ export interface GitProviderRegistration {
   ) => Effect.Effect<ReviewDecision, GitProviderOperationError>
   readonly submitReviewDecision: (
     review: HostedReviewLocator,
-    decision: ReviewDecision,
+    submission: HostedReviewSubmission,
+  ) => Effect.Effect<void, GitProviderOperationError>
+  readonly closeReview: (
+    review: HostedReviewLocator,
+  ) => Effect.Effect<void, GitProviderOperationError>
+  readonly mergeReview: (
+    review: HostedReviewLocator,
+    method: HostedReviewMergeMethod,
+    bypassRules: boolean,
+    expectedHeadRevision: ReviewRevision,
   ) => Effect.Effect<void, GitProviderOperationError>
   readonly repositoryUrl: (
     repository: HostedRepositoryLocator,
@@ -249,6 +272,7 @@ const InvalidRegistrationProviderId = GitProviderId.make("invalid-provider")
 const PublishingTools = Schema.Array(Schema.String.pipe(Schema.check(Schema.isMinLength(1))))
 const RepositoryResults = Schema.Array(HostedRepository)
 const ReviewSummaryResults = Schema.Array(HostedReviewSummary)
+const ReviewCheckResults = Schema.Array(HostedReviewCheck)
 const SearchScopeResults = Schema.Array(GitRepositorySearchScope)
 
 const providerResultError = (providerId: GitProviderId, operation: string, message: string) =>
@@ -308,6 +332,13 @@ const validateRegistration = (registration: GitProviderRegistration) =>
       Effect.mapError(() => malformedResult(InvalidRegistrationProviderId, "register.descriptor")),
     )
     const providerId = descriptor.id
+    if (descriptor.capabilities.reviewMergeBypass && !descriptor.capabilities.reviewMerge) {
+      return yield* providerResultError(
+        providerId,
+        "register.descriptor",
+        "Provider cannot support review rule bypass without review merge",
+      )
+    }
     const publishingTools = yield* decodeResult(
       providerId,
       "register.publishingTools",
@@ -317,10 +348,14 @@ const validateRegistration = (registration: GitProviderRegistration) =>
     const listSearchScopes = registration.listSearchScopes
     const listAssignedReviews = registration.listAssignedReviews
     const resolveRepository = registration.resolveRepository
+    const listReviewChecks = registration.listReviewChecks
+    const updateReviewBranch = registration.updateReviewBranch
     type OptionalRegistrationMethod =
       | "resolveRepository"
       | "listSearchScopes"
       | "listAssignedReviews"
+      | "listReviewChecks"
+      | "updateReviewBranch"
     const optionalRegistration: {
       [Key in OptionalRegistrationMethod]?: Exclude<GitProviderRegistration[Key], undefined>
     } = {}
@@ -358,6 +393,28 @@ const validateRegistration = (registration: GitProviderRegistration) =>
             results.every(({ locator }) => locator.repository.providerId === providerId)
               ? Effect.succeed(results)
               : wrongProviderResult(providerId, "listAssignedReviews"),
+          ),
+        )
+    }
+    if (listReviewChecks !== undefined) {
+      optionalRegistration.listReviewChecks = (review) =>
+        requireReviewProvider(providerId, "listReviewChecks", review).pipe(
+          Effect.andThen(
+            invokeProvider(providerId, "listReviewChecks", () => listReviewChecks(review)),
+          ),
+          Effect.flatMap((results) =>
+            decodeResult(providerId, "listReviewChecks", ReviewCheckResults, results),
+          ),
+        )
+    }
+    if (updateReviewBranch !== undefined) {
+      optionalRegistration.updateReviewBranch = (review) =>
+        requireReviewProvider(providerId, "updateReviewBranch", review).pipe(
+          Effect.andThen(
+            invokeProvider(providerId, "updateReviewBranch", () => updateReviewBranch(review)),
+          ),
+          Effect.flatMap((result) =>
+            decodeResult(providerId, "updateReviewBranch", Schema.Void, result),
           ),
         )
     }
@@ -469,16 +526,32 @@ const validateRegistration = (registration: GitProviderRegistration) =>
             decodeResult(providerId, "getReviewDecision", ReviewDecision, result),
           ),
         ),
-      submitReviewDecision: (review, decision) =>
+      submitReviewDecision: (review, submission) =>
         requireReviewProvider(providerId, "submitReviewDecision", review).pipe(
           Effect.andThen(
             invokeProvider(providerId, "submitReviewDecision", () =>
-              registration.submitReviewDecision(review, decision),
+              registration.submitReviewDecision(review, submission),
             ),
           ),
           Effect.flatMap((result) =>
             decodeResult(providerId, "submitReviewDecision", Schema.Void, result),
           ),
+        ),
+      closeReview: (review) =>
+        requireReviewProvider(providerId, "closeReview", review).pipe(
+          Effect.andThen(
+            invokeProvider(providerId, "closeReview", () => registration.closeReview(review)),
+          ),
+          Effect.flatMap((result) => decodeResult(providerId, "closeReview", Schema.Void, result)),
+        ),
+      mergeReview: (review, method, bypassRules, expectedHeadRevision) =>
+        requireReviewProvider(providerId, "mergeReview", review).pipe(
+          Effect.andThen(
+            invokeProvider(providerId, "mergeReview", () =>
+              registration.mergeReview(review, method, bypassRules, expectedHeadRevision),
+            ),
+          ),
+          Effect.flatMap((result) => decodeResult(providerId, "mergeReview", Schema.Void, result)),
         ),
       repositoryUrl: (repository) =>
         requireRepositoryProvider(providerId, "repositoryUrl", repository).pipe(

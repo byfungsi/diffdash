@@ -1,6 +1,12 @@
 import { RepositoryCheckout } from "@diffdash/domain/repository"
-import { Array as EffectArray, HashMap, HashSet, Match, Option, Order } from "effect"
-import { type ReactNode, useRef } from "react"
+import {
+  makeHostedReviewKey,
+  type HostedReviewCheck,
+  type HostedReviewDetail,
+  type HostedReviewSummary,
+} from "@diffdash/domain/git-provider"
+import { Array as EffectArray, Cause, HashMap, HashSet, Match, Option, Order } from "effect"
+import { type ReactNode, useEffect, useEffectEvent, useRef, useState } from "react"
 import { useAtomRefresh, useAtomValue } from "@effect/atom-react"
 import { AsyncResult } from "effect/unstable/reactivity"
 
@@ -15,6 +21,8 @@ import { useProjectSurfaceRuntime } from "../project-surface-runtime"
 import { providersAtom, repositoriesAtom } from "@/repositories/atoms"
 import {
   hostedReviewManifestAtom,
+  hostedReviewChecksAtom,
+  hostedReviewDetailAtom,
   localReviewManifestAtom,
   pullRequestsAtom,
   repoKey,
@@ -36,11 +44,16 @@ import { EMPTY_AGENT_PROVIDER_CATALOG } from "@diffdash/protocol/agent-providers
 import { agentRouteAvailable } from "@/settings/agent-selection"
 import { useCaptureAnalytics } from "@/shared/analytics"
 import { useKeyboardShortcut } from "@/shell/keyboard-shortcuts"
+import { formatError } from "@/shared/errors"
+import { useReviewSourceOperationsFactory } from "@/platform/renderer-runtime"
 import { createCodeFileNavigationState } from "../code/code-navigation"
 import {
   PROJECT_WORKSPACE_FILES_ACTIVITY_ID,
   PROJECT_WORKSPACE_REVIEWS_ACTIVITY_ID,
 } from "./review-identities"
+
+const HOSTED_REVIEW_CHECKS_POLL_INTERVAL_MS = 30_000
+const HOSTED_REVIEW_DETAIL_POLL_INTERVAL_MS = 5_000
 
 /** Registered Review surface entrypoint resolved from the trusted extension registry. */
 export const ReviewExtensionSurface = () => {
@@ -51,6 +64,7 @@ export const ReviewExtensionSurface = () => {
   const environment = useReviewSurfaceEnvironment(host.colorScheme)
   const navigation = useReviewNavigationController()
   const captureAnalytics = useCaptureAnalytics()
+  const reviewSourceOperations = useReviewSourceOperationsFactory()
   const { projectNavigation, projectSurfaces, reviewDiffContributions } =
     useTrustedExtensionRegistry()
   const reviewContribution = projectNavigation.find(({ surface }) => surface === "review")
@@ -63,10 +77,26 @@ export const ReviewExtensionSurface = () => {
   const repos = AsyncResult.getOrElse(repositoriesResult, () => [])
   const selectedReview = navigation.selectedReview
   const selectedReviewTarget = Option.getOrNull(selectedReview)
-  const selection = useReviewSelection(selectedReviewTarget, providers)
-  const sourceOperations = useReviewSourceOperations(selection)
   const sourceKeys = reviewSelectionSourceKeys(selectedReviewTarget)
-  const refreshHostedReview = useAtomRefresh(hostedReviewManifestAtom(sourceKeys.hosted))
+  const selectedReviewProvider =
+    selectedReviewTarget?.kind !== "hosted"
+      ? null
+      : (providers.find(
+          (provider) => provider.id === selectedReviewTarget.review.repository.providerId,
+        ) ?? null)
+  const hostedChecksSourceKey =
+    selectedReviewProvider?.capabilities.reviewChecks === true ? sourceKeys.hosted : ""
+  const [openedHostedSourceKey, setOpenedHostedSourceKey] = useState("")
+  const hostedDiffOpen = sourceKeys.hosted.length > 0 && openedHostedSourceKey === sourceKeys.hosted
+  const selection = useReviewSelection(selectedReviewTarget, providers, hostedDiffOpen)
+  const sourceOperations = useReviewSourceOperations(selection)
+  const hostedReviewDetailResult = useAtomValue(hostedReviewDetailAtom(sourceKeys.hosted))
+  const refreshHostedReviewDetail = useAtomRefresh(hostedReviewDetailAtom(sourceKeys.hosted))
+  const hostedReviewChecksResult = useAtomValue(hostedReviewChecksAtom(hostedChecksSourceKey))
+  const refreshHostedReviewChecks = useAtomRefresh(hostedReviewChecksAtom(hostedChecksSourceKey))
+  const refreshHostedReview = useAtomRefresh(
+    hostedReviewManifestAtom(hostedDiffOpen ? sourceKeys.hosted : ""),
+  )
   const refreshLocalReview = useAtomRefresh(localReviewManifestAtom(sourceKeys.local))
   const refreshRepositoryComparison = useAtomRefresh(
     repositoryComparisonManifestAtom(sourceKeys.comparison),
@@ -78,7 +108,36 @@ export const ReviewExtensionSurface = () => {
     }),
   )
   const pullRequestsResult = useAtomValue(repoPullRequestsAtom)
+  const pullRequests = AsyncResult.getOrElse(pullRequestsResult, () => [])
   const refreshPullRequests = useAtomRefresh(repoPullRequestsAtom)
+  const hostedReviewChecks: readonly HostedReviewCheck[] = AsyncResult.isSuccess(
+    hostedReviewChecksResult,
+  )
+    ? hostedReviewChecksResult.value
+    : []
+  const hostedReviewChecksPending = hostedReviewChecks.some(({ status }) => status === "pending")
+  const hostedReviewChecksFailed = AsyncResult.isFailure(hostedReviewChecksResult)
+  const hostedReviewChecksWaiting = AsyncResult.isWaiting(hostedReviewChecksResult)
+  const hostedReviewDetailChecking =
+    AsyncResult.isSuccess(hostedReviewDetailResult) &&
+    hostedReviewDetailResult.value?.mergeState.status === "checking"
+  const hostedReviewDetailWaiting = AsyncResult.isWaiting(hostedReviewDetailResult)
+  useVisibleRefreshPolling(
+    active && !hostedDiffOpen && sourceKeys.hosted.length > 0 && hostedReviewDetailChecking,
+    hostedReviewDetailWaiting,
+    HOSTED_REVIEW_DETAIL_POLL_INTERVAL_MS,
+    refreshHostedReviewDetail,
+  )
+  useVisibleRefreshPolling(
+    active &&
+      !hostedDiffOpen &&
+      hostedChecksSourceKey.length > 0 &&
+      (hostedReviewChecksPending || hostedReviewChecksFailed),
+    hostedReviewChecksWaiting,
+    HOSTED_REVIEW_CHECKS_POLL_INTERVAL_MS,
+    refreshHostedReviewChecks,
+  )
+
   const workingTreeAtom = localReviewManifestAtom(
     active &&
       !host.workspaceRestoring &&
@@ -108,8 +167,21 @@ export const ReviewExtensionSurface = () => {
     },
     { enabled: active },
   )
+  useKeyboardShortcut(
+    "review.reload",
+    () => {
+      refreshHostedReviewDetail()
+      refreshPullRequests()
+      if (hostedChecksSourceKey.length > 0) refreshHostedReviewChecks()
+    },
+    {
+      enabled: active && selectedReviewTarget?.kind === "hosted" && !hostedDiffOpen,
+      priority: 10,
+    },
+  )
   if (reviewContribution === undefined || reviewSurfaceContribution === undefined) return null
   const selectReview = (next: NonNullable<typeof selectedReviewTarget>) => {
+    setOpenedHostedSourceKey("")
     const activity = host.activities.find(
       (candidate) => candidate.id === PROJECT_WORKSPACE_FILES_ACTIVITY_ID,
     )
@@ -204,6 +276,48 @@ export const ReviewExtensionSurface = () => {
       onSelect={selectReview}
     />
   )
+  const listedHostedReview: HostedReviewSummary | null =
+    selectedReviewTarget?.kind !== "hosted"
+      ? null
+      : (pullRequests.find(
+          (review) =>
+            makeHostedReviewKey(review.locator) ===
+            makeHostedReviewKey(selectedReviewTarget.review),
+        ) ?? null)
+  const hostedReviewDetail: HostedReviewDetail | null = AsyncResult.isSuccess(
+    hostedReviewDetailResult,
+  )
+    ? hostedReviewDetailResult.value
+    : null
+  const selectedHostedReview = hostedReviewDetail?.summary ?? listedHostedReview
+  const selectedHostedProvider =
+    selectedHostedReview === null
+      ? null
+      : (providers.find(
+          (provider) => provider.id === selectedHostedReview.locator.repository.providerId,
+        ) ?? null)
+  const hostedReviewChecksError = AsyncResult.isFailure(hostedReviewChecksResult)
+    ? formatError(
+        Option.getOrNull(Cause.findErrorOption(hostedReviewChecksResult.cause)),
+        "Could not load checks",
+      )
+    : null
+  const hostedReviewActions =
+    selectedHostedReview === null
+      ? {
+          close: null,
+          merge: null,
+          mergeBypassSupported: false,
+          submit: null,
+          updateBranch: null,
+        }
+      : reviewSourceOperations.makeHostedMutations(selectedHostedReview, selectedHostedProvider)
+  const hostedReviewDetailError = AsyncResult.isFailure(hostedReviewDetailResult)
+    ? formatError(
+        Option.getOrNull(Cause.findErrorOption(hostedReviewDetailResult.cause)),
+        "Could not load pull request details",
+      )
+    : null
   return (
     <ReviewSurfaceCapabilityProvider>
       <PersistentReviewSurfaceProviders>
@@ -253,12 +367,38 @@ export const ReviewExtensionSurface = () => {
           }}
           reviewsContext={reviewsContext}
           reviewsMain={reviewsMain}
+          selectedHostedReview={selectedHostedReview}
+          hostedReviewDetail={hostedReviewDetail}
+          hostedReviewDetailError={hostedReviewDetailError}
+          hostedReviewDetailLoading={
+            !AsyncResult.isSuccess(hostedReviewDetailResult) ||
+            AsyncResult.isWaiting(hostedReviewDetailResult)
+          }
+          hostedReviewChecks={hostedReviewChecks}
+          hostedReviewChecksError={hostedReviewChecksError}
+          hostedReviewChecksLoading={
+            hostedChecksSourceKey.length > 0 && AsyncResult.isWaiting(hostedReviewChecksResult)
+          }
+          hostedReviewChecksSupported={selectedHostedProvider?.capabilities.reviewChecks === true}
+          hostedReviewSelected={selectedReviewTarget?.kind === "hosted"}
+          hostedDiffOpen={hostedDiffOpen}
+          hostedReviewActions={hostedReviewActions}
+          hostedReviewAbbreviation={selectedHostedProvider?.terminology.reviewAbbreviation ?? "PR"}
+          hostedReviewProviderName={selectedHostedProvider?.displayName ?? "provider"}
           reviewDiffContributions={reviewDiffContributions}
           selection={selection}
           sourceOperations={sourceOperations}
           surfaceContribution={reviewSurfaceContribution}
           workspaceNotice={host.workspaceNotice}
           onActiveActivityChange={host.selectActivity}
+          onOpenHostedDiff={() => setOpenedHostedSourceKey(sourceKeys.hosted)}
+          onHostedActionCompleted={() => {
+            refreshHostedReviewDetail()
+            refreshPullRequests()
+            if (hostedChecksSourceKey.length > 0) refreshHostedReviewChecks()
+          }}
+          onRetryHostedDetail={refreshHostedReviewDetail}
+          onRefreshHostedChecks={refreshHostedReviewChecks}
           onRetrySelection={() => {
             Match.valueTags(selection, {
               none: () => undefined,
@@ -275,6 +415,40 @@ export const ReviewExtensionSurface = () => {
       </PersistentReviewSurfaceProviders>
     </ReviewSurfaceCapabilityProvider>
   )
+}
+
+const useVisibleRefreshPolling = (
+  enabled: boolean,
+  waiting: boolean,
+  intervalMs: number,
+  refresh: () => void,
+) => {
+  const refreshFromEvent = useEffectEvent(refresh)
+  useEffect(() => {
+    if (!enabled) return undefined
+
+    let timer: number | undefined
+    const clearTimer = () => {
+      if (timer !== undefined) window.clearTimeout(timer)
+      timer = undefined
+    }
+    const schedule = () => {
+      clearTimer()
+      if (document.visibilityState !== "visible" || waiting) return
+      timer = window.setTimeout(refreshFromEvent, intervalMs)
+    }
+    const handleVisibilityChange = () => {
+      clearTimer()
+      if (document.visibilityState === "visible" && !waiting) refreshFromEvent()
+    }
+
+    schedule()
+    document.addEventListener("visibilitychange", handleVisibilityChange)
+    return () => {
+      clearTimer()
+      document.removeEventListener("visibilitychange", handleVisibilityChange)
+    }
+  }, [enabled, intervalMs, waiting])
 }
 
 /** Keeps previously registered provider slots stable while toggling their owner controllers. */

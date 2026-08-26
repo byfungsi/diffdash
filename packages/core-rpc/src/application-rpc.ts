@@ -27,6 +27,10 @@ import {
   HostedRepositoryLocator,
   HostedRepositoryName,
   HostedReviewLocator,
+  HostedReviewDetail,
+  HostedReviewCheck,
+  HostedReviewMergeMethod,
+  HostedReviewSubmission,
   HostedReviewSummary,
   RepositoryNamespace,
   ReviewDecision,
@@ -407,7 +411,7 @@ export const GitProvidersListRpc = applicationRpc(
 )
 export const HostedReviewsSubmitDecisionRpc = applicationRpc(
   "HostedReviews.submitDecision",
-  withContext({ review: HostedReviewLocator, decision: ReviewDecision }),
+  withContext({ review: HostedReviewLocator, submission: HostedReviewSubmission }),
   Schema.Void,
   mutation(),
 )
@@ -416,6 +420,41 @@ export const HostedReviewsGetDecisionRpc = applicationRpc(
   withContext({ review: HostedReviewLocator }),
   ReviewDecision,
   read(),
+)
+export const HostedReviewsGetDetailRpc = applicationRpc(
+  "HostedReviews.getDetail",
+  withContext({ review: HostedReviewLocator }),
+  HostedReviewDetail,
+  read(),
+)
+export const HostedReviewsGetChecksRpc = applicationRpc(
+  "HostedReviews.getChecks",
+  withContext({ review: HostedReviewLocator }),
+  Schema.Array(HostedReviewCheck),
+  read(),
+)
+export const HostedReviewsCloseRpc = applicationRpc(
+  "HostedReviews.close",
+  withContext({ review: HostedReviewLocator }),
+  Schema.Void,
+  mutation(),
+)
+export const HostedReviewsMergeRpc = applicationRpc(
+  "HostedReviews.merge",
+  withContext({
+    review: HostedReviewLocator,
+    method: HostedReviewMergeMethod,
+    bypassRules: Schema.Boolean,
+    expectedHeadRevision: ReviewRevision,
+  }),
+  Schema.Void,
+  mutation(),
+)
+export const HostedReviewsUpdateBranchRpc = applicationRpc(
+  "HostedReviews.updateBranch",
+  withContext({ review: HostedReviewLocator }),
+  Schema.Void,
+  mutation(),
 )
 export const HostedReviewsListRpc = applicationRpc(
   "HostedReviews.list",
@@ -787,6 +826,11 @@ export const CoreApplicationRpcs = RpcGroup.make(
   GitProvidersListRpc,
   HostedReviewsSubmitDecisionRpc,
   HostedReviewsGetDecisionRpc,
+  HostedReviewsGetDetailRpc,
+  HostedReviewsGetChecksRpc,
+  HostedReviewsCloseRpc,
+  HostedReviewsMergeRpc,
+  HostedReviewsUpdateBranchRpc,
   HostedReviewsListRpc,
   HostedReviewsListAssignedRpc,
   GitProvidersListSearchScopesRpc,

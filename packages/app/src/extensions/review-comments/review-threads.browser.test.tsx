@@ -377,27 +377,54 @@ describe("review thread UI", () => {
     await vi.waitFor(() => expect(reload).toHaveBeenCalledOnce())
   })
 
-  it("renders semantic Markdown blocks without injecting HTML", () => {
+  it("renders sanitized GitHub-flavored Markdown", async () => {
     render(
       <div data-testid="markdown-under-test">
         <ReviewMarkdown>{`# Finding
 
-- first
-- second
+- [x] first
+- [ ] second
+
+~~obsolete~~
+
+| File | Risk |
+| --- | --- |
+| app.tsx | high |
 
 \`\`\`ts
 const safe = true
 \`\`\`
 
-<script>unsafe()</script>`}</ReviewMarkdown>
+<details><summary>More</summary>Safe detail</details>
+
+<script>unsafe()</script>
+
+[unsafe](javascript:alert(1))
+
+![Compatibility score](https://example.com/score.svg)
+
+![Unsafe image](http://example.com/tracker.png)`}</ReviewMarkdown>
       </div>,
     )
 
-    expect(document.querySelector("h3")?.textContent).toBe("Finding")
+    expect(document.querySelector("h1")?.textContent).toBe("Finding")
     expect(document.querySelectorAll("li")).toHaveLength(2)
+    expect(document.querySelectorAll('input[type="checkbox"]')).toHaveLength(2)
+    expect(document.querySelector("del")?.textContent).toBe("obsolete")
+    expect(document.querySelector("table")?.textContent).toContain("app.tsx")
     expect(document.querySelector("pre code")?.textContent).toContain("const safe = true")
+    expect(document.querySelector("details summary")?.textContent).toBe("More")
     expect(document.querySelector('[data-testid="markdown-under-test"] script')).toBeNull()
-    expect(document.body.textContent).toContain("<script>unsafe()</script>")
+    expect(document.querySelector('a[href^="javascript:"]')).toBeNull()
+    const image = document.querySelector<HTMLImageElement>('img[alt="Compatibility score"]')
+    expect(image?.src).toBe("https://example.com/score.svg")
+    expect(image?.loading).toBe("lazy")
+    expect(image?.referrerPolicy).toBe("no-referrer")
+    expect(document.body.textContent).toContain("Image unavailable: Unsafe image")
+    image?.dispatchEvent(new Event("error"))
+    await vi.waitFor(() =>
+      expect(document.body.textContent).toContain("Image unavailable: Compatibility score"),
+    )
   })
 })
 

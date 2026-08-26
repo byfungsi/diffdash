@@ -205,6 +205,26 @@ export const createExternalApplicationRuntime = (
       invoke(CoreMethod.getHostedReviewDecision, (client) =>
         client.getHostedReviewDecision({ ...requestContext(), ...input }),
       ),
+    getHostedReviewDetail: (input) =>
+      invoke(CoreMethod.getHostedReviewDetail, (client) =>
+        client.getHostedReviewDetail({ ...requestContext(), ...input }),
+      ),
+    getHostedReviewChecks: (input) =>
+      invoke(CoreMethod.getHostedReviewChecks, (client) =>
+        client.getHostedReviewChecks({ ...requestContext(), ...input }),
+      ),
+    closeHostedReview: (input) =>
+      invoke(CoreMethod.closeHostedReview, (client) =>
+        client.closeHostedReview({ ...requestContext(), ...input }),
+      ),
+    mergeHostedReview: (input) =>
+      invoke(CoreMethod.mergeHostedReview, (client) =>
+        client.mergeHostedReview({ ...requestContext(), ...input }),
+      ),
+    updateHostedReviewBranch: (input) =>
+      invoke(CoreMethod.updateHostedReviewBranch, (client) =>
+        client.updateHostedReviewBranch({ ...requestContext(), ...input }),
+      ),
     listHostedReviews: (input) =>
       invoke(CoreMethod.listHostedReviews, (client) =>
         client.listHostedReviews({ ...requestContext(), ...input }),

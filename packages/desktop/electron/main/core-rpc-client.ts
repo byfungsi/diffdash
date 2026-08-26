@@ -362,6 +362,21 @@ export const coreRpcClientLayer = (options: CoreRpcClientOptions) => {
         getHostedReviewDecision: Effect.fn("CoreRpcClient.getHostedReviewDecision")((request) =>
           authenticated(client("HostedReviews.getDecision", request)),
         ),
+        getHostedReviewDetail: Effect.fn("CoreRpcClient.getHostedReviewDetail")((request) =>
+          authenticated(client("HostedReviews.getDetail", request)),
+        ),
+        getHostedReviewChecks: Effect.fn("CoreRpcClient.getHostedReviewChecks")((request) =>
+          authenticated(client("HostedReviews.getChecks", request)),
+        ),
+        closeHostedReview: Effect.fn("CoreRpcClient.closeHostedReview")((request) =>
+          authenticated(client("HostedReviews.close", request)),
+        ),
+        mergeHostedReview: Effect.fn("CoreRpcClient.mergeHostedReview")((request) =>
+          authenticated(client("HostedReviews.merge", request)),
+        ),
+        updateHostedReviewBranch: Effect.fn("CoreRpcClient.updateHostedReviewBranch")((request) =>
+          authenticated(client("HostedReviews.updateBranch", request)),
+        ),
         listHostedReviews: Effect.fn("CoreRpcClient.listHostedReviews")((request) =>
           authenticated(client("HostedReviews.list", request)),
         ),

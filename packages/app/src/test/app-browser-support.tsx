@@ -58,7 +58,10 @@ import {
   GitProviderTerminology,
   HostedRepository,
   HostedRepositorySource,
+  HostedReviewComment,
+  HostedReviewCheck,
   HostedReviewDetail,
+  HostedReviewMergeState,
   HostedReviewSummary,
   makeHostedRepositoryLocator,
   makeHostedReviewLocator,
@@ -313,6 +316,11 @@ const provider = GitProviderDescriptor.make({
     searchScopes: true,
     assignedReviews: true,
     reviewDecisions: true,
+    reviewClosure: true,
+    reviewMerge: true,
+    reviewMergeBypass: true,
+    reviewChecks: true,
+    reviewBranchUpdates: true,
     fileUrls: true,
     remoteWorkspaceBootstrap: true,
   }),
@@ -376,6 +384,10 @@ const pullRequest = HostedReviewSummary.make({
 const detail = HostedReviewDetail.make({
   summary: pullRequest,
   commits: [],
+  mergeState: HostedReviewMergeState.make({
+    status: "ready",
+    reason: "This pull request is ready to merge.",
+  }),
   files: [
     ChangedFile.make({
       additions: 1,
@@ -435,6 +447,11 @@ const fixtureProvider = GitProviderDescriptor.make({
     searchScopes: false,
     assignedReviews: true,
     reviewDecisions: false,
+    reviewClosure: false,
+    reviewMerge: false,
+    reviewMergeBypass: false,
+    reviewChecks: false,
+    reviewBranchUpdates: false,
     fileUrls: true,
     remoteWorkspaceBootstrap: true,
   }),
@@ -457,6 +474,10 @@ const fixturePullRequest = HostedReviewSummary.make({
 const fixtureDetail = HostedReviewDetail.make({
   summary: fixturePullRequest,
   commits: [],
+  mergeState: HostedReviewMergeState.make({
+    status: "unavailable",
+    reason: "Merging is unavailable for this provider.",
+  }),
   files: [
     ChangedFile.make({
       additions: 1,
@@ -501,6 +522,7 @@ const makeLargeDiffFixture = (lineCount: number, number = 52, tailLineCount = 1)
   const largeDetail = HostedReviewDetail.make({
     summary: largePullRequest,
     commits: [],
+    mergeState: detail.mergeState,
     files: [
       ChangedFile.make({
         additions: lineCount,
@@ -698,6 +720,7 @@ const makeManyFileDiffFixture = () => {
   const manyDetail = HostedReviewDetail.make({
     summary: manyPullRequest,
     commits: [],
+    mergeState: detail.mergeState,
     files: fileSpecs.map(({ lineCount, path }) =>
       ChangedFile.make({
         additions: lineCount,
@@ -758,6 +781,7 @@ const makeCachePressureDiffFixture = () => {
   const cacheDetail = HostedReviewDetail.make({
     summary: cachePullRequest,
     commits: [],
+    mergeState: detail.mergeState,
     files: paths.map((path) =>
       ChangedFile.make({
         additions: 1,
@@ -1117,6 +1141,12 @@ type AppBrowserScenarioId =
   | "fileTreeSelection"
   | "firstRunOnboarding"
   | "homeToReview"
+  | "hostedReviewBranchUpdate"
+  | "hostedReviewMergeBypass"
+  | "hostedReviewMergeConflicts"
+  | "hostedReviewMergeStatusPolling"
+  | "hostedReviewOverviewActions"
+  | "hostedReviewReselection"
   | "incrementalSnapshotPages"
   | "largeDiffVirtualization"
   | "longThreadVirtualization"
@@ -1237,7 +1267,17 @@ const openHostedReview = async (number: number) => {
     return button
   })
   reviewButton?.click()
+  const openDiffButton = await vi.waitFor(() => {
+    const button = [...document.querySelectorAll<HTMLButtonElement>("button")].find(
+      (candidate) => candidate.textContent?.trim() === "Open diff",
+    )
+    expect(button).not.toBeUndefined()
+    return button
+  })
+  openDiffButton?.click()
   await vi.waitFor(() => {
+    expect(document.querySelector("[data-hosted-review-detail]")).toBeNull()
+    expect(document.querySelector("[data-review-diff-open]")).not.toBeNull()
     expect(document.querySelector('button[aria-label="Files"][aria-pressed="true"]')).not.toBeNull()
   })
 }
@@ -1266,6 +1306,7 @@ scenario("appearance", async () => {
     pullRequestDetail: HostedReviewDetail.make({
       summary: pullRequest,
       commits: [],
+      mergeState: detail.mergeState,
       files: [
         ChangedFile.make({
           additions: 1,
@@ -2735,6 +2776,12 @@ scenario("projectStateRestoration", async () => {
       document.querySelector('button[aria-label="Reviews"][aria-pressed="true"]'),
     ).not.toBeNull()
     expect(document.body.textContent).toContain("Opened PR #51")
+  })
+  const openDiffButton = [...document.querySelectorAll<HTMLButtonElement>("button")].find(
+    (button) => button.textContent?.trim() === "Open diff",
+  )
+  openDiffButton?.click()
+  await vi.waitFor(() => {
     expect(getDiffCardPaths()).toEqual(["docs/readme.md", "src/app.tsx"])
     expect(calls.acquireLocalReviewSnapshot).not.toHaveBeenCalled()
   })
@@ -2806,6 +2853,14 @@ scenario("projectReviewFailureRecovery", async () => {
     return button
   })
   projectButton?.click()
+  const openDiffButton = await vi.waitFor(() => {
+    const button = [...document.querySelectorAll<HTMLButtonElement>("button")].find(
+      (candidate) => candidate.textContent?.trim() === "Open diff",
+    )
+    expect(button).toBeDefined()
+    return button
+  })
+  openDiffButton?.click()
   await vi.waitFor(() => {
     expect(document.body.textContent).toContain("Review could not be opened")
     expect(document.body.textContent).toContain("Selected review unavailable")
@@ -7122,6 +7177,13 @@ scenario("homeToReview", async () => {
 
   await vi.waitFor(() => {
     expect(document.body.textContent).toContain("Opened PR #51")
+  })
+  const openDiffButton = [...document.querySelectorAll<HTMLButtonElement>("button")].find(
+    (button) => button.textContent?.trim() === "Open diff",
+  )
+  openDiffButton?.click()
+
+  await vi.waitFor(() => {
     expect(document.body.textContent).toContain("src/app.tsx")
     expect(document.body.textContent).toContain("Viewed")
     expect(document.body.textContent).toContain("+1")
@@ -7300,8 +7362,8 @@ scenario("homeToReview", async () => {
 
   await vi.waitFor(() => {
     expect(calls.approvePullRequest).toHaveBeenCalledWith({
-      decision: "approved",
       review: expect.anything(),
+      submission: { decision: "approved", body: "" },
     })
   })
   actionsButton?.click()
@@ -7780,6 +7842,455 @@ scenario("localReview", async () => {
   })
 })
 
+scenario("hostedReviewOverviewActions", async () => {
+  const overviewSummary = HostedReviewSummary.make({
+    ...pullRequest,
+    body: `# Summary
+
+- [x] Ready for review
+
+| Area | Status |
+| --- | --- |
+| Renderer | Complete |`,
+  })
+  const overviewDetail = HostedReviewDetail.make({
+    ...detail,
+    summary: overviewSummary,
+    comments: [
+      HostedReviewComment.make({
+        author: pullRequest.author,
+        body: "**Markdown comment** with ~~old wording~~.",
+        createdAt: pullRequest.updatedAt,
+        url: null,
+      }),
+    ],
+  })
+  const calls = installDiffDashApi({
+    hostedReviewChecks: [
+      HostedReviewCheck.make({
+        status: "passed",
+        name: "Typecheck",
+        workflow: "Quality",
+        description: null,
+        startedAt: "2026-07-07T01:00:00Z",
+        completedAt: "2026-07-07T01:01:00Z",
+        detailsUrl: WebUrl.make("https://github.com/fungsi/diffdash/actions/runs/1"),
+      }),
+      HostedReviewCheck.make({
+        status: "failed",
+        name: "Browser tests",
+        workflow: "Quality",
+        description: "One test failed",
+        startedAt: "2026-07-07T01:00:00Z",
+        completedAt: "2026-07-07T01:02:00Z",
+        detailsUrl: WebUrl.make("https://github.com/fungsi/diffdash/actions/runs/2"),
+      }),
+      HostedReviewCheck.make({
+        status: "pending",
+        name: "Desktop E2E",
+        workflow: "Release",
+        description: null,
+        startedAt: "2026-07-07T01:02:00Z",
+        completedAt: null,
+        detailsUrl: null,
+      }),
+    ],
+    pullRequestDetail: overviewDetail,
+    pullRequests: [overviewSummary],
+  })
+  renderApp()
+
+  await openDefaultProject()
+  const snapshotCallsBeforeOverview = calls.getHostedReviewSnapshot.mock.calls.length
+  document.querySelector<HTMLButtonElement>('button[aria-label^="Open review #51:"]')?.click()
+
+  await vi.waitFor(() => {
+    expect(document.querySelector("[data-hosted-review-detail]")).not.toBeNull()
+    expect(document.querySelector("table")?.textContent).toContain("Renderer")
+    expect(document.querySelector("strong")?.textContent).toBe("Markdown comment")
+    expect(calls.getPullRequestDetail).toHaveBeenCalled()
+    expect(calls.getHostedReviewChecks).toHaveBeenCalled()
+    expect(calls.getHostedReviewSnapshot).toHaveBeenCalledTimes(snapshotCallsBeforeOverview)
+    expect(document.body.textContent).toContain("1 failed, 1 passed, 1 pending")
+    expect(document.body.textContent).toContain("Open failed check in GitHub")
+  })
+
+  document
+    .querySelector<HTMLButtonElement>('button[aria-label="Open Browser tests in GitHub"]')
+    ?.click()
+  await vi.waitFor(() =>
+    expect(calls.openExternalUrl).toHaveBeenCalledWith(
+      "https://github.com/fungsi/diffdash/actions/runs/2",
+    ),
+  )
+
+  calls.getHostedReviewChecks.mockClear()
+  calls.getHostedReviewChecks.mockRejectedValueOnce(new Error("Check service unavailable"))
+  document
+    .querySelector<HTMLButtonElement>('button[aria-label="Refresh checks from GitHub"]')
+    ?.click()
+  await vi.waitFor(() => {
+    expect(calls.getHostedReviewChecks).toHaveBeenCalledOnce()
+    expect(document.body.textContent).toContain("DiffDash could not complete the request.")
+    expect(document.querySelector("table")?.textContent).toContain("Renderer")
+  })
+  const retryChecks = [...document.querySelectorAll<HTMLButtonElement>("button")].find(
+    (button) => button.textContent?.trim() === "Retry checks",
+  )
+  retryChecks?.click()
+  await vi.waitFor(() => {
+    expect(calls.getHostedReviewChecks).toHaveBeenCalledTimes(2)
+    expect(document.body.textContent).toContain("1 failed, 1 passed, 1 pending")
+  })
+
+  calls.getPullRequestDetail.mockClear()
+  calls.getHostedReviewChecks.mockClear()
+  calls.listPullRequests.mockClear()
+  const setTimeoutSpy = vi.spyOn(window, "setTimeout")
+  const clearTimeoutSpy = vi.spyOn(window, "clearTimeout")
+  const snapshotCallsBeforeShortcut = calls.getHostedReviewSnapshot.mock.calls.length
+  const refreshShortcut = dispatchKeyboardShortcut("r", {
+    ctrlKey: !isMacPlatform(),
+    metaKey: isMacPlatform(),
+  })
+  expect(refreshShortcut.defaultPrevented).toBe(true)
+  await vi.waitFor(() => {
+    expect(calls.getPullRequestDetail).toHaveBeenCalledOnce()
+    expect(calls.getHostedReviewChecks).toHaveBeenCalledOnce()
+    expect(calls.listPullRequests).toHaveBeenCalledOnce()
+    expect(calls.getHostedReviewSnapshot).toHaveBeenCalledTimes(snapshotCallsBeforeShortcut)
+  })
+
+  const mergeButton = [...document.querySelectorAll<HTMLButtonElement>("button")].find(
+    (button) => button.textContent?.trim() === "Merge",
+  )
+  expect(document.body.textContent).toContain("Ready to merge")
+  expect(mergeButton?.disabled).toBe(false)
+  mergeButton?.click()
+  await vi.waitFor(() => {
+    expect(
+      document.querySelector('[data-floating-pane-anchor][aria-label="Merge pull request"]'),
+    ).not.toBeNull()
+    expect(document.querySelector('[data-slot="dialog-overlay"]')).toBeNull()
+    expect(document.body.textContent).toContain("Choose a deterministic merge method")
+    expect(document.body.textContent).toContain("Squash and merge")
+  })
+  document.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, key: "Escape" }))
+  await vi.waitFor(() => expect(document.querySelector('[role="dialog"]')).toBeNull())
+
+  const reviewButton = [...document.querySelectorAll<HTMLButtonElement>("button")].find(
+    (button) => button.textContent?.trim() === "Review",
+  )
+  reviewButton?.click()
+  const reviewComposer = await vi.waitFor(() => {
+    const pane = document.querySelector<HTMLElement>(
+      '[data-floating-pane-anchor][aria-label="Submit review"]',
+    )
+    expect(pane).not.toBeNull()
+    expect(reviewButton?.getAttribute("aria-expanded")).toBe("true")
+    expect(document.querySelector('[data-slot="dialog-overlay"]')).toBeNull()
+    if (pane === null) throw new Error("Expected the anchored review composer")
+    return pane
+  })
+  expect(reviewComposer.getBoundingClientRect().top).toBeGreaterThanOrEqual(
+    reviewButton?.getBoundingClientRect().bottom ?? 0,
+  )
+  const requestChanges = await vi.waitFor(() => {
+    const button = [...document.querySelectorAll<HTMLButtonElement>("button")].find(
+      (candidate) => candidate.textContent?.trim() === "Request changes",
+    )
+    expect(button).toBeDefined()
+    return button
+  })
+  requestChanges?.click()
+  await vi.waitFor(() => {
+    expect(document.body.textContent).toContain("Comment (required)")
+  })
+  const reviewBody = document.querySelector<HTMLTextAreaElement>("#hosted-review-body")
+  if (reviewBody !== null) {
+    setTextareaValue(reviewBody, "Please add a regression test.")
+    reviewBody.dispatchEvent(new Event("input", { bubbles: true }))
+  }
+  const submitReview = await vi.waitFor(() => {
+    const button = [...document.querySelectorAll<HTMLButtonElement>("button")].find(
+      (candidate) => candidate.textContent?.trim() === "Submit review",
+    )
+    expect(button?.disabled).toBe(false)
+    return button
+  })
+  calls.getPullRequestDetail.mockClear()
+  calls.getPullRequestDetail.mockResolvedValue(
+    HostedReviewDetail.make({
+      ...overviewDetail,
+      comments: [
+        ...(overviewDetail.comments ?? []),
+        HostedReviewComment.make({
+          author: ProviderActor.make({
+            id: null,
+            username: "hanipcode",
+            displayName: null,
+            avatarUrl: null,
+          }),
+          body: "Please add a regression test.",
+          createdAt: "2026-07-07T03:00:00Z",
+          url: null,
+        }),
+      ],
+    }),
+  )
+  submitReview?.click()
+  await vi.waitFor(() => {
+    expect(calls.approvePullRequest).toHaveBeenCalledWith({
+      review: overviewSummary.locator,
+      submission: { decision: "changesRequested", body: "Please add a regression test." },
+    })
+    expect(
+      document.querySelector('[data-floating-pane-anchor][aria-label="Submit review"]'),
+    ).toBeNull()
+    expect(calls.getPullRequestDetail).toHaveBeenCalledOnce()
+    expect(
+      [...document.querySelectorAll<HTMLElement>("[data-hosted-review-detail] article")].some(
+        (article) => {
+          const text = article.textContent ?? ""
+          return text.includes("@hanipcode") && text.includes("Please add a regression test.")
+        },
+      ),
+    ).toBe(true)
+  })
+
+  let pollingTimerCallIndex = -1
+  for (const [index, [, delay]] of setTimeoutSpy.mock.calls.entries()) {
+    if (delay === 30_000) pollingTimerCallIndex = index
+  }
+  const pollingTimer = setTimeoutSpy.mock.results[pollingTimerCallIndex]?.value
+  expect(pollingTimerCallIndex).toBeGreaterThanOrEqual(0)
+  clearTimeoutSpy.mockClear()
+  document.querySelector<HTMLButtonElement>('button[aria-label="Code"]')?.click()
+  await vi.waitFor(() => expect(clearTimeoutSpy).toHaveBeenCalledWith(pollingTimer))
+})
+
+scenario("hostedReviewBranchUpdate", async () => {
+  const behindDetail = HostedReviewDetail.make({
+    ...detail,
+    mergeState: HostedReviewMergeState.make({
+      status: "behind",
+      reason: "The review branch is behind the base branch.",
+    }),
+  })
+  const calls = installDiffDashApi({ pullRequestDetail: behindDetail })
+  renderApp()
+
+  await openDefaultProject()
+  document.querySelector<HTMLButtonElement>('button[aria-label^="Open review #51:"]')?.click()
+
+  const updateBranch = await vi.waitFor(() => {
+    expect(document.body.textContent).toContain("Branch is out of date")
+    expect(document.body.textContent).toContain("The review branch is behind the base branch.")
+    const merge = [...document.querySelectorAll<HTMLButtonElement>("button")].find(
+      (button) => button.textContent?.trim() === "Merge",
+    )
+    expect(merge?.disabled).toBe(true)
+    const update = [...document.querySelectorAll<HTMLButtonElement>("button")].find(
+      (button) => button.textContent?.trim() === "Update branch",
+    )
+    expect(update).toBeDefined()
+    return update
+  })
+
+  calls.getPullRequestDetail.mockClear()
+  calls.getHostedReviewChecks.mockClear()
+  calls.listPullRequests.mockClear()
+  updateBranch?.click()
+  await vi.waitFor(() => {
+    expect(calls.updateHostedBranch).toHaveBeenCalledWith({ review: pullRequest.locator })
+    expect(calls.getPullRequestDetail).toHaveBeenCalledOnce()
+    expect(calls.getHostedReviewChecks).toHaveBeenCalledOnce()
+    expect(calls.listPullRequests).toHaveBeenCalledOnce()
+  })
+})
+
+scenario("hostedReviewMergeConflicts", async () => {
+  const conflictingDetail = HostedReviewDetail.make({
+    ...detail,
+    mergeState: HostedReviewMergeState.make({
+      status: "conflicting",
+      reason: "The review branch has merge conflicts.",
+    }),
+  })
+  const calls = installDiffDashApi({ pullRequestDetail: conflictingDetail })
+  renderApp()
+
+  await openDefaultProject()
+  document.querySelector<HTMLButtonElement>('button[aria-label^="Open review #51:"]')?.click()
+
+  const resolve = await vi.waitFor(() => {
+    expect(document.body.textContent).toContain("Merge conflicts")
+    expect(document.body.textContent).toContain("The review branch has merge conflicts.")
+    const merge = [...document.querySelectorAll<HTMLButtonElement>("button")].find(
+      (button) => button.textContent?.trim() === "Merge",
+    )
+    expect(merge?.disabled).toBe(true)
+    merge?.parentElement?.dispatchEvent(
+      new PointerEvent("pointermove", { bubbles: true, pointerType: "mouse" }),
+    )
+    expect(document.body.textContent).not.toContain("Update branch")
+    const button = [...document.querySelectorAll<HTMLButtonElement>("button")].find(
+      (candidate) => candidate.textContent?.trim() === "Resolve in GitHub",
+    )
+    expect(button).toBeDefined()
+    return button
+  })
+
+  await vi.waitFor(() => {
+    expect(document.querySelector('[role="tooltip"]')?.textContent).toContain(
+      "The review branch has merge conflicts.",
+    )
+  })
+
+  resolve?.click()
+  await vi.waitFor(() => {
+    expect(calls.openExternalUrl).toHaveBeenCalledWith(pullRequest.url)
+  })
+})
+
+scenario("hostedReviewMergeBypass", async () => {
+  const blockedDetail = HostedReviewDetail.make({
+    ...detail,
+    mergeState: HostedReviewMergeState.make({
+      status: "blocked",
+      reason: "Repository rules currently block this merge.",
+    }),
+  })
+  const calls = installDiffDashApi({ pullRequestDetail: blockedDetail })
+  renderApp()
+
+  await openDefaultProject()
+  document.querySelector<HTMLButtonElement>('button[aria-label^="Open review #51:"]')?.click()
+
+  const merge = await vi.waitFor(() => {
+    expect(document.body.textContent).toContain("Merge requirements not met")
+    const button = [...document.querySelectorAll<HTMLButtonElement>("button")].find(
+      (candidate) => candidate.textContent?.trim() === "Merge",
+    )
+    expect(button?.disabled).toBe(false)
+    return button
+  })
+  merge?.click()
+
+  const bypass = await vi.waitFor(() => {
+    expect(document.body.textContent).toContain(
+      "Merge without waiting for requirements to be met (bypass rules)",
+    )
+    const checkbox = document.querySelector<HTMLInputElement>(
+      '[role="dialog"] input[type="checkbox"]',
+    )
+    expect(checkbox?.checked).toBe(false)
+    const submit = [...document.querySelectorAll<HTMLButtonElement>('[role="dialog"] button')].find(
+      (button) => button.textContent?.trim() === "Merge pull request",
+    )
+    expect(submit?.disabled).toBe(true)
+    return checkbox
+  })
+  bypass?.click()
+
+  const submit = await vi.waitFor(() => {
+    const button = [...document.querySelectorAll<HTMLButtonElement>('[role="dialog"] button')].find(
+      (candidate) => candidate.textContent?.trim() === "Merge pull request",
+    )
+    expect(button?.disabled).toBe(false)
+    expect(button?.getAttribute("data-variant")).toBe("destructive")
+    return button
+  })
+  submit?.click()
+
+  await vi.waitFor(() => {
+    expect(calls.mergePullRequest).toHaveBeenCalledWith({
+      review: pullRequest.locator,
+      method: "squash",
+      bypassRules: true,
+      expectedHeadRevision: pullRequest.head.revision,
+    })
+  })
+})
+
+scenario("hostedReviewMergeStatusPolling", async () => {
+  const checkingDetail = HostedReviewDetail.make({
+    ...detail,
+    mergeState: HostedReviewMergeState.make({
+      status: "checking",
+      reason: "GitHub is still calculating merge readiness.",
+    }),
+  })
+  const readyDetail = HostedReviewDetail.make({ ...detail })
+  const setTimeoutSpy = vi.spyOn(window, "setTimeout")
+  const calls = installDiffDashApi({ pullRequestDetail: checkingDetail })
+  renderApp()
+
+  await openDefaultProject()
+  document.querySelector<HTMLButtonElement>('button[aria-label^="Open review #51:"]')?.click()
+
+  await vi.waitFor(() => {
+    expect(document.body.textContent).toContain("Checking merge status...")
+  })
+  calls.getPullRequestDetail.mockClear()
+  calls.getPullRequestDetail.mockResolvedValueOnce(readyDetail)
+
+  const poll = await vi.waitFor(() => {
+    const timer = setTimeoutSpy.mock.calls.find(([, delay]) => delay === 5_000)?.[0]
+    expect(timer).toBeTypeOf("function")
+    if (timer === undefined) throw new Error("Expected merge status polling timer")
+    return timer
+  })
+  poll()
+
+  await vi.waitFor(() => {
+    expect(calls.getPullRequestDetail).toHaveBeenCalledOnce()
+    expect(document.body.textContent).toContain("Ready to merge")
+    const merge = [...document.querySelectorAll<HTMLButtonElement>("button")].find(
+      (button) => button.textContent?.trim() === "Merge",
+    )
+    expect(merge?.disabled).toBe(false)
+  })
+})
+
+scenario("hostedReviewReselection", async () => {
+  renderApp()
+
+  await openDefaultProject()
+  const reviewButton = document.querySelector<HTMLButtonElement>(
+    'button[aria-label^="Open review #51:"]',
+  )
+  reviewButton?.click()
+
+  const openDiff = await vi.waitFor(() => {
+    expect(document.querySelector("[data-hosted-review-detail]")).not.toBeNull()
+    const button = [...document.querySelectorAll<HTMLButtonElement>("button")].find(
+      (candidate) => candidate.textContent?.trim() === "Open diff",
+    )
+    expect(button).toBeDefined()
+    return button
+  })
+  openDiff?.click()
+  await vi.waitFor(() => {
+    expect(document.querySelector("[data-review-diff-open]")).not.toBeNull()
+    expect(document.querySelector("[data-hosted-review-detail]")).toBeNull()
+  })
+
+  document.querySelector<HTMLButtonElement>('button[aria-label="Reviews"]')?.click()
+  const selectedReviewButton = await vi.waitFor(() => {
+    const button = document.querySelector<HTMLButtonElement>(
+      'button[aria-label^="Open review #51:"]',
+    )
+    expect(button).not.toBeNull()
+    return button
+  })
+  selectedReviewButton?.click()
+  await vi.waitFor(() => {
+    expect(document.querySelector("[data-hosted-review-detail]")).not.toBeNull()
+    expect(document.querySelector("[data-review-diff-open]")).toBeNull()
+  })
+})
+
 scenario("providerTerminology", async () => {
   const calls = installDiffDashApi({
     providers: [fixtureProvider],
@@ -7805,9 +8316,8 @@ scenario("providerTerminology", async () => {
     expect(document.body.textContent).toContain("Fixture merge request flow")
   })
   const actions = document.querySelector<HTMLButtonElement>('button[aria-label="Review actions"]')
-  actions?.click()
-  await vi.waitFor(() => expect(document.querySelector('[role="menu"]')).not.toBeNull())
-  expect(document.querySelector('[role="menu"]')?.textContent).not.toContain("Approve")
+  expect(actions).toBeNull()
+  expect(document.body.textContent).not.toContain("Submit review")
   expect(calls.approvePullRequest).not.toHaveBeenCalled()
 })
 
@@ -8141,6 +8651,11 @@ const setInputValue = (input: HTMLInputElement, value: string) => {
   setter?.call(input, value)
 }
 
+const setTextareaValue = (textarea: HTMLTextAreaElement, value: string) => {
+  const setter = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")?.set
+  setter?.call(textarea, value)
+}
+
 const makeReviewSearchMatch = (
   file: ParsedDiffFile,
   input: {
@@ -8250,6 +8765,7 @@ export const installDiffDashApi = (
     readonly expireFirstSnapshotPage?: boolean
     readonly getAppState?: DiffDashApi["appState"]["get"]
     readonly getDiagnostics?: DiffDashApi["diagnostics"]
+    readonly hostedReviewChecks?: readonly HostedReviewCheck[]
     readonly localReviewDiff?: LocalReviewDiff
     readonly listLocalCheckoutFiles?: (
       projectId: ReviewProjectId,
@@ -8466,6 +8982,9 @@ export const installDiffDashApi = (
     listPullRequests: vi.fn<DiffDashApi["hostedReviews"]["list"]>(
       async () => options.pullRequests ?? options.reviewRequests ?? [pullRequest],
     ),
+    getHostedReviewChecks: vi.fn<DiffDashApi["hostedReviews"]["getChecks"]>(
+      async () => options.hostedReviewChecks ?? [],
+    ),
     installDiffDashCli: vi.fn<DiffDashApi["installDiffDashCli"]>(async () => ({
       path: ExecutablePath.make(options.cliInstallResult?.path ?? "/usr/local/bin/diffdash"),
       pathSetupCommand: options.cliInstallResult?.pathSetupCommand ?? null,
@@ -8571,6 +9090,9 @@ export const installDiffDashApi = (
     approvePullRequest: vi.fn<DiffDashApi["hostedReviews"]["submitDecision"]>(async () => {
       approved = true
     }),
+    closePullRequest: vi.fn<DiffDashApi["hostedReviews"]["close"]>(async () => undefined),
+    mergePullRequest: vi.fn<DiffDashApi["hostedReviews"]["merge"]>(async () => undefined),
+    updateHostedBranch: vi.fn<DiffDashApi["hostedReviews"]["updateBranch"]>(async () => undefined),
   }
   const storedWalkthroughForTarget = (target: ReviewThreadTarget): StoredWalkthrough | null => {
     if (target.kind === "repositoryComparison") return null
@@ -9043,9 +9565,14 @@ export const installDiffDashApi = (
     },
     hostedReviews: {
       submitDecision: calls.approvePullRequest,
+      close: calls.closePullRequest,
       getDecision: async () => (approved ? "approved" : "none"),
+      getDetail: calls.getPullRequestDetail,
+      getChecks: calls.getHostedReviewChecks,
       list: calls.listPullRequests,
       listAssigned: async () => options.reviewRequests ?? [pullRequest],
+      merge: calls.mergePullRequest,
+      updateBranch: calls.updateHostedBranch,
     },
     localReviews: {
       resolveBranch: calls.resolveBranch,
@@ -9400,6 +9927,8 @@ const encodedBridgeResponseChannels: HashMap.HashMap<string, InvokeChannel> = Ha
   ["openLocalRepositoryFile", InvokeChannel.appOpenLocalRepositoryFile] as const,
   ["openRepositoryFile", InvokeChannel.appOpenRepositoryFile] as const,
   ["hostedReviews.submitDecision", InvokeChannel.submitHostedReviewDecision] as const,
+  ["hostedReviews.merge", InvokeChannel.mergeHostedReview] as const,
+  ["hostedReviews.updateBranch", InvokeChannel.updateHostedReviewBranch] as const,
   ["repositoryComparisons.openFile", InvokeChannel.appOpenRepositoryComparisonFile] as const,
   ["updates.check", InvokeChannel.updatesCheck] as const,
   ["updates.download", InvokeChannel.updatesDownload] as const,

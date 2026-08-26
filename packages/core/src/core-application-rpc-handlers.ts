@@ -378,6 +378,28 @@ export const coreApplicationRpcHandlersLayer = CoreApplicationRpcs.toLayer(
         handle("HostedReviews.getDecision", request, (methods) =>
           methods["HostedReviews.getDecision"](request, {}),
         ),
+      "HostedReviews.getDetail": (request: ApplicationRpcRequest<"HostedReviews.getDetail">) =>
+        handle("HostedReviews.getDetail", request, (methods) =>
+          methods["HostedReviews.getDetail"](request, {}),
+        ),
+      "HostedReviews.getChecks": (request: ApplicationRpcRequest<"HostedReviews.getChecks">) =>
+        handle("HostedReviews.getChecks", request, (methods) =>
+          methods["HostedReviews.getChecks"](request, {}),
+        ),
+      "HostedReviews.close": (request: ApplicationRpcRequest<"HostedReviews.close">) =>
+        handle("HostedReviews.close", request, (methods) =>
+          methods["HostedReviews.close"](request, {}),
+        ),
+      "HostedReviews.merge": (request: ApplicationRpcRequest<"HostedReviews.merge">) =>
+        handle("HostedReviews.merge", request, (methods) =>
+          methods["HostedReviews.merge"](request, {}),
+        ),
+      "HostedReviews.updateBranch": (
+        request: ApplicationRpcRequest<"HostedReviews.updateBranch">,
+      ) =>
+        handle("HostedReviews.updateBranch", request, (methods) =>
+          methods["HostedReviews.updateBranch"](request, {}),
+        ),
       "HostedReviews.list": (request: ApplicationRpcRequest<"HostedReviews.list">) =>
         handle("HostedReviews.list", request, (methods) =>
           methods["HostedReviews.list"](request, {}),

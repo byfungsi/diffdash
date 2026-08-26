@@ -13,6 +13,11 @@ import type { OperationHandlersFor } from "./operation-handlers"
 
 type ReviewMethod =
   | typeof CoreMethod.getHostedReviewDecision
+  | typeof CoreMethod.getHostedReviewDetail
+  | typeof CoreMethod.getHostedReviewChecks
+  | typeof CoreMethod.closeHostedReview
+  | typeof CoreMethod.mergeHostedReview
+  | typeof CoreMethod.updateHostedReviewBranch
   | typeof CoreMethod.listAssignedHostedReviews
   | typeof CoreMethod.listHostedReviews
   | typeof CoreMethod.resolveRepositoryComparison
@@ -31,6 +36,13 @@ export const makeReviewOperationHandlers: Effect.Effect<
 
   return {
     [CoreMethod.getHostedReviewDecision]: ({ review }) => gitProvider.getReviewDecision(review),
+    [CoreMethod.getHostedReviewDetail]: ({ review }) => gitProvider.getHostedReviewDetail(review),
+    [CoreMethod.getHostedReviewChecks]: ({ review }) => gitProvider.listHostedReviewChecks(review),
+    [CoreMethod.closeHostedReview]: ({ review }) => gitProvider.closeReview(review),
+    [CoreMethod.mergeHostedReview]: ({ review, method, bypassRules, expectedHeadRevision }) =>
+      gitProvider.mergeReview(review, method, bypassRules, expectedHeadRevision),
+    [CoreMethod.updateHostedReviewBranch]: ({ review }) =>
+      gitProvider.updateHostedReviewBranch(review),
     [CoreMethod.listAssignedHostedReviews]: ({ providerId }) =>
       gitProvider.listAssignedReviews(providerId),
     [CoreMethod.listHostedReviews]: ({ repository }) => gitProvider.listHostedReviews(repository),
@@ -57,7 +69,7 @@ export const makeReviewOperationHandlers: Effect.Effect<
         const repo = yield* comparisons.repository(target)
         return ResolvedRepositoryComparison.make({ repo, target })
       }),
-    [CoreMethod.submitHostedReviewDecision]: ({ review, decision }) =>
-      gitProvider.submitReviewDecision(review, decision),
+    [CoreMethod.submitHostedReviewDecision]: ({ review, submission }) =>
+      gitProvider.submitReviewDecision(review, submission),
   } satisfies OperationHandlersFor<ReviewMethod>
 })

@@ -3,9 +3,10 @@ import { Schema } from "effect"
 import {
   GitFileRevision,
   GitProviderId,
+  HostedReviewMergeMethod,
+  HostedReviewSubmission,
   HostedRepositoryLocator,
   HostedReviewLocator,
-  ReviewDecision,
 } from "@diffdash/domain/git-provider"
 import { RepositoryRelativePath } from "@diffdash/domain/repository-path"
 import { ReviewRevision } from "@diffdash/domain/review-identity"
@@ -45,7 +46,22 @@ export class SubmitHostedReviewDecisionRequest extends Schema.Class<SubmitHosted
   "SubmitHostedReviewDecisionRequest",
 )({
   review: HostedReviewLocator,
-  decision: ReviewDecision,
+  submission: HostedReviewSubmission,
+}) {}
+
+/** Request to close one hosted review. */
+export class CloseHostedReviewRequest extends Schema.Class<CloseHostedReviewRequest>(
+  "CloseHostedReviewRequest",
+)({ review: HostedReviewLocator }) {}
+
+/** Request to merge one hosted review with a provider-neutral strategy. */
+export class MergeHostedReviewRequest extends Schema.Class<MergeHostedReviewRequest>(
+  "MergeHostedReviewRequest",
+)({
+  review: HostedReviewLocator,
+  method: HostedReviewMergeMethod,
+  bypassRules: Schema.Boolean,
+  expectedHeadRevision: ReviewRevision,
 }) {}
 
 /** Request to open a hosted review file locally or through its provider. */

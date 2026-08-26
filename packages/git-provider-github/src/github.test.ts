@@ -12,6 +12,7 @@ import {
   HostedRepositoryName,
   HostedReviewLocator,
   HostedReviewNumber,
+  HostedReviewSubmission,
   RepositoryNamespace,
   RepositoryRelativePath,
   ReviewDiffAcquisition,
@@ -80,7 +81,53 @@ const processRunner = (
   streamLines: () => Stream.empty,
 })
 
-const fakeProcesses = (calls: Call[] = []): ProcessRunner => {
+const checksJson = JSON.stringify([
+  {
+    bucket: "pass",
+    completedAt: "2026-08-26T02:00:00.000Z",
+    description: "Passed",
+    event: "pull_request",
+    link: "https://github.com/fungsi/diffdash/actions/runs/1",
+    name: "test",
+    startedAt: "2026-08-26T01:00:00.000Z",
+    state: "SUCCESS",
+    workflow: "CI",
+  },
+  { bucket: "fail", link: "not a url", name: "lint" },
+  { bucket: "pending", link: "", name: "build" },
+  { bucket: "skipping", link: "", name: "docs" },
+  { bucket: "cancel", link: "", name: "deploy", workflow: 42 },
+])
+
+const checkProcesses = (output: string, exitCode: 0 | 1 | 8, calls: Call[] = []) =>
+  processRunner((request) => {
+    calls.push({
+      command: request.command,
+      args: request.args,
+      stdout: request.stdout ?? undefined,
+      request,
+    })
+    if (exitCode === 0) return Effect.succeed(result(output, request))
+    return ProcessExitError.make({
+      command: request.command,
+      args: request.args,
+      cwd: request.cwd,
+      exitCode,
+      signal: null,
+      stdout: output,
+      stderr: "checks did not pass",
+      stdoutTruncated: false,
+      stderrTruncated: false,
+      outputTruncated: false,
+      message: `Process exited with code ${exitCode}`,
+    })
+  })
+
+const fakeProcesses = (
+  calls: Call[] = [],
+  reviewDecisionJson = approvalJson,
+  reviewDetailJson = pullRequestDetailJson,
+): ProcessRunner => {
   const run: ProcessRunner["run"] = (request) =>
     Effect.sync(() => {
       const { args, command } = request
@@ -105,11 +152,17 @@ const fakeProcesses = (calls: Call[] = []): ProcessRunner => {
         return result("--color string  Use color: {always|never|auto}", request)
       }
       if (args[0] === "pr" && args[1] === "review") return result("", request)
+      if (
+        args[0] === "pr" &&
+        (args[1] === "close" || args[1] === "merge" || args[1] === "update-branch")
+      ) {
+        return result("", request)
+      }
       if (args[0] === "pr" && args[1] === "view") {
         return result(
           args.at(-1) === "headRefOid"
             ? JSON.stringify({ headRefOid: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" })
-            : pullRequestDetailJson,
+            : reviewDetailJson,
           request,
         )
       }
@@ -120,7 +173,7 @@ const fakeProcesses = (calls: Call[] = []): ProcessRunner => {
         return result(JSON.stringify({ login: "hanipcode" }), request)
       }
       const query = args.find((arg) => arg.startsWith("query=")) ?? ""
-      if (query.includes("latestReviews")) return result(approvalJson, request)
+      if (query.includes("latestReviews")) return result(reviewDecisionJson, request)
       if (query.includes("search(type: ISSUE")) return result(reviewRequestsJson, request)
       if (query.includes("repositories(")) return result(accessibleRepositoriesJson, request)
       throw new Error(`Unhandled gh command: ${args.join(" ")}`)
@@ -309,7 +362,8 @@ describe("GitHub provider", () => {
 
   it.effect("normalizes repository search, review detail, and decisions", () =>
     Effect.gen(function* () {
-      const provider = createGitHubProvider({}, fakeProcesses())
+      const calls: Call[] = []
+      const provider = createGitHubProvider({}, fakeProcesses(calls))
       const repositories = yield* provider.searchRepositories({
         query: "diffdash",
         namespaces: ["fungsi"],
@@ -328,7 +382,268 @@ describe("GitHub provider", () => {
       })
       expect(detail.files[0]).toMatchObject({ path: "src/renderer/src/app.tsx" })
       expect(detail.commits[0]).toMatchObject({ title: "Add PR workspace" })
+      expect(detail.comments?.[0]).toMatchObject({
+        author: { username: "hanipcode" },
+        body: "test",
+        createdAt: "2026-07-07T01:30:00Z",
+        url: null,
+      })
+      expect(detail.comments?.[1]).toMatchObject({
+        author: { username: "octocat" },
+        body: "Looks good. The review workspace is ready.",
+      })
+      expect(detail.comments).toHaveLength(2)
+      expect(detail.mergeState).toEqual({
+        status: "ready",
+        reason: "This review is ready to merge.",
+      })
+      expect(
+        calls.find(({ args }) => args[0] === "pr" && args[1] === "view" && args[2] === "42")?.args,
+      ).toEqual([
+        "pr",
+        "view",
+        "42",
+        "--repo",
+        "fungsi/diffdash",
+        "--json",
+        "number,title,body,author,state,url,isDraft,baseRefName,baseRefOid,headRefName,headRefOid,createdAt,updatedAt,files,commits,comments,reviews,mergeable,mergeStateStatus",
+      ])
       expect(decision).toBe("approved")
+    }),
+  )
+
+  it.effect("uses exact argv and normalizes every hosted check bucket", () =>
+    Effect.gen(function* () {
+      const calls: Call[] = []
+      const provider = createGitHubProvider({}, checkProcesses(checksJson, 0, calls))
+
+      const checks = yield* provider.listReviewChecks(review())
+
+      expect(calls.at(-1)?.args).toEqual([
+        "pr",
+        "checks",
+        "42",
+        "--repo",
+        "fungsi/diffdash",
+        "--json",
+        "bucket,completedAt,description,event,link,name,startedAt,state,workflow",
+      ])
+      expect(checks.map(({ status }) => status)).toEqual([
+        "passed",
+        "failed",
+        "pending",
+        "skipped",
+        "cancelled",
+      ])
+      expect(checks[0]).toMatchObject({
+        workflow: "CI",
+        description: "Passed",
+        detailsUrl: "https://github.com/fungsi/diffdash/actions/runs/1",
+      })
+      expect(checks[1]?.detailsUrl).toBeNull()
+      expect(checks[4]?.workflow).toBeNull()
+    }),
+  )
+
+  it.effect("decodes data-bearing check output for exit codes 1 and 8", () =>
+    Effect.gen(function* () {
+      for (const exitCode of [1, 8] as const) {
+        const provider = createGitHubProvider({}, checkProcesses(checksJson, exitCode))
+        expect(yield* provider.listReviewChecks(review())).toHaveLength(5)
+      }
+    }),
+  )
+
+  it.effect("rejects malformed required hosted check fields", () =>
+    Effect.gen(function* () {
+      for (const malformed of [
+        { bucket: "pass", link: "", name: 42 },
+        { bucket: 1, link: "", name: "test" },
+        { bucket: "pass", link: null, name: "test" },
+      ]) {
+        const provider = createGitHubProvider({}, checkProcesses(JSON.stringify([malformed]), 0))
+        const outcome = yield* Effect.result(provider.listReviewChecks(review()))
+        expect(Result.isFailure(outcome)).toBe(true)
+      }
+    }),
+  )
+
+  it.effect(
+    "uses exact deterministic argv for review submission, close, merge, and branch update",
+    () =>
+      Effect.gen(function* () {
+        const calls: Call[] = []
+        const provider = createGitHubProvider({}, fakeProcesses(calls))
+
+        yield* provider.submitReviewDecision(
+          review(),
+          HostedReviewSubmission.make({ decision: "changesRequested", body: "Please revise." }),
+        )
+        yield* provider.closeReview(review())
+        yield* provider.mergeReview(review(), "squash", false, ReviewRevision.make("head-squash"))
+        yield* provider.updateReviewBranch(review())
+
+        expect(calls.slice(-4).map(({ args }) => args)).toEqual([
+          [
+            "pr",
+            "review",
+            "42",
+            "--repo",
+            "fungsi/diffdash",
+            "--request-changes",
+            "--body",
+            "Please revise.",
+          ],
+          ["pr", "close", "42", "--repo", "fungsi/diffdash"],
+          [
+            "pr",
+            "merge",
+            "42",
+            "--repo",
+            "fungsi/diffdash",
+            "--squash",
+            "--match-head-commit",
+            "head-squash",
+          ],
+          ["pr", "update-branch", "42", "--repo", "fungsi/diffdash"],
+        ])
+      }),
+  )
+
+  it.effect("normalizes GitHub merge readiness conservatively", () =>
+    Effect.gen(function* () {
+      const base = JSON.parse(pullRequestDetailJson)
+      const mergeables = ["MERGEABLE", "CONFLICTING", "UNKNOWN"] as const
+      const statuses = [
+        "BEHIND",
+        "BLOCKED",
+        "CLEAN",
+        "DIRTY",
+        "DRAFT",
+        "HAS_HOOKS",
+        "UNKNOWN",
+        "UNSTABLE",
+      ] as const
+
+      for (const mergeable of mergeables) {
+        for (const mergeStateStatus of statuses) {
+          const expected =
+            mergeStateStatus === "DRAFT"
+              ? "unavailable"
+              : mergeable === "CONFLICTING" || mergeStateStatus === "DIRTY"
+                ? "conflicting"
+                : mergeStateStatus === "BEHIND"
+                  ? "behind"
+                  : mergeStateStatus === "BLOCKED"
+                    ? "blocked"
+                    : mergeable === "MERGEABLE" && mergeStateStatus !== "UNKNOWN"
+                      ? "ready"
+                      : "checking"
+          const provider = createGitHubProvider(
+            {},
+            fakeProcesses(
+              [],
+              approvalJson,
+              JSON.stringify({ ...base, mergeable, mergeStateStatus }),
+            ),
+          )
+          expect((yield* provider.getReview(review())).mergeState.status).toBe(expected)
+        }
+      }
+
+      for (const fields of [{ isDraft: true }, { state: "CLOSED" }, { state: "MERGED" }]) {
+        const provider = createGitHubProvider(
+          {},
+          fakeProcesses([], approvalJson, JSON.stringify({ ...base, ...fields })),
+        )
+        expect((yield* provider.getReview(review())).mergeState.status).toBe("unavailable")
+      }
+    }),
+  )
+
+  it.effect("strictly rejects unknown GitHub merge enum values", () =>
+    Effect.gen(function* () {
+      const base = JSON.parse(pullRequestDetailJson)
+      for (const fields of [{ mergeable: "POSSIBLY" }, { mergeStateStatus: "QUEUED" }]) {
+        const provider = createGitHubProvider(
+          {},
+          fakeProcesses([], approvalJson, JSON.stringify({ ...base, ...fields })),
+        )
+        expect(Result.isFailure(yield* Effect.result(provider.getReview(review())))).toBe(true)
+      }
+    }),
+  )
+
+  it.effect("maps every provider-neutral submission decision and merge method", () =>
+    Effect.gen(function* () {
+      const calls: Call[] = []
+      const provider = createGitHubProvider({}, fakeProcesses(calls))
+
+      for (const decision of ["approved", "commented"] as const) {
+        yield* provider.submitReviewDecision(
+          review(),
+          HostedReviewSubmission.make({ decision, body: `${decision} body` }),
+        )
+      }
+      yield* provider.mergeReview(review(), "merge", false, ReviewRevision.make("head-merge"))
+      yield* provider.mergeReview(review(), "rebase", true, ReviewRevision.make("head-admin"))
+
+      expect(calls.slice(-4).map(({ args }) => args)).toEqual([
+        ["pr", "review", "42", "--repo", "fungsi/diffdash", "--approve", "--body", "approved body"],
+        [
+          "pr",
+          "review",
+          "42",
+          "--repo",
+          "fungsi/diffdash",
+          "--comment",
+          "--body",
+          "commented body",
+        ],
+        [
+          "pr",
+          "merge",
+          "42",
+          "--repo",
+          "fungsi/diffdash",
+          "--merge",
+          "--match-head-commit",
+          "head-merge",
+        ],
+        [
+          "pr",
+          "merge",
+          "42",
+          "--repo",
+          "fungsi/diffdash",
+          "--rebase",
+          "--match-head-commit",
+          "head-admin",
+          "--admin",
+        ],
+      ])
+    }),
+  )
+
+  it.effect("normalizes the viewer's latest GitHub review states", () =>
+    Effect.gen(function* () {
+      for (const [state, expected] of [
+        ["CHANGES_REQUESTED", "changesRequested"],
+        ["COMMENTED", "commented"],
+      ] as const) {
+        const response = JSON.stringify({
+          data: {
+            viewer: { login: "hanipcode" },
+            repository: {
+              pullRequest: {
+                latestReviews: { nodes: [{ author: { login: "hanipcode" }, state }] },
+              },
+            },
+          },
+        })
+        const provider = createGitHubProvider({}, fakeProcesses([], response))
+        expect(yield* provider.getReviewDecision(review())).toBe(expected)
+      }
     }),
   )
 

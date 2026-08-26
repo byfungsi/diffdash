@@ -253,6 +253,10 @@ test("FUN-141 AC: verifies final packaged composition and provider persistence",
     })
     await expect(fixtureReview).toBeVisible()
     await fixtureReview.click()
+    await expect(window.locator("[data-hosted-review-detail]")).toContainText(
+      "Fixture merge request flow",
+    )
+    await window.getByRole("button", { name: "Open diff" }).click()
     await expect(window.locator("[data-review-editor-header]")).toContainText(
       "Fixture merge request flow",
     )
@@ -400,6 +404,10 @@ test("FUN-141 AC: verifies final packaged composition and provider persistence",
     })
     await expect(reopenedProject).toBeVisible()
     await reopenedProject.click()
+    await expect(restartedWindow.locator("[data-hosted-review-detail]")).toContainText(
+      "Fixture merge request flow",
+    )
+    await restartedWindow.getByRole("button", { name: "Open diff" }).click()
     await expect(restartedWindow.locator("[data-review-editor-header]")).toContainText(
       "Fixture merge request flow",
     )

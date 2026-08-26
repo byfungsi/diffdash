@@ -9,7 +9,10 @@ import {
   type HostedRepositoryLocator,
   ResolvedHostedRepository,
   type HostedReviewLocator,
+  type HostedReviewCheck,
   type HostedReviewDetail,
+  type HostedReviewMergeMethod,
+  type HostedReviewSubmission,
   type HostedReviewSummary,
 } from "@diffdash/domain/git-provider"
 import { ReviewRevision } from "@diffdash/domain/review-identity"
@@ -108,6 +111,12 @@ export class GitProvider extends Context.Service<
     readonly getHostedReviewDetail: (
       review: HostedReviewLocator,
     ) => Effect.Effect<HostedReviewDetail, GitProviderCallError>
+    readonly listHostedReviewChecks: (
+      review: HostedReviewLocator,
+    ) => Effect.Effect<readonly HostedReviewCheck[], GitProviderCallError>
+    readonly updateHostedReviewBranch: (
+      review: HostedReviewLocator,
+    ) => Effect.Effect<void, GitProviderCallError>
     readonly getReviewDiffSource: (
       review: HostedReviewLocator,
     ) => Effect.Effect<ReviewDiffSource, GitProviderCallError>
@@ -116,7 +125,14 @@ export class GitProvider extends Context.Service<
     ) => Effect.Effect<import("@diffdash/domain/git-provider").ReviewDecision, GitProviderCallError>
     readonly submitReviewDecision: (
       review: HostedReviewLocator,
-      decision: import("@diffdash/domain/git-provider").ReviewDecision,
+      submission: HostedReviewSubmission,
+    ) => Effect.Effect<void, GitProviderCallError>
+    readonly closeReview: (review: HostedReviewLocator) => Effect.Effect<void, GitProviderCallError>
+    readonly mergeReview: (
+      review: HostedReviewLocator,
+      method: HostedReviewMergeMethod,
+      bypassRules: boolean,
+      expectedHeadRevision: ReviewRevision,
     ) => Effect.Effect<void, GitProviderCallError>
     readonly hostedReviewCheckoutSpec: (
       review: HostedReviewLocator,
@@ -221,6 +237,23 @@ export class GitProvider extends Context.Service<
           provider(review.repository.providerId).pipe(
             Effect.flatMap((registration) => registration.getReview(review)),
           ),
+        listHostedReviewChecks: (review) =>
+          provider(review.repository.providerId).pipe(
+            Effect.flatMap(
+              (registration) =>
+                registration.listReviewChecks?.(review) ??
+                unsupported(review.repository.providerId, "listReviewChecks"),
+            ),
+          ),
+        updateHostedReviewBranch: (review) =>
+          provider(review.repository.providerId).pipe(
+            Effect.flatMap((registration) =>
+              registration.descriptor.capabilities.reviewBranchUpdates
+                ? (registration.updateReviewBranch?.(review) ??
+                  unsupported(review.repository.providerId, "updateReviewBranch"))
+                : unsupported(review.repository.providerId, "updateReviewBranch"),
+            ),
+          ),
         getReviewDiffSource: (review) =>
           provider(review.repository.providerId).pipe(
             Effect.flatMap((registration) => registration.getReviewDiffSource(review)),
@@ -229,9 +262,26 @@ export class GitProvider extends Context.Service<
           provider(review.repository.providerId).pipe(
             Effect.flatMap((registration) => registration.getReviewDecision(review)),
           ),
-        submitReviewDecision: (review, decision) =>
+        submitReviewDecision: (review, submission) =>
           provider(review.repository.providerId).pipe(
-            Effect.flatMap((registration) => registration.submitReviewDecision(review, decision)),
+            Effect.flatMap((registration) => registration.submitReviewDecision(review, submission)),
+          ),
+        closeReview: (review) =>
+          provider(review.repository.providerId).pipe(
+            Effect.flatMap((registration) => registration.closeReview(review)),
+          ),
+        mergeReview: (review, method, bypassRules, expectedHeadRevision) =>
+          provider(review.repository.providerId).pipe(
+            Effect.flatMap((registration) => {
+              const capabilities = registration.descriptor.capabilities
+              if (!capabilities.reviewMerge) {
+                return unsupported(review.repository.providerId, "mergeReview")
+              }
+              if (bypassRules && !capabilities.reviewMergeBypass) {
+                return unsupported(review.repository.providerId, "mergeReviewBypass")
+              }
+              return registration.mergeReview(review, method, bypassRules, expectedHeadRevision)
+            }),
           ),
         hostedReviewCheckoutSpec: (review, revision) =>
           provider(review.repository.providerId).pipe(
@@ -256,7 +306,13 @@ export class GitProvider extends Context.Service<
 
 const unsupported = (
   providerId: GitProviderId,
-  operation: "listAssignedReviews" | "listSearchScopes",
+  operation:
+    | "listAssignedReviews"
+    | "listSearchScopes"
+    | "listReviewChecks"
+    | "mergeReview"
+    | "mergeReviewBypass"
+    | "updateReviewBranch",
 ) =>
   GitProviderOperationError.make({
     providerId,

@@ -32,6 +32,7 @@ export const KeyboardShortcutCommandId = Schema.Literals([
   "navigation.selectRibbonActivity",
   "review.toggleSidebar",
   "review.openActions",
+  "review.reload",
   "review.toggleViewedFile",
   "search.open",
   "search.next",
@@ -83,6 +84,7 @@ export const KEYBOARD_SHORTCUT_SECTIONS: readonly KeyboardShortcutSection[] = [
     shortcuts: [
       { id: "review.toggleSidebar", label: "Toggle sidebar", keys: [["mod", "b"]] },
       { id: "review.openActions", label: "Review actions", keys: [["mod", "shift", "k"]] },
+      { id: "review.reload", label: "Refresh review", keys: [["mod", "r"]] },
       { id: "review.toggleViewedFile", label: "Toggle viewed file", keys: [["v"]] },
     ],
   },

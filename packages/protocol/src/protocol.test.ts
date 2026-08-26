@@ -2,6 +2,7 @@ import { describe, expect, it } from "@effect/vitest"
 import { AgentProviderId } from "@diffdash/domain/agent-provider"
 import { CodeWorkspaceLeaseId } from "@diffdash/domain/code-workspace"
 import { ExecutablePath } from "@diffdash/domain/executable-path"
+import { makeHostedReviewLocator } from "@diffdash/domain/git-provider"
 import { WebUrl } from "@diffdash/domain/web-url"
 import { RepositoryRelativePath } from "@diffdash/domain/repository-path"
 import {
@@ -27,7 +28,12 @@ import { HashSet, Option, Result, Schema } from "effect"
 
 import { EventChannel, InvokeChannel } from "./channels"
 import { RepositoryLanguageLocationResult } from "./code-workspace"
-import { HostedRepositorySearchRequest, HostedReviewRequest } from "./hosted-git"
+import {
+  HostedRepositorySearchRequest,
+  MergeHostedReviewRequest,
+  HostedReviewRequest,
+  SubmitHostedReviewDecisionRequest,
+} from "./hosted-git"
 import { DiffDashMcpToolRequest, DiffDashMcpToolResponse, DiffDashReviewMcpTool } from "./mcp"
 import {
   bridgeResult,
@@ -142,9 +148,9 @@ describe("protocol boundaries", () => {
     const invokeChannels = Object.values(InvokeChannel)
     const eventChannels = Object.values(EventChannel)
 
-    expect(HashSet.size(HashSet.fromIterable(invokeChannels))).toBe(83)
+    expect(HashSet.size(HashSet.fromIterable(invokeChannels))).toBe(88)
     expect(HashSet.size(HashSet.fromIterable(eventChannels))).toBe(4)
-    expect(HashSet.size(HashSet.fromIterable([...invokeChannels, ...eventChannels]))).toBe(87)
+    expect(HashSet.size(HashSet.fromIterable([...invokeChannels, ...eventChannels]))).toBe(92)
     expect(invokeChannels).not.toEqual(
       expect.arrayContaining([
         "repositories:addLocal",
@@ -434,6 +440,59 @@ describe("protocol boundaries", () => {
 
     expect(Result.isFailure(search)).toBe(true)
     expect(Result.isFailure(review)).toBe(true)
+  })
+
+  it("encodes hosted close and merge void responses as structured-clone-safe null", () => {
+    for (const channel of [
+      InvokeChannel.closeHostedReview,
+      InvokeChannel.mergeHostedReview,
+      InvokeChannel.updateHostedReviewBranch,
+    ]) {
+      expect(Schema.encodeSync(InvokeContract[channel].response)(undefined)).toBeNull()
+    }
+  })
+
+  it("round-trips the hosted branch update request and null response", () => {
+    const contract = InvokeContract[InvokeChannel.updateHostedReviewBranch]
+    const request = HostedReviewRequest.make({
+      review: makeHostedReviewLocator("github", "fungsi", "diffdash", 42),
+    })
+    const encoded = Schema.encodeSync(contract.request)(request)
+
+    expect(Schema.decodeSync(contract.request)(encoded)).toEqual(request)
+    expect(Schema.encodeSync(contract.response)(undefined)).toBeNull()
+    expect(Schema.decodeSync(contract.response)(null)).toBeUndefined()
+  })
+
+  it("round-trips guarded hosted merge input and the null response", () => {
+    const contract = InvokeContract[InvokeChannel.mergeHostedReview]
+    const request = MergeHostedReviewRequest.make({
+      review: makeHostedReviewLocator("github", "fungsi", "diffdash", 42),
+      method: "squash",
+      bypassRules: true,
+      expectedHeadRevision: ReviewRevision.make("expected-head"),
+    })
+    const encoded = Schema.encodeSync(contract.request)(request)
+
+    expect(Schema.decodeSync(contract.request)(encoded)).toEqual(request)
+    expect(Schema.encodeSync(contract.response)(undefined)).toBeNull()
+    expect(Schema.decodeSync(contract.response)(null)).toBeUndefined()
+  })
+
+  it("rejects none as a hosted review submission decision", () => {
+    const request = Schema.decodeUnknownResult(SubmitHostedReviewDecisionRequest)({
+      review: {
+        repository: {
+          providerId: "github",
+          namespace: "fungsi",
+          name: "diffdash",
+        },
+        number: 42,
+      },
+      submission: { decision: "none", body: "" },
+    })
+
+    expect(Result.isFailure(request)).toBe(true)
   })
 
   it("rejects incomplete viewed-file content identities", () => {
