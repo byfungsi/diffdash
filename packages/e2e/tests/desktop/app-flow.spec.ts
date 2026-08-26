@@ -192,10 +192,14 @@ test("FUN-130 AC: routes a hosted review through the non-GitHub fixture provider
     await expect(fixtureReview).toBeVisible()
     await fixtureReview.click()
 
-    await expect(window.locator("[data-review-editor-header]")).toContainText(
+    await expect(window.locator("[data-hosted-review-detail]")).toContainText(
       "Fixture merge request flow",
     )
     await expect(window.getByText("Opened MR #73: Fixture merge request flow")).toBeVisible()
+    await window.getByRole("button", { name: "Open diff" }).click()
+    await expect(window.locator("[data-review-editor-header]")).toContainText(
+      "Fixture merge request flow",
+    )
     await expect(window.getByText("src/fixture.ts").first()).toBeVisible()
     await window.getByRole("button", { name: "Review actions" }).click()
     await expect(window.getByRole("menuitem", { name: /Approve/ })).toHaveCount(0)
