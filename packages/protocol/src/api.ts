@@ -4,6 +4,8 @@ import type {
   GitProviderDescriptor,
   HostedRepository,
   HostedRepositoryLocator,
+  HostedReviewDetail,
+  HostedReviewCheck,
   HostedReviewSummary,
   ReviewDecision,
 } from "@diffdash/domain/git-provider"
@@ -69,9 +71,11 @@ import type {
 import type { OpenRepositoryComparisonCommand } from "./cli-navigation"
 import type {
   HostedProviderRequest,
+  CloseHostedReviewRequest,
   HostedRepositoryRequest,
   HostedRepositorySearchRequest,
   HostedReviewRequest,
+  MergeHostedReviewRequest,
   OpenHostedReviewFileRequest,
   SubmitHostedReviewDecisionRequest,
 } from "./hosted-git"
@@ -232,7 +236,12 @@ export interface DiffDashApi {
       request: HostedProviderRequest,
     ) => Promise<readonly HostedReviewSummary[]>
     readonly getDecision: (request: HostedReviewRequest) => Promise<ReviewDecision>
+    readonly getDetail: (request: HostedReviewRequest) => Promise<HostedReviewDetail>
+    readonly getChecks: (request: HostedReviewRequest) => Promise<readonly HostedReviewCheck[]>
     readonly submitDecision: (request: SubmitHostedReviewDecisionRequest) => Promise<void>
+    readonly close: (request: CloseHostedReviewRequest) => Promise<void>
+    readonly merge: (request: MergeHostedReviewRequest) => Promise<void>
+    readonly updateBranch: (request: HostedReviewRequest) => Promise<void>
   }
   readonly localReviews: {
     readonly resolveBranch: (

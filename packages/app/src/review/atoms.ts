@@ -4,6 +4,8 @@ import { Atom } from "effect/unstable/reactivity"
 import {
   HostedRepositoryLocator,
   HostedReviewLocator,
+  type HostedReviewCheck,
+  HostedReviewDetail,
   HostedReviewSummary,
   makeHostedRepositoryLocator,
   makeHostedReviewLocator,
@@ -20,6 +22,8 @@ const hostedRepositoryAtomKeyCodec = makeSchemaAtomKeyCodec(HostedRepositoryLoca
 const hostedReviewAtomKeyCodec = makeSchemaAtomKeyCodec(HostedReviewLocator)
 const repositoryComparisonAtomKeyCodec = makeSchemaAtomKeyCodec(RepositoryComparisonTarget)
 const EMPTY_HOSTED_REVIEWS: readonly HostedReviewSummary[] = []
+const EMPTY_HOSTED_REVIEW_DETAIL: HostedReviewDetail | null = null
+const EMPTY_HOSTED_REVIEW_CHECKS: readonly HostedReviewCheck[] = []
 
 /** Open hosted reviews for one repository. */
 export const pullRequestsAtom = Atom.family((key: string) =>
@@ -35,6 +39,32 @@ export const pullRequestsAtom = Atom.family((key: string) =>
       )
     }),
     { initialValue: EMPTY_HOSTED_REVIEWS },
+  ),
+)
+
+/** Mutable hosted review metadata loaded independently from diff snapshot acquisition. */
+export const hostedReviewDetailAtom = Atom.family((key: string) =>
+  rendererRuntime.atom(
+    Effect.gen(function* () {
+      const parsedKey = key.length === 0 ? null : hostedReviewAtomKeyCodec.decode(key)
+      if (parsedKey === null) return null
+      const reviews = yield* ReviewContent
+      return yield* reviews.hostedReviews.getDetail(HostedReviewRequest.make({ review: parsedKey }))
+    }),
+    { initialValue: EMPTY_HOSTED_REVIEW_DETAIL },
+  ),
+)
+
+/** Provider-neutral checks loaded independently from review detail and diff acquisition. */
+export const hostedReviewChecksAtom = Atom.family((key: string) =>
+  rendererRuntime.atom(
+    Effect.gen(function* () {
+      const parsedKey = key.length === 0 ? null : hostedReviewAtomKeyCodec.decode(key)
+      if (parsedKey === null) return EMPTY_HOSTED_REVIEW_CHECKS
+      const reviews = yield* ReviewContent
+      return yield* reviews.hostedReviews.getChecks(HostedReviewRequest.make({ review: parsedKey }))
+    }),
+    { initialValue: EMPTY_HOSTED_REVIEW_CHECKS },
   ),
 )
 

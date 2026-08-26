@@ -484,6 +484,12 @@ const materializeRevision = (
           authoredAt: commit.authoredDate,
         }),
       ),
+      mergeState: {
+        status: manifest.pullRequest.isDraft ? "unavailable" : "ready",
+        reason: manifest.pullRequest.isDraft
+          ? "Draft reviews cannot be merged."
+          : "This review is ready to merge.",
+      },
     })
     const diff: DemoReviewDiff = {
       locator,

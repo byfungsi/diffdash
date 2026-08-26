@@ -126,6 +126,8 @@ const detail = HostedReviewDetail.make({
   }),
   files: [],
   commits: [],
+  mergeState: { status: "ready", reason: "Ready to merge." },
+  comments: [],
 })
 
 const hostedSource = (closed: { count: number }): ReviewDiffSource => {
@@ -283,8 +285,12 @@ const providerLayer = (source: ReviewDiffSource) =>
     listHostedReviews: () => Effect.die("unused"),
     listAssignedReviews: () => Effect.die("unused"),
     getHostedReviewDetail: () => Effect.succeed(detail),
+    updateHostedReviewBranch: () => Effect.die("unused"),
+    listHostedReviewChecks: () => Effect.die("unused"),
     getReviewDiffSource: () => Effect.succeed(source),
     getReviewDecision: () => Effect.die("unused"),
+    closeReview: () => Effect.die("unused"),
+    mergeReview: () => Effect.die("unused"),
     submitReviewDecision: () => Effect.die("unused"),
     hostedReviewCheckoutSpec: () =>
       Effect.succeed(

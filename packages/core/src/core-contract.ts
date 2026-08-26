@@ -93,6 +93,11 @@ export const CoreMethod = {
   listProviders: "GitProviders.list",
   submitHostedReviewDecision: "HostedReviews.submitDecision",
   getHostedReviewDecision: "HostedReviews.getDecision",
+  getHostedReviewDetail: "HostedReviews.getDetail",
+  getHostedReviewChecks: "HostedReviews.getChecks",
+  closeHostedReview: "HostedReviews.close",
+  mergeHostedReview: "HostedReviews.merge",
+  updateHostedReviewBranch: "HostedReviews.updateBranch",
   listHostedReviews: "HostedReviews.list",
   listAssignedHostedReviews: "HostedReviews.listAssigned",
   listHostedRepositorySearchScopes: "GitProviders.listSearchScopes",
@@ -161,6 +166,11 @@ export const CoreMethodChannel = {
   [CoreMethod.listProviders]: InvokeChannel.listProviders,
   [CoreMethod.submitHostedReviewDecision]: InvokeChannel.submitHostedReviewDecision,
   [CoreMethod.getHostedReviewDecision]: InvokeChannel.getHostedReviewDecision,
+  [CoreMethod.getHostedReviewDetail]: InvokeChannel.getHostedReviewDetail,
+  [CoreMethod.getHostedReviewChecks]: InvokeChannel.getHostedReviewChecks,
+  [CoreMethod.closeHostedReview]: InvokeChannel.closeHostedReview,
+  [CoreMethod.mergeHostedReview]: InvokeChannel.mergeHostedReview,
+  [CoreMethod.updateHostedReviewBranch]: InvokeChannel.updateHostedReviewBranch,
   [CoreMethod.listHostedReviews]: InvokeChannel.listHostedReviews,
   [CoreMethod.listAssignedHostedReviews]: InvokeChannel.listAssignedHostedReviews,
   [CoreMethod.listHostedRepositorySearchScopes]: InvokeChannel.listHostedRepositorySearchScopes,
@@ -332,6 +342,11 @@ export interface CoreOperationFailureMap {
   readonly [CoreMethod.listProviders]: never
   readonly [CoreMethod.submitHostedReviewDecision]: CoreGitProviderFailure
   readonly [CoreMethod.getHostedReviewDecision]: CoreGitProviderFailure
+  readonly [CoreMethod.getHostedReviewDetail]: CoreGitProviderFailure
+  readonly [CoreMethod.getHostedReviewChecks]: CoreGitProviderFailure
+  readonly [CoreMethod.closeHostedReview]: CoreGitProviderFailure
+  readonly [CoreMethod.mergeHostedReview]: CoreGitProviderFailure
+  readonly [CoreMethod.updateHostedReviewBranch]: CoreGitProviderFailure
   readonly [CoreMethod.listHostedReviews]: CoreGitProviderFailure
   readonly [CoreMethod.listAssignedHostedReviews]: CoreGitProviderFailure
   readonly [CoreMethod.listHostedRepositorySearchScopes]: CoreGitProviderFailure

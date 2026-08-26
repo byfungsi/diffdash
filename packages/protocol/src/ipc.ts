@@ -4,6 +4,8 @@ import {
   GitProviderDescriptor,
   HostedRepository,
   HostedRepositoryLocator,
+  HostedReviewDetail,
+  HostedReviewCheck,
   HostedReviewSummary,
   ReviewDecision,
 } from "@diffdash/domain/git-provider"
@@ -69,9 +71,11 @@ import {
 } from "./code-workspace"
 import {
   HostedProviderRequest,
+  CloseHostedReviewRequest,
   HostedRepositoryRequest,
   HostedRepositorySearchRequest,
   HostedReviewRequest,
+  MergeHostedReviewRequest,
   OpenHostedReviewFileRequest,
   SubmitHostedReviewDecisionRequest,
 } from "./hosted-git"
@@ -314,6 +318,31 @@ export const InvokeContract = {
     InvokeChannel.getHostedReviewDecision,
     HostedReviewRequest,
     ReviewDecision,
+  ),
+  [InvokeChannel.getHostedReviewDetail]: defineInvoke(
+    InvokeChannel.getHostedReviewDetail,
+    HostedReviewRequest,
+    HostedReviewDetail,
+  ),
+  [InvokeChannel.getHostedReviewChecks]: defineInvoke(
+    InvokeChannel.getHostedReviewChecks,
+    HostedReviewRequest,
+    Schema.Array(HostedReviewCheck),
+  ),
+  [InvokeChannel.closeHostedReview]: defineInvoke(
+    InvokeChannel.closeHostedReview,
+    CloseHostedReviewRequest,
+    EmptyResponse,
+  ),
+  [InvokeChannel.mergeHostedReview]: defineInvoke(
+    InvokeChannel.mergeHostedReview,
+    MergeHostedReviewRequest,
+    EmptyResponse,
+  ),
+  [InvokeChannel.updateHostedReviewBranch]: defineInvoke(
+    InvokeChannel.updateHostedReviewBranch,
+    HostedReviewRequest,
+    EmptyResponse,
   ),
   [InvokeChannel.listHostedReviews]: defineInvoke(
     InvokeChannel.listHostedReviews,

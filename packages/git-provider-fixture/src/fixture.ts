@@ -15,6 +15,7 @@ import {
   HostedReviewCheckoutSpec,
   HostedReviewDetail,
   HostedReviewLocator,
+  HostedReviewMergeState,
   HostedReviewNumber,
   HostedReviewSummary,
   HostedReviewDiffSourceTarget,
@@ -138,6 +139,11 @@ export const createFixtureGitProvider = (
         searchScopes: false,
         assignedReviews: true,
         reviewDecisions: false,
+        reviewClosure: false,
+        reviewMerge: false,
+        reviewMergeBypass: false,
+        reviewChecks: false,
+        reviewBranchUpdates: false,
         fileUrls: true,
         remoteWorkspaceBootstrap: true,
       }),
@@ -192,9 +198,20 @@ export const createFixtureGitProvider = (
                 authoredAt: summary.updatedAt,
               }),
             ],
+            comments: [],
+            mergeState: HostedReviewMergeState.make({
+              status: "unavailable",
+              reason: "Fixture reviews do not support merge readiness.",
+            }),
           }),
         ),
       ),
+    listReviewChecks: () =>
+      GitProviderOperationError.make({
+        providerId: id,
+        operation: DiagnosticOperation.make("listReviewChecks"),
+        message: "Fixture Forge does not support review checks",
+      }),
     getReviewDiffSource: Effect.fn("FixtureGitProvider.getReviewDiffSource")(function* (locator) {
       yield* requireReview(locator, "getReviewDiffSource")
       const bytes = new TextEncoder().encode(diffText)
@@ -243,6 +260,18 @@ export const createFixtureGitProvider = (
         providerId: id,
         operation: DiagnosticOperation.make("submitReviewDecision"),
         message: "Fixture Forge does not support review decisions",
+      }),
+    closeReview: () =>
+      GitProviderOperationError.make({
+        providerId: id,
+        operation: DiagnosticOperation.make("closeReview"),
+        message: "Fixture Forge does not support closing reviews",
+      }),
+    mergeReview: () =>
+      GitProviderOperationError.make({
+        providerId: id,
+        operation: DiagnosticOperation.make("mergeReview"),
+        message: "Fixture Forge does not support merging reviews",
       }),
     repositoryUrl: (locator) =>
       requireRepository(locator, "repositoryUrl").pipe(Effect.as(repositoryUrl)),

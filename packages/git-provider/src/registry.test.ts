@@ -92,6 +92,11 @@ const makeProvider = (idValue: string, host = "git.example.com"): GitProviderReg
         searchScopes: true,
         assignedReviews: true,
         reviewDecisions: true,
+        reviewClosure: true,
+        reviewMerge: true,
+        reviewMergeBypass: true,
+        reviewChecks: true,
+        reviewBranchUpdates: true,
         fileUrls: true,
         remoteWorkspaceBootstrap: true,
       }),
@@ -122,7 +127,18 @@ const makeProvider = (idValue: string, host = "git.example.com"): GitProviderReg
         }),
       ]),
     listReviews: () => Effect.succeed([summary]),
-    getReview: () => Effect.succeed(HostedReviewDetail.make({ summary, files: [], commits: [] })),
+    getReview: () =>
+      Effect.succeed(
+        HostedReviewDetail.make({
+          summary,
+          files: [],
+          commits: [],
+          comments: [],
+          mergeState: { status: "ready", reason: "Ready to merge." },
+        }),
+      ),
+    listReviewChecks: () => Effect.succeed([]),
+    updateReviewBranch: () => Effect.void,
     getReviewDiffSource: () =>
       Effect.succeed({
         offer: ReviewDiffSourceOffer.make({
@@ -146,6 +162,8 @@ const makeProvider = (idValue: string, host = "git.example.com"): GitProviderReg
       }),
     getReviewDecision: () => Effect.succeed("none" as const),
     submitReviewDecision: () => Effect.void,
+    closeReview: () => Effect.void,
+    mergeReview: () => Effect.void,
     repositoryUrl: () => Effect.succeed(WebUrl.make(`https://${host}/platform/backend/service`)),
     fileUrl: (_repository, path, revision) =>
       Effect.succeed(
@@ -277,6 +295,64 @@ describe("GitProviderRegistry", () => {
     }).pipe(Effect.provide(GitProviderRegistry.layer([registration])))
   })
 
+  it.effect("parses hosted review check output at the registry boundary", () => {
+    const registration = makeProvider("fake")
+    Object.defineProperty(registration, "listReviewChecks", {
+      value: () => Effect.succeed([{ status: "passed" }]),
+    })
+
+    return Effect.gen(function* () {
+      const registry = yield* GitProviderRegistry
+      const provider = yield* registry.get(GitProviderId.make("fake"))
+      const result = yield* Effect.result(
+        provider.listReviewChecks?.(
+          HostedReviewLocator.make({
+            repository: HostedRepositoryLocator.make({
+              providerId: GitProviderId.make("fake"),
+              namespace: RepositoryNamespace.make("platform/backend"),
+              name: HostedRepositoryName.make("service"),
+            }),
+            number: HostedReviewNumber.make(42),
+          }),
+        ) ?? Effect.die("Missing listReviewChecks"),
+      )
+
+      expect(Result.isFailure(result)).toBe(true)
+      if (Result.isFailure(result)) {
+        expect(result.failure).toMatchObject({
+          operation: "listReviewChecks",
+          message: "Provider returned malformed data",
+        })
+      }
+    }).pipe(Effect.provide(GitProviderRegistry.layer([registration])))
+  })
+
+  it.effect("rejects branch updates routed to another provider", () => {
+    const registration = makeProvider("fake")
+
+    return Effect.gen(function* () {
+      const registry = yield* GitProviderRegistry
+      const provider = yield* registry.get(GitProviderId.make("fake"))
+      const outcome = yield* Effect.result(
+        provider.updateReviewBranch?.(
+          HostedReviewLocator.make({
+            repository: HostedRepositoryLocator.make({
+              providerId: GitProviderId.make("other"),
+              namespace: RepositoryNamespace.make("platform/backend"),
+              name: HostedRepositoryName.make("service"),
+            }),
+            number: HostedReviewNumber.make(42),
+          }),
+        ) ?? Effect.die("Missing updateReviewBranch"),
+      )
+
+      expect(Result.isFailure(outcome)).toBe(true)
+      if (Result.isFailure(outcome)) {
+        expect(outcome.failure).toMatchObject({ operation: "updateReviewBranch" })
+      }
+    }).pipe(Effect.provide(GitProviderRegistry.layer([registration])))
+  })
+
   it.effect("preserves a validated bounded review source through registry wrapping", () => {
     const registration = makeProvider("fake")
     const review = HostedReviewLocator.make({
@@ -386,6 +462,35 @@ describe("GitProviderRegistry", () => {
     })
   })
 
+  it.effect("rejects rule bypass capability without merge capability", () => {
+    const registration = makeProvider("fake")
+    Object.defineProperty(registration, "descriptor", {
+      value: GitProviderDescriptor.make({
+        ...registration.descriptor,
+        capabilities: GitProviderCapabilities.make({
+          ...registration.descriptor.capabilities,
+          reviewMerge: false,
+          reviewMergeBypass: true,
+        }),
+      }),
+    })
+
+    return Effect.gen(function* () {
+      const result = yield* GitProviderRegistry.pipe(
+        Effect.provide(GitProviderRegistry.layer([registration])),
+        Effect.result,
+      )
+
+      expect(Result.isFailure(result)).toBe(true)
+      if (Result.isFailure(result)) {
+        expect(result.failure).toMatchObject({
+          operation: "register.descriptor",
+          message: "Provider cannot support review rule bypass without review merge",
+        })
+      }
+    })
+  })
+
   it.effect("rejects same-provider cross-target checkout results", () => {
     const registration = makeProvider("fake")
     const requested = HostedReviewLocator.make({
@@ -483,7 +588,15 @@ describe("GitProviderRegistry", () => {
     })
     Object.defineProperty(registration, "getReview", {
       value: () =>
-        Effect.succeed(HostedReviewDetail.make({ summary: otherSummary, files: [], commits: [] })),
+        Effect.succeed(
+          HostedReviewDetail.make({
+            summary: otherSummary,
+            files: [],
+            commits: [],
+            comments: [],
+            mergeState: { status: "ready", reason: "Ready to merge." },
+          }),
+        ),
     })
     Object.defineProperty(registration, "checkoutSpec", {
       value: () =>

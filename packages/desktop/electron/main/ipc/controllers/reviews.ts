@@ -20,6 +20,11 @@ export const defineReviewHandlers = (
   handlers.defineCore(CoreMethod.listHostedReviews, runtime.core.listHostedReviews)
   handlers.defineCore(CoreMethod.listAssignedHostedReviews, runtime.core.listAssignedHostedReviews)
   handlers.defineCore(CoreMethod.getHostedReviewDecision, runtime.core.getHostedReviewDecision)
+  handlers.defineCore(CoreMethod.getHostedReviewDetail, runtime.core.getHostedReviewDetail)
+  handlers.defineCore(CoreMethod.getHostedReviewChecks, runtime.core.getHostedReviewChecks)
+  handlers.defineCore(CoreMethod.closeHostedReview, runtime.core.closeHostedReview)
+  handlers.defineCore(CoreMethod.mergeHostedReview, runtime.core.mergeHostedReview)
+  handlers.defineCore(CoreMethod.updateHostedReviewBranch, runtime.core.updateHostedReviewBranch)
   handlers.defineCore(
     CoreMethod.submitHostedReviewDecision,
     runtime.core.submitHostedReviewDecision,

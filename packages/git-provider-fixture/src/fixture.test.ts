@@ -41,6 +41,9 @@ describe("Fixture Forge provider", () => {
 
       expect(detail.summary.title).toBe("Fixture merge request flow")
       expect(detail.files[0]?.path).toBe("src/fixture.ts")
+      expect(detail.mergeState.status).toBe("unavailable")
+      expect(provider.descriptor.capabilities.reviewBranchUpdates).toBe(false)
+      expect(provider.updateReviewBranch).toBeUndefined()
       expect(source.offer.expectedRevision).toBe(detail.summary.head.revision)
       expect(checkout.fetchRef).toBe("refs/merge-requests/73/head")
       yield* source.close

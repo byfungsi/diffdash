@@ -1,6 +1,10 @@
 import { Context, Effect, Layer } from "effect"
 
-import type { HostedReviewSummary } from "@diffdash/domain/git-provider"
+import type {
+  HostedReviewCheck,
+  HostedReviewDetail,
+  HostedReviewSummary,
+} from "@diffdash/domain/git-provider"
 import type { LocalReviewTarget } from "@diffdash/domain/local-review"
 import type { RepositoryComparisonTarget } from "@diffdash/domain/repository-comparison"
 import type {
@@ -24,6 +28,12 @@ export class ReviewContent extends Context.Service<
   ReviewContent,
   {
     readonly hostedReviews: {
+      readonly getChecks: (
+        request: HostedReviewRequest,
+      ) => Effect.Effect<readonly HostedReviewCheck[], RendererApiError>
+      readonly getDetail: (
+        request: HostedReviewRequest,
+      ) => Effect.Effect<HostedReviewDetail, RendererApiError>
       readonly list: (
         request: HostedRepositoryRequest,
       ) => Effect.Effect<readonly HostedReviewSummary[], RendererApiError>
@@ -52,6 +62,14 @@ export const reviewContentLayer = Layer.effect(
     const progressive = createProgressiveReviewApi(() => api.progressiveReviews)
     return ReviewContent.of({
       hostedReviews: {
+        getChecks: (request) =>
+          invokePreload(InvokeChannel.getHostedReviewChecks, () =>
+            api.hostedReviews.getChecks(request),
+          ),
+        getDetail: (request) =>
+          invokePreload(InvokeChannel.getHostedReviewDetail, () =>
+            api.hostedReviews.getDetail(request),
+          ),
         list: (request) =>
           invokePreload(InvokeChannel.listHostedReviews, () => api.hostedReviews.list(request)),
       },
