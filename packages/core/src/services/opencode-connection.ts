@@ -108,14 +108,15 @@ const RawPromptResponse = Schema.Struct({
   data: Schema.Struct({
     id: Schema.String.pipe(Schema.check(Schema.isPattern(/^msg_/u))),
     sessionID: OpenCodeSessionSummary.fields.id,
-    timeCreated: Schema.Number,
-    type: Schema.Literal("user"),
-    payload: Schema.Struct({ text: Schema.String }),
+    admittedSeq: Schema.Number,
+    prompt: Schema.Struct({ text: Schema.String }),
     delivery: Schema.Literals(["steer", "queue"]),
+    timeCreated: Schema.Number,
+    promotedSeq: Schema.optionalKey(Schema.Number),
   }),
 })
 const AgentSwitchBody = Schema.Struct({ agent: Schema.Literal("plan") })
-const PromptBody = Schema.Struct({ text: Schema.String })
+const PromptBody = Schema.Struct({ prompt: Schema.Struct({ text: Schema.String }) })
 const parseSessions = Schema.decodeUnknownEffect(Schema.fromJsonString(RawSessionsResponse))
 const parseSession = Schema.decodeUnknownEffect(Schema.fromJsonString(RawSessionResponse))
 const parsePlanAgent = Schema.decodeUnknownEffect(Schema.fromJsonString(RawPlanAgentResponse))
@@ -422,7 +423,9 @@ export const makeOpenCodeConnectionService = (
         OpenCodeApiRequest.cases.Post.make({
           operation: "forwardComment",
           path: `/api/session/${request.sessionId}/prompt`,
-          body: encodePrompt({ text: formatCommentForAgent(request.subject, request.body) }),
+          body: encodePrompt({
+            prompt: { text: formatCommentForAgent(request.subject, request.body) },
+          }),
         }),
       )
       const response = yield* decodeResponse(

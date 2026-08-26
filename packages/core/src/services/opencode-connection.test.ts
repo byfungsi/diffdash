@@ -34,10 +34,10 @@ const promptResponse = JSON.stringify({
   data: {
     id: "msg_example",
     sessionID: sessionId,
-    timeCreated: 1,
-    type: "user",
-    payload: { text: "accepted" },
+    admittedSeq: 1,
+    prompt: { text: "accepted" },
     delivery: "queue",
+    timeCreated: 1,
   },
 })
 const timestamp = "2026-08-22T00:00:00.000Z"
@@ -182,20 +182,22 @@ describe("OpenCodeConnectionService", () => {
           Post: ({ path, body }) => {
             if (path.endsWith("/agent")) return ""
             expect(JSON.parse(body)).toEqual({
-              text: [
-                "Source: DiffDash code line",
-                "Project: project",
-                `Revision: ${"0".repeat(40)}`,
-                "Path: src/example.ts",
-                "Line: 3",
-                "Line content:",
-                "return value",
-                "",
-                "User comment:",
-                "Please explain.",
-                "",
-                "- Is this safe?",
-              ].join("\n"),
+              prompt: {
+                text: [
+                  "Source: DiffDash code line",
+                  "Project: project",
+                  `Revision: ${"0".repeat(40)}`,
+                  "Path: src/example.ts",
+                  "Line: 3",
+                  "Line content:",
+                  "return value",
+                  "",
+                  "User comment:",
+                  "Please explain.",
+                  "",
+                  "- Is this safe?",
+                ].join("\n"),
+              },
             })
             return promptResponse
           },
@@ -341,15 +343,17 @@ describe("OpenCodeConnectionService", () => {
           Get: ({ path }) => (path.startsWith("/api/session/") ? sessionResponse : unavailablePlan),
           Post: ({ body }) => {
             const decoded = Schema.decodeUnknownSync(
-              Schema.Struct({ text: Schema.optionalKey(Schema.String) }),
+              Schema.Struct({
+                prompt: Schema.optionalKey(Schema.Struct({ text: Schema.String })),
+              }),
             )(JSON.parse(body))
-            if (decoded.text === undefined) return ""
-            expect(decoded.text).toContain("Source: DiffDash review line")
-            expect(decoded.text).toContain("Base revision: base")
-            expect(decoded.text).toContain("Head revision: head")
-            expect(decoded.text).toContain('"kind": "local"')
-            expect(decoded.text).toContain('"hunkHeader": "@@ -2 +2 @@"')
-            expect(decoded.text).toContain('"lineContent": "return value"')
+            if (decoded.prompt === undefined) return ""
+            expect(decoded.prompt.text).toContain("Source: DiffDash review line")
+            expect(decoded.prompt.text).toContain("Base revision: base")
+            expect(decoded.prompt.text).toContain("Head revision: head")
+            expect(decoded.prompt.text).toContain('"kind": "local"')
+            expect(decoded.prompt.text).toContain('"hunkHeader": "@@ -2 +2 @@"')
+            expect(decoded.prompt.text).toContain('"lineContent": "return value"')
             return promptResponse
           },
         }),
