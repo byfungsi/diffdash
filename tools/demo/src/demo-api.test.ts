@@ -26,11 +26,13 @@ import { loadAtomicWebhookReplayScenario } from "./atomic-webhook-replay"
 import { createDemoRuntime } from "./demo-api"
 import {
   HostedProviderRequest,
+  MergeHostedReviewRequest,
   HostedReviewRequest,
   SubmitHostedReviewDecisionRequest,
 } from "@diffdash/protocol/hosted-git"
 import {
   GitProviderId,
+  HostedReviewSubmission,
   HostedRepositoryLocator,
   HostedRepositoryName,
   HostedReviewLocator,
@@ -396,10 +398,33 @@ describe("scenario-backed DiffDash API", () => {
 
         yield* Effect.promise(() =>
           api.hostedReviews.submitDecision(
-            SubmitHostedReviewDecisionRequest.make({ review, decision: "approved" }),
+            SubmitHostedReviewDecisionRequest.make({
+              review,
+              submission: HostedReviewSubmission.make({ decision: "approved", body: "" }),
+            }),
           ),
         )
         expect(timeline.getState().approved).toBe(true)
+        yield* Effect.promise(() =>
+          api.hostedReviews.updateBranch(HostedReviewRequest.make({ review })),
+        )
+        const currentDetail = yield* Effect.promise(() =>
+          api.hostedReviews.getDetail(HostedReviewRequest.make({ review })),
+        )
+        const currentHeadRevision = currentDetail.summary.head.revision
+        expect(currentHeadRevision).not.toBeNull()
+        if (currentHeadRevision === null) return
+        const expectedHeadRevision = ReviewRevision.make(currentHeadRevision)
+        yield* Effect.promise(() =>
+          api.hostedReviews.merge(
+            MergeHostedReviewRequest.make({
+              review,
+              method: "squash",
+              bypassRules: true,
+              expectedHeadRevision,
+            }),
+          ),
+        )
 
         yield* Effect.promise(() => timeline.release("update-available"))
         yield* Effect.promise(() => api.updates.download())
@@ -411,6 +436,21 @@ describe("scenario-backed DiffDash API", () => {
         expect(timeline.getActionLog().map((action) => action.type)).toContain(
           "gitProvider.submitReviewDecision",
         )
+        expect(timeline.getActionLog().map((action) => action.type)).toContain(
+          "gitProvider.updateReviewBranch",
+        )
+        expect(timeline.getActionLog()).toContainEqual({
+          sequence: expect.any(Number),
+          type: "gitProvider.mergeReview",
+          detail: {
+            owner: "emberline",
+            name: "dispatch",
+            number: 417,
+            method: "squash",
+            bypassRules: true,
+            expectedHeadRevision,
+          },
+        })
       }),
   )
 

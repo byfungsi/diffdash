@@ -16,6 +16,7 @@ export interface ProjectWorkspaceFrameProps {
   readonly context: ReactNode
   readonly contextWidth: number
   readonly main: ReactNode
+  readonly preferredActivePane?: "context" | "diff"
   readonly sidebarExpanded: boolean
   readonly threadDetailWidth: number
   readonly onActiveActivityChange: (activityId: ProjectWorkspaceActivityId) => void
@@ -31,6 +32,7 @@ export const ProjectWorkspaceFrame = ({
   context,
   contextWidth,
   main,
+  preferredActivePane,
   sidebarExpanded,
   threadDetailWidth,
   onActiveActivityChange,
@@ -38,7 +40,7 @@ export const ProjectWorkspaceFrame = ({
   onSidebarWidthChange,
   onThreadDetailWidthChange,
 }: ProjectWorkspaceFrameProps) => {
-  const activePane = sidebarExpanded ? "context" : "diff"
+  const activePane = preferredActivePane ?? (sidebarExpanded ? "context" : "diff")
 
   const selectActivity = (activity: OwnedExtensionContribution<ProjectActivityContribution>) => {
     if (activity.id === activeActivity && sidebarExpanded) {

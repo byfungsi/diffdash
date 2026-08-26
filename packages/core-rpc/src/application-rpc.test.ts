@@ -20,6 +20,11 @@ const coreMethods = [
   "GitProviders.list",
   "HostedReviews.submitDecision",
   "HostedReviews.getDecision",
+  "HostedReviews.getDetail",
+  "HostedReviews.getChecks",
+  "HostedReviews.close",
+  "HostedReviews.merge",
+  "HostedReviews.updateBranch",
   "HostedReviews.list",
   "HostedReviews.listAssigned",
   "GitProviders.listSearchScopes",
@@ -77,8 +82,8 @@ describe("Core application RPC catalog", () => {
       .merge(ReviewAgentBusinessRpcs)
     const coreDeclarations = coreMethods.map((method) => declarations.requests.get(method))
 
-    expect(coreMethods).toHaveLength(61)
-    expect(HashSet.size(HashSet.fromIterable(coreMethods))).toBe(61)
+    expect(coreMethods).toHaveLength(66)
+    expect(HashSet.size(HashSet.fromIterable(coreMethods))).toBe(66)
     expect(coreDeclarations.every((declaration) => declaration !== undefined)).toBe(true)
     expect(
       coreDeclarations.every(
@@ -136,5 +141,52 @@ describe("Core application RPC catalog", () => {
     expect(submissionPolicy.cancellation).toBe("uninterruptible")
     expect(submissionPolicy.idempotency).toBe("nonIdempotent")
     expect(submissionPolicy.restartBehavior).toBe("failOnRestart")
+  })
+
+  it("models hosted review close and merge as non-idempotent mutations", () => {
+    for (const method of [
+      "HostedReviews.close",
+      "HostedReviews.merge",
+      "HostedReviews.updateBranch",
+    ] as const) {
+      const declaration = CoreApplicationRpcs.requests.get(method)
+      expect(declaration).toBeDefined()
+      if (declaration === undefined) continue
+      const policy = Option.getOrThrow(getCoreRpcMethodPolicy(declaration))
+      expect(policy.mutationClass).toBe("uncertainMutation")
+      expect(policy.idempotency).toBe("nonIdempotent")
+      expect(policy.restartBehavior).toBe("failOnRestart")
+    }
+  })
+
+  it("round-trips guarded hosted merge input through its RPC payload schema", () => {
+    const merge = CoreApplicationRpcs.requests.get("HostedReviews.merge")
+    expect(merge).toBeDefined()
+    if (merge === undefined) return
+    const payload = {
+      applicationInstanceId: "app-1",
+      processEpoch: "epoch-1",
+      requestId: "h:request-1",
+      review: {
+        repository: {
+          providerId: "github",
+          namespace: "fungsi",
+          name: "diffdash",
+        },
+        number: 42,
+      },
+      method: "squash",
+      bypassRules: true,
+      expectedHeadRevision: "expected-head",
+    }
+
+    const decoded = Schema.decodeUnknownSync(merge.payloadSchema)(payload)
+    expect(Schema.encodeSync(merge.payloadSchema)(decoded)).toEqual(payload)
+    expect(
+      Schema.decodeUnknownResult(merge.payloadSchema)({
+        ...payload,
+        expectedHeadRevision: undefined,
+      })._tag,
+    ).toBe("Failure")
   })
 })

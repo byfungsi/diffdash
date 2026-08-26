@@ -41,14 +41,16 @@ const manifestLoadState = <Manifest extends ReviewSnapshotManifest>(
 export const useReviewSelection = (
   target: SelectedReviewTarget | null,
   providers: readonly GitProviderDescriptor[],
+  acquireHostedSnapshot = true,
 ): ReviewSelectionProjection => {
-  const sourceKeys = reviewSelectionSourceKeys(target)
+  const snapshotTarget = target?.kind === "hosted" && !acquireHostedSnapshot ? null : target
+  const sourceKeys = reviewSelectionSourceKeys(snapshotTarget)
   const hostedResult = useAtomValue(hostedReviewManifestAtom(sourceKeys.hosted))
   const localResult = useAtomValue(localReviewManifestAtom(sourceKeys.local))
   const comparisonResult = useAtomValue(repositoryComparisonManifestAtom(sourceKeys.comparison))
 
   return projectReviewSelection({
-    target,
+    target: snapshotTarget,
     hosted: manifestLoadState(hostedResult),
     local: manifestLoadState(localResult),
     comparison: manifestLoadState(comparisonResult),

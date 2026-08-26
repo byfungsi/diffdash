@@ -38,12 +38,36 @@ export const pullRequestListJson = JSON.stringify([
 
 export const pullRequestDetailJson = JSON.stringify({
   ...JSON.parse(pullRequestListJson)[0],
+  mergeable: "MERGEABLE",
+  mergeStateStatus: "CLEAN",
   files: [{ additions: 120, deletions: 12, path: "src/renderer/src/app.tsx" }],
   commits: [
     {
       authoredDate: "2026-07-07T00:30:00Z",
       messageHeadline: "Add PR workspace",
       oid: "cccccccccccccccccccccccccccccccccccccccc",
+    },
+  ],
+  comments: [
+    {
+      author: { login: "octocat" },
+      body: "Looks good. The review workspace is ready.",
+      createdAt: "2026-07-07T02:00:00Z",
+      url: "https://github.com/fungsi/diffdash/pull/42#issuecomment-1",
+    },
+  ],
+  reviews: [
+    {
+      author: { login: "hanipcode" },
+      body: "test",
+      state: "COMMENTED",
+      submittedAt: "2026-07-07T01:30:00Z",
+    },
+    {
+      author: { login: "reviewer" },
+      body: "",
+      state: "APPROVED",
+      submittedAt: "2026-07-07T03:00:00Z",
     },
   ],
 })

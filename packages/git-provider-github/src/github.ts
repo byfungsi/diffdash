@@ -13,8 +13,11 @@ import {
   HostedRepositoryLocator,
   HostedRepositoryName,
   HostedReviewCheckoutSpec,
+  HostedReviewCheck,
   HostedReviewDetail,
+  HostedReviewComment,
   HostedReviewLocator,
+  HostedReviewMergeState,
   HostedReviewNumber,
   HostedReviewSummary,
   HostedReviewDiffSourceTarget,
@@ -47,7 +50,6 @@ import {
   type ReviewDiffByteChunk,
   type ReviewDiffSource,
   type ReviewDiffSourceError,
-  type ReviewDecision,
 } from "@diffdash/git-provider"
 import {
   ProcessExit,
@@ -63,6 +65,8 @@ const GH_STREAM_STDERR_BYTES = 256 * 1024
 const GitHubOperation = Schema.Literals([
   "listAccessibleRepositories",
   "getReview",
+  "listReviewChecks",
+  "updateReviewBranch",
   "getReviewDecision",
   "resolveRepository",
   "searchRepositories",
@@ -71,6 +75,8 @@ const GitHubOperation = Schema.Literals([
   "getReviewDiff.qualify",
   "getReviewDiff",
   "submitReviewDecision",
+  "closeReview",
+  "mergeReview",
   "repositoryUrl",
   "fileUrl",
   "bootstrapBareRepository",
@@ -80,6 +86,18 @@ const GitHubOperation = Schema.Literals([
   "listAssignedReviews",
 ])
 type GitHubOperation = typeof GitHubOperation.Type
+
+const reviewSubmissionFlag = {
+  approved: "--approve",
+  changesRequested: "--request-changes",
+  commented: "--comment",
+} as const
+
+const reviewMergeFlag = {
+  merge: "--merge",
+  squash: "--squash",
+  rebase: "--rebase",
+} as const
 
 /** Configuration for one GitHub.com or GitHub Enterprise provider instance. */
 export interface GitHubProviderConfig {
@@ -120,6 +138,8 @@ export interface GitHubProviderRegistration extends GitProviderRegistration {
     readonly HostedReviewSummary[],
     GitProviderOperationError
   >
+  readonly listReviewChecks: NonNullable<GitProviderRegistration["listReviewChecks"]>
+  readonly updateReviewBranch: NonNullable<GitProviderRegistration["updateReviewBranch"]>
 }
 
 /** A typed failure for malformed GitHub CLI JSON output. */
@@ -174,6 +194,17 @@ type GhPullRequestJson = typeof GhPullRequestJson.Type
 
 const GhPullRequestDetailJson = GhPullRequestJson.pipe(
   Schema.fieldsAssign({
+    mergeable: Schema.Literals(["MERGEABLE", "CONFLICTING", "UNKNOWN"]),
+    mergeStateStatus: Schema.Literals([
+      "BEHIND",
+      "BLOCKED",
+      "CLEAN",
+      "DIRTY",
+      "DRAFT",
+      "HAS_HOOKS",
+      "UNKNOWN",
+      "UNSTABLE",
+    ]),
     files: Schema.Array(
       Schema.Struct({
         path: RepositoryRelativePath,
@@ -189,9 +220,48 @@ const GhPullRequestDetailJson = GhPullRequestJson.pipe(
         authoredDate: Schema.optional(Schema.NullOr(Schema.String)),
       }),
     ),
+    comments: Schema.optional(
+      Schema.NullOr(
+        Schema.Array(
+          Schema.Struct({
+            author: Schema.optional(
+              Schema.NullOr(Schema.Struct({ login: Schema.optional(Schema.String) })),
+            ),
+            body: Schema.NullOr(Schema.String),
+            createdAt: Schema.optional(Schema.NullOr(Schema.String)),
+            url: Schema.optional(Schema.NullOr(Schema.String)),
+          }),
+        ),
+      ),
+    ),
+    reviews: Schema.optional(
+      Schema.NullOr(
+        Schema.Array(
+          Schema.Struct({
+            author: Schema.optional(
+              Schema.NullOr(Schema.Struct({ login: Schema.optional(Schema.String) })),
+            ),
+            body: Schema.NullOr(Schema.String),
+            submittedAt: Schema.optional(Schema.NullOr(Schema.String)),
+          }),
+        ),
+      ),
+    ),
   }),
 )
 type GhPullRequestDetailJson = typeof GhPullRequestDetailJson.Type
+const GhReviewCheckJson = Schema.Struct({
+  bucket: Schema.Literals(["pass", "fail", "pending", "skipping", "cancel"]),
+  completedAt: Schema.optional(Schema.Unknown),
+  description: Schema.optional(Schema.Unknown),
+  event: Schema.optional(Schema.Unknown),
+  link: Schema.String,
+  name: Schema.String,
+  startedAt: Schema.optional(Schema.Unknown),
+  state: Schema.optional(Schema.Unknown),
+  workflow: Schema.optional(Schema.Unknown),
+})
+type GhReviewCheckJson = typeof GhReviewCheckJson.Type
 
 const GhViewerRepositoriesJson = Schema.Struct({
   data: Schema.Struct({
@@ -270,7 +340,15 @@ const prListFields = [
   "createdAt",
   "updatedAt",
 ].join(",")
-const prDetailFields = [prListFields, "files", "commits"].join(",")
+const prDetailFields = [
+  prListFields,
+  "files",
+  "commits",
+  "comments",
+  "reviews",
+  "mergeable",
+  "mergeStateStatus",
+].join(",")
 const repositorySearchFields = "fullName,name,owner,url,description,isPrivate,updatedAt"
 
 const accessibleRepositoriesQuery = `
@@ -418,6 +496,113 @@ const detail = (
         authoredAt: commit.authoredDate ?? null,
       }),
     ),
+    comments: [
+      ...(pullRequest.comments ?? []).map((comment) =>
+        HostedReviewComment.make({
+          author: actor(comment.author?.login),
+          body: comment.body ?? "",
+          createdAt: comment.createdAt ?? null,
+          url:
+            comment.url !== undefined && comment.url !== null && Schema.is(WebUrl)(comment.url)
+              ? comment.url
+              : null,
+        }),
+      ),
+      ...(pullRequest.reviews ?? [])
+        .filter((review) => review.body !== null && review.body.trim().length > 0)
+        .map((review) =>
+          HostedReviewComment.make({
+            author: actor(review.author?.login),
+            body: review.body ?? "",
+            createdAt: review.submittedAt ?? null,
+            url: null,
+          }),
+        ),
+    ].sort((left, right) => {
+      if (left.createdAt === null) return right.createdAt === null ? 0 : 1
+      if (right.createdAt === null) return -1
+      return left.createdAt.localeCompare(right.createdAt)
+    }),
+    mergeState: normalizeMergeState(pullRequest),
+  })
+
+const normalizeMergeState = (
+  pullRequest: Pick<
+    GhPullRequestDetailJson,
+    "state" | "isDraft" | "mergeable" | "mergeStateStatus"
+  >,
+) => {
+  if (
+    pullRequest.isDraft ||
+    pullRequest.state !== "OPEN" ||
+    pullRequest.mergeStateStatus === "DRAFT"
+  ) {
+    return HostedReviewMergeState.make({
+      status: "unavailable",
+      reason: pullRequest.isDraft
+        ? "Draft reviews cannot be merged."
+        : "This review cannot be merged.",
+    })
+  }
+  if (pullRequest.mergeable === "CONFLICTING" || pullRequest.mergeStateStatus === "DIRTY") {
+    return HostedReviewMergeState.make({
+      status: "conflicting",
+      reason: "The review branch has merge conflicts.",
+    })
+  }
+  if (pullRequest.mergeStateStatus === "BEHIND") {
+    return HostedReviewMergeState.make({
+      status: "behind",
+      reason: "The review branch is behind the base branch.",
+    })
+  }
+  if (pullRequest.mergeStateStatus === "BLOCKED") {
+    return HostedReviewMergeState.make({
+      status: "blocked",
+      reason: "Repository rules currently block this merge.",
+    })
+  }
+  if (
+    pullRequest.mergeable === "MERGEABLE" &&
+    (pullRequest.mergeStateStatus === "CLEAN" ||
+      pullRequest.mergeStateStatus === "HAS_HOOKS" ||
+      pullRequest.mergeStateStatus === "UNSTABLE")
+  ) {
+    return HostedReviewMergeState.make({
+      status: "ready",
+      reason: "This review is ready to merge.",
+    })
+  }
+  return HostedReviewMergeState.make({
+    status: "checking",
+    reason: "Merge readiness is still being checked.",
+  })
+}
+
+const nullableString = (value: unknown) =>
+  Option.getOrNull(Schema.decodeUnknownOption(Schema.String)(value))
+
+const nullableCheckTimestamp = (value: unknown) =>
+  Option.getOrNull(Schema.decodeUnknownOption(HostedReviewCheck.fields.startedAt)(value))
+
+const reviewCheck = (check: GhReviewCheckJson) =>
+  HostedReviewCheck.make({
+    status:
+      check.bucket === "pass"
+        ? "passed"
+        : check.bucket === "fail"
+          ? "failed"
+          : check.bucket === "pending"
+            ? "pending"
+            : check.bucket === "skipping"
+              ? "skipped"
+              : "cancelled",
+    name: check.name,
+    workflow: nullableString(check.workflow),
+    description: nullableString(check.description),
+    startedAt: nullableCheckTimestamp(check.startedAt),
+    completedAt: nullableCheckTimestamp(check.completedAt),
+    detailsUrl: Schema.is(WebUrl)(check.link) ? check.link : null,
   })
 
 const repository = (
@@ -814,6 +999,11 @@ export const createGitHubProvider = (
       searchScopes: true,
       assignedReviews: true,
       reviewDecisions: true,
+      reviewClosure: true,
+      reviewMerge: true,
+      reviewMergeBypass: true,
+      reviewChecks: true,
+      reviewBranchUpdates: true,
       fileUrls: true,
       remoteWorkspaceBootstrap: true,
     }),
@@ -898,6 +1088,36 @@ export const createGitHubProvider = (
     return detail(providerId, review.repository.namespace, review.repository.name, value)
   })
 
+  const listReviewChecks = Effect.fn("GitHub.listReviewChecks")(function* (
+    review: HostedReviewLocator,
+  ) {
+    yield* requireProvider(review.repository, "listReviewChecks")
+    const args = [
+      "pr",
+      "checks",
+      String(review.number),
+      "--repo",
+      repositoryArgument(host, review.repository.namespace, review.repository.name),
+      "--json",
+      "bucket,completedAt,description,event,link,name,startedAt,state,workflow",
+    ]
+    const output = yield* processes
+      .run(processRequest(executable, args, { timeoutMs: 20_000 }))
+      .pipe(
+        Effect.map((result) => result.stdout),
+        Effect.catch((cause) =>
+          Schema.is(ProcessExitError)(cause) &&
+          (cause.exitCode === 1 || cause.exitCode === 8) &&
+          !cause.stdoutTruncated
+            ? Effect.succeed(cause.stdout)
+            : Effect.fail(cause),
+        ),
+        Effect.mapError(operationError(providerId, "listReviewChecks")),
+      )
+    const checks = yield* decode("listReviewChecks", output, Schema.Array(GhReviewCheckJson))
+    return checks.map(reviewCheck)
+  })
+
   const getReviewDiffSource = (review: HostedReviewLocator) =>
     createGitHubReviewDiffSource(config, processes, review)
 
@@ -921,11 +1141,19 @@ export const createGitHubProvider = (
     const response = yield* decode("getReviewDecision", result.stdout, GhViewerApprovalJson)
     const viewer = response.data.viewer.login.toLowerCase()
     const reviews = response.data.repository?.pullRequest?.latestReviews.nodes ?? []
-    return reviews
+    const state = reviews
       .filter(Predicate.isNotNullish)
-      .some((item) => item.author?.login.toLowerCase() === viewer && item.state === "APPROVED")
-      ? ("approved" as const)
-      : ("none" as const)
+      .find((item) => item.author?.login.toLowerCase() === viewer)?.state
+    switch (state) {
+      case "APPROVED":
+        return "approved" as const
+      case "CHANGES_REQUESTED":
+        return "changesRequested" as const
+      case "COMMENTED":
+        return "commented" as const
+      default:
+        return "none" as const
+    }
   })
 
   const checkoutSpec = Effect.fn("GitHub.checkoutSpec")(function* (
@@ -1033,27 +1261,62 @@ export const createGitHubProvider = (
       )
     }),
     getReview,
+    listReviewChecks,
+    updateReviewBranch: Effect.fn("GitHub.updateReviewBranch")(function* (review) {
+      yield* requireProvider(review.repository, "updateReviewBranch")
+      yield* run("updateReviewBranch", [
+        "pr",
+        "update-branch",
+        String(review.number),
+        "--repo",
+        repositoryArgument(host, review.repository.namespace, review.repository.name),
+      ])
+      return undefined
+    }),
     getReviewDiffSource,
     getReviewDecision,
-    submitReviewDecision: Effect.fn("GitHub.submitReviewDecision")(function* (review, decision) {
+    submitReviewDecision: Effect.fn("GitHub.submitReviewDecision")(function* (review, submission) {
       yield* requireProvider(review.repository, "submitReviewDecision")
-      if (decision !== "approved") {
-        return yield* GitProviderOperationError.make({
-          providerId,
-          operation: DiagnosticOperation.make("submitReviewDecision"),
-          message: `GitHub decision ${decision satisfies ReviewDecision} is not supported without a review body`,
-        })
-      }
       yield* run("submitReviewDecision", [
         "pr",
         "review",
         String(review.number),
         "--repo",
         repositoryArgument(host, review.repository.namespace, review.repository.name),
-        "--approve",
+        reviewSubmissionFlag[submission.decision],
+        "--body",
+        submission.body,
       ])
       return undefined
     }),
+    closeReview: Effect.fn("GitHub.closeReview")(function* (review) {
+      yield* requireProvider(review.repository, "closeReview")
+      yield* run("closeReview", [
+        "pr",
+        "close",
+        String(review.number),
+        "--repo",
+        repositoryArgument(host, review.repository.namespace, review.repository.name),
+      ])
+      return undefined
+    }),
+    mergeReview: Effect.fn("GitHub.mergeReview")(
+      function* (review, method, bypassRules, expectedHeadRevision) {
+        yield* requireProvider(review.repository, "mergeReview")
+        yield* run("mergeReview", [
+          "pr",
+          "merge",
+          String(review.number),
+          "--repo",
+          repositoryArgument(host, review.repository.namespace, review.repository.name),
+          reviewMergeFlag[method],
+          "--match-head-commit",
+          expectedHeadRevision,
+          ...(bypassRules ? ["--admin"] : []),
+        ])
+        return undefined
+      },
+    ),
     repositoryUrl: (repositoryLocator) =>
       requireProvider(repositoryLocator, "repositoryUrl").pipe(
         Effect.as(repositoryWebUrl(repositoryLocator)),

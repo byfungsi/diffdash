@@ -6,11 +6,12 @@ compatibility: Requires git, GitHub CLI, Node.js, and pnpm in the DiffDash repos
 
 # DiffDash PR Preparation
 
-Prepare the current branch for review without committing, pushing, or opening a pull request.
+Prepare the current branch for review. Commit, push, and pull-request actions require explicit user authorization.
 
 ## Guardrails
 
-- Never create a normal commit. The user owns every feature-branch commit.
+- Create normal commits only after the user explicitly authorizes committing. One-shot authorization applies to the requested commit; session-scoped authorization applies until the session ends or the user revokes it.
+- Before committing, verify `git config user.name` and `git config user.email`, stage only intended changes, and omit agent attribution trailers.
 - Never push, force-push, or open a pull request unless the user separately and explicitly requests it.
 - Never rewrite branch history without showing the offending commits and receiving explicit approval.
 - Never rewrite `main`, a detached HEAD, commits reachable from `origin/main`, or a dirty working tree.
@@ -86,6 +87,6 @@ Describe the user-visible change.
 2. For application or service changes, run `pnpm format:check`, `pnpm lint`, `pnpm typecheck`, and `pnpm test` at minimum.
 3. For release infrastructure changes, also run `pnpm release:infrastructure:check` and `actionlint` when available.
 4. Inspect `git diff --check` and the final `git status --short`.
-5. Summarize the Changeset decision, checks run, failures, and any remaining user-owned commit or push steps.
+5. Summarize the Changeset decision, checks run, failures, and any remaining commit or push steps.
 
 Do not report the branch as ready while required checks fail, attribution remains, or a required Changeset is missing.

@@ -36,6 +36,7 @@ import {
   GitProviderTerminology,
   HostedRepository,
   HostedRepositorySource,
+  HostedReviewCheck,
   makeHostedRepositoryLocator,
   sameHostedRepository,
 } from "@diffdash/domain/git-provider"
@@ -239,6 +240,11 @@ export const createDemoRuntime = (scenario: MaterializedDemoScenario): DemoRunti
       searchScopes: true,
       assignedReviews: true,
       reviewDecisions: true,
+      reviewClosure: true,
+      reviewMerge: true,
+      reviewMergeBypass: true,
+      reviewChecks: true,
+      reviewBranchUpdates: true,
       fileUrls: true,
       remoteWorkspaceBootstrap: true,
     }),
@@ -1046,6 +1052,32 @@ export const createDemoRuntime = (scenario: MaterializedDemoScenario): DemoRunti
       listSearchScopes: async () => scenario.searchScopes,
     },
     hostedReviews: {
+      getDetail: async (request) => {
+        requireReview(
+          request.review.repository.namespace,
+          request.review.repository.name,
+          request.review.number,
+        )
+        return currentRevision.detail
+      },
+      getChecks: async (request) => {
+        requireReview(
+          request.review.repository.namespace,
+          request.review.repository.name,
+          request.review.number,
+        )
+        return [
+          HostedReviewCheck.make({
+            status: "passed",
+            name: "Build and test",
+            workflow: "CI",
+            description: "All required checks passed",
+            startedAt: "2026-08-26T01:00:00.000Z",
+            completedAt: "2026-08-26T01:04:00.000Z",
+            detailsUrl: null,
+          }),
+        ]
+      },
       list: async (request) => {
         requireReview(
           request.repository.namespace,
@@ -1069,6 +1101,34 @@ export const createDemoRuntime = (scenario: MaterializedDemoScenario): DemoRunti
         requireReview(owner, name, number)
         approved = true
         record("gitProvider.submitReviewDecision", { owner, name, number })
+      },
+      close: async (request) => {
+        const { namespace: owner, name } = request.review.repository
+        const { number } = request.review
+        requireReview(owner, name, number)
+        record("gitProvider.closeReview", { owner, name, number })
+      },
+      merge: async (request) => {
+        const { namespace: owner, name } = request.review.repository
+        const { number } = request.review
+        requireReview(owner, name, number)
+        if (request.expectedHeadRevision !== currentRevision.detail.summary.head.revision) {
+          throw new Error("Demo review head changed before merge")
+        }
+        record("gitProvider.mergeReview", {
+          owner,
+          name,
+          number,
+          method: request.method,
+          bypassRules: request.bypassRules,
+          expectedHeadRevision: request.expectedHeadRevision,
+        })
+      },
+      updateBranch: async (request) => {
+        const { namespace: owner, name } = request.review.repository
+        const { number } = request.review
+        requireReview(owner, name, number)
+        record("gitProvider.updateReviewBranch", { owner, name, number })
       },
     },
     localReviews: {

@@ -128,8 +128,13 @@ const api: DiffDashBridgeApi = {
     list: (request) => transport.invoke(InvokeChannel.listHostedReviews, request),
     listAssigned: (request) => transport.invoke(InvokeChannel.listAssignedHostedReviews, request),
     getDecision: (request) => transport.invoke(InvokeChannel.getHostedReviewDecision, request),
+    getDetail: (request) => transport.invoke(InvokeChannel.getHostedReviewDetail, request),
+    getChecks: (request) => transport.invoke(InvokeChannel.getHostedReviewChecks, request),
     submitDecision: (request) =>
       transport.invoke(InvokeChannel.submitHostedReviewDecision, request),
+    close: (request) => transport.invoke(InvokeChannel.closeHostedReview, request),
+    merge: (request) => transport.invoke(InvokeChannel.mergeHostedReview, request),
+    updateBranch: (request) => transport.invoke(InvokeChannel.updateHostedReviewBranch, request),
   },
   localReviews: {
     resolveBranch: (localPath, branchName) =>

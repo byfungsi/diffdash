@@ -1,6 +1,11 @@
 /* oxlint-disable eslint/no-underscore-dangle -- Domain unions use Effect-compatible _tag discriminants. */
 import type { ProjectWorkspaceActivityId } from "@diffdash/domain/project-workspace"
 import type { ReviewProjectId } from "@diffdash/domain/review-identity"
+import type {
+  HostedReviewCheck,
+  HostedReviewDetail as HostedReviewDetailModel,
+  HostedReviewSummary,
+} from "@diffdash/domain/git-provider"
 import type { ReactNode } from "react"
 import { useEffect, useState } from "react"
 import { Match, Option } from "effect"
@@ -13,6 +18,8 @@ import type {
 } from "@/extensions/extension-registry"
 import { resolveProjectActivityMainPane } from "@/extensions/project-main-pane-resolver"
 import { ProjectWorkspaceFrame } from "@/project-workspace/project-workspace-frame"
+import { HostedReviewDetail } from "@/project-workspace/hosted-review-detail"
+import type { HostedReviewActionOperations } from "@/project-workspace/hosted-review-actions"
 import { Button } from "@/shared/ui/button"
 import { ProjectWorkspaceStatePanel } from "@/shared/ui/project-workspace-state-panel"
 import {
@@ -35,12 +42,29 @@ export interface ReviewScreenProps {
   readonly projectId: ReviewProjectId
   readonly reviewsContext: ReactNode
   readonly reviewsMain: ReactNode
+  readonly selectedHostedReview: HostedReviewSummary | null
+  readonly hostedReviewDetail: HostedReviewDetailModel | null
+  readonly hostedReviewDetailError: string | null
+  readonly hostedReviewDetailLoading: boolean
+  readonly hostedReviewChecks: readonly HostedReviewCheck[]
+  readonly hostedReviewChecksError: string | null
+  readonly hostedReviewChecksLoading: boolean
+  readonly hostedReviewChecksSupported: boolean
+  readonly hostedReviewSelected: boolean
+  readonly hostedDiffOpen: boolean
+  readonly hostedReviewActions: HostedReviewActionOperations
+  readonly hostedReviewAbbreviation: string
+  readonly hostedReviewProviderName: string
   readonly reviewDiffContributions: readonly OwnedExtensionContribution<ReviewDiffContribution>[]
   readonly selection: ReviewSelectionProjection
   readonly sourceOperations: ReviewSourceOperationProjection
   readonly surfaceContribution: OwnedExtensionContribution<ProjectSurfaceContribution>
   readonly workspaceNotice: Option.Option<string>
   readonly onActiveActivityChange: (activityId: ProjectWorkspaceActivityId) => void
+  readonly onOpenHostedDiff: () => void
+  readonly onHostedActionCompleted: () => void
+  readonly onRetryHostedDetail: () => void
+  readonly onRefreshHostedChecks: () => void
   readonly onRetrySelection: () => void
 }
 
@@ -53,12 +77,29 @@ export const ReviewScreen = ({
   projectId,
   reviewsContext,
   reviewsMain,
+  selectedHostedReview,
+  hostedReviewDetail,
+  hostedReviewDetailError,
+  hostedReviewDetailLoading,
+  hostedReviewChecks,
+  hostedReviewChecksError,
+  hostedReviewChecksLoading,
+  hostedReviewChecksSupported,
+  hostedReviewSelected,
+  hostedDiffOpen,
+  hostedReviewActions,
+  hostedReviewAbbreviation,
+  hostedReviewProviderName,
   reviewDiffContributions,
   selection,
   sourceOperations,
   surfaceContribution,
   workspaceNotice,
   onActiveActivityChange,
+  onOpenHostedDiff,
+  onHostedActionCompleted,
+  onRetryHostedDetail,
+  onRefreshHostedChecks,
   onRetrySelection,
 }: ReviewScreenProps) => {
   const activeActivityContribution = activities.find((activity) => activity.id === activeActivity)
@@ -81,6 +122,45 @@ export const ReviewScreen = ({
     unavailable: () =>
       Option.none<Extract<ReviewSourceOperationProjection, { readonly _tag: "ready" }>>(),
   })
+  if (hostedReviewSelected && !hostedDiffOpen) {
+    return (
+      <ProjectWorkspaceFrame
+        activeActivity={activeActivity}
+        activities={activities}
+        context={reviewsContext}
+        contextWidth={detailEnvironment.sidebarWidth}
+        main={
+          <HostedReviewDetail
+            actions={hostedReviewActions}
+            checks={hostedReviewChecks}
+            checksError={hostedReviewChecksError}
+            checksLoading={hostedReviewChecksLoading}
+            checksSupported={hostedReviewChecksSupported}
+            commits={hostedReviewDetail?.commits ?? null}
+            comments={hostedReviewDetail?.comments ?? null}
+            error={hostedReviewDetailError}
+            files={hostedReviewDetail?.files ?? null}
+            loading={hostedReviewDetailLoading}
+            mergeState={hostedReviewDetail?.mergeState ?? null}
+            onOpenDiff={onOpenHostedDiff}
+            onActionCompleted={onHostedActionCompleted}
+            onRetry={onRetryHostedDetail}
+            onRefreshChecks={onRefreshHostedChecks}
+            providerName={hostedReviewProviderName}
+            reviewAbbreviation={hostedReviewAbbreviation}
+            summary={selectedHostedReview}
+          />
+        }
+        preferredActivePane="diff"
+        sidebarExpanded={detailEnvironment.sidebarExpanded}
+        threadDetailWidth={detailEnvironment.threadDetailWidth}
+        onActiveActivityChange={onActiveActivityChange}
+        onSidebarExpandedChange={detailEnvironment.onSidebarExpandedChange}
+        onSidebarWidthChange={detailEnvironment.onSidebarWidthChange}
+        onThreadDetailWidthChange={detailEnvironment.onThreadDetailWidthChange}
+      />
+    )
+  }
   if (Option.isSome(readySelection) && Option.isSome(readyOperations)) {
     return (
       <ReadyReviewScreen
@@ -241,17 +321,19 @@ const ReadyReviewScreen = ({
   }
 
   return (
-    <ReviewDetailView
-      active={active}
-      activeActivity={activeActivity}
-      activities={activities}
-      environment={detailEnvironment}
-      ready={ready}
-      reviewsContext={reviewsContext}
-      reviewDiffContributions={reviewDiffContributions}
-      surfaceContribution={surfaceContribution}
-      onActiveActivityChange={onActiveActivityChange}
-    />
+    <div className="contents" data-review-diff-open>
+      <ReviewDetailView
+        active={active}
+        activeActivity={activeActivity}
+        activities={activities}
+        environment={detailEnvironment}
+        ready={ready}
+        reviewsContext={reviewsContext}
+        reviewDiffContributions={reviewDiffContributions}
+        surfaceContribution={surfaceContribution}
+        onActiveActivityChange={onActiveActivityChange}
+      />
+    </div>
   )
 }
 

@@ -42,6 +42,13 @@ interface ApplicationCoreRuntime {
   readonly getHostedReviewDecision: ApplicationCoreOperation<
     typeof CoreMethod.getHostedReviewDecision
   >
+  readonly getHostedReviewDetail: ApplicationCoreOperation<typeof CoreMethod.getHostedReviewDetail>
+  readonly getHostedReviewChecks: ApplicationCoreOperation<typeof CoreMethod.getHostedReviewChecks>
+  readonly closeHostedReview: ApplicationCoreOperation<typeof CoreMethod.closeHostedReview>
+  readonly mergeHostedReview: ApplicationCoreOperation<typeof CoreMethod.mergeHostedReview>
+  readonly updateHostedReviewBranch: ApplicationCoreOperation<
+    typeof CoreMethod.updateHostedReviewBranch
+  >
   readonly listHostedReviews: ApplicationCoreOperation<typeof CoreMethod.listHostedReviews>
   readonly listAssignedHostedReviews: ApplicationCoreOperation<
     typeof CoreMethod.listAssignedHostedReviews

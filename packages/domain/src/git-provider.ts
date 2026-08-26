@@ -148,6 +148,11 @@ export class GitProviderCapabilities extends Schema.Class<GitProviderCapabilitie
   searchScopes: Schema.Boolean,
   assignedReviews: Schema.Boolean,
   reviewDecisions: Schema.Boolean,
+  reviewClosure: Schema.Boolean,
+  reviewMerge: Schema.Boolean,
+  reviewMergeBypass: Schema.Boolean,
+  reviewChecks: Schema.Boolean,
+  reviewBranchUpdates: Schema.Boolean,
   fileUrls: Schema.Boolean,
   remoteWorkspaceBootstrap: Schema.Boolean,
 }) {}
@@ -194,6 +199,30 @@ export const ReviewDecision = Schema.Literals(["none", "approved", "changesReque
 /** Provider-neutral review decision. */
 export type ReviewDecision = typeof ReviewDecision.Type
 
+/** Provider-neutral decision accepted when submitting a hosted review. */
+export const HostedReviewSubmissionDecision = Schema.Literals([
+  "approved",
+  "changesRequested",
+  "commented",
+])
+
+/** Provider-neutral decision accepted when submitting a hosted review. */
+export type HostedReviewSubmissionDecision = typeof HostedReviewSubmissionDecision.Type
+
+/** Provider-neutral hosted review submission content. */
+export class HostedReviewSubmission extends Schema.Class<HostedReviewSubmission>(
+  "HostedReviewSubmission",
+)({
+  decision: HostedReviewSubmissionDecision,
+  body: Schema.String,
+}) {}
+
+/** Provider-neutral strategy for merging a hosted review. */
+export const HostedReviewMergeMethod = Schema.Literals(["merge", "squash", "rebase"])
+
+/** Provider-neutral strategy for merging a hosted review. */
+export type HostedReviewMergeMethod = typeof HostedReviewMergeMethod.Type
+
 /** Stable provider-owned actor identity when one is available. */
 export const ProviderActorId = Schema.String.pipe(
   Schema.check(Schema.isMinLength(1)),
@@ -230,6 +259,58 @@ export class ReviewCommit extends Schema.Class<ReviewCommit>("ReviewCommit")({
   revision: ReviewRevision,
   title: Schema.String,
   authoredAt: Schema.NullOr(UtcIsoTimestamp),
+}) {}
+
+/** Provider-neutral conversation entry attached to a hosted review. */
+export class HostedReviewComment extends Schema.Class<HostedReviewComment>("HostedReviewComment")({
+  author: ProviderActor,
+  body: Schema.String,
+  createdAt: Schema.NullOr(UtcIsoTimestamp),
+  url: Schema.NullOr(WebUrl),
+}) {}
+
+/** Provider-neutral status of one hosted review check. */
+export const HostedReviewCheckStatus = Schema.Literals([
+  "passed",
+  "failed",
+  "pending",
+  "skipped",
+  "cancelled",
+])
+
+/** Provider-neutral status of one hosted review check. */
+export type HostedReviewCheckStatus = typeof HostedReviewCheckStatus.Type
+
+/** Provider-owned continuous-integration check attached to a hosted review. */
+export class HostedReviewCheck extends Schema.Class<HostedReviewCheck>("HostedReviewCheck")({
+  status: HostedReviewCheckStatus,
+  name: Schema.String,
+  workflow: Schema.NullOr(Schema.String),
+  description: Schema.NullOr(Schema.String),
+  startedAt: Schema.NullOr(UtcIsoTimestamp),
+  completedAt: Schema.NullOr(UtcIsoTimestamp),
+  detailsUrl: Schema.NullOr(WebUrl),
+}) {}
+
+/** Provider-neutral merge readiness status for a hosted review. */
+export const HostedReviewMergeStatus = Schema.Literals([
+  "ready",
+  "blocked",
+  "conflicting",
+  "behind",
+  "checking",
+  "unavailable",
+])
+
+/** Provider-neutral merge readiness status for a hosted review. */
+export type HostedReviewMergeStatus = typeof HostedReviewMergeStatus.Type
+
+/** Provider-neutral merge readiness and its display-safe explanation. */
+export class HostedReviewMergeState extends Schema.Class<HostedReviewMergeState>(
+  "HostedReviewMergeState",
+)({
+  status: HostedReviewMergeStatus,
+  reason: Schema.String,
 }) {}
 
 /** Repository metadata normalized by a hosted Git provider. */
@@ -271,6 +352,8 @@ export class HostedReviewDetail extends Schema.Class<HostedReviewDetail>("Hosted
   summary: HostedReviewSummary,
   files: Schema.Array(ChangedFile),
   commits: Schema.Array(ReviewCommit),
+  comments: Schema.optional(Schema.Array(HostedReviewComment)),
+  mergeState: HostedReviewMergeState,
 }) {}
 
 /** Canonical persisted key for one hosted repository. */

@@ -192,10 +192,14 @@ test("FUN-130 AC: routes a hosted review through the non-GitHub fixture provider
     await expect(fixtureReview).toBeVisible()
     await fixtureReview.click()
 
-    await expect(window.locator("[data-review-editor-header]")).toContainText(
+    await expect(window.locator("[data-hosted-review-detail]")).toContainText(
       "Fixture merge request flow",
     )
     await expect(window.getByText("Opened MR #73: Fixture merge request flow")).toBeVisible()
+    await window.getByRole("button", { name: "Open diff" }).click()
+    await expect(window.locator("[data-review-editor-header]")).toContainText(
+      "Fixture merge request flow",
+    )
     await expect(window.getByText("src/fixture.ts").first()).toBeVisible()
     await window.getByRole("button", { name: "Review actions" }).click()
     await expect(window.getByRole("menuitem", { name: /Approve/ })).toHaveCount(0)
@@ -368,6 +372,8 @@ test("covers finished Home to Review flow with fake CLI fixtures", async ({
     await expect(openPullRequest).toBeVisible()
     await openPullRequest.click()
 
+    await expect(window.locator("[data-hosted-review-detail]")).toContainText("Request review flow")
+    await window.getByRole("button", { name: "Open diff" }).click()
     await expect(window.locator("[data-review-editor-header]")).toContainText("Request review flow")
     await expect(window.getByRole("button", { name: "Back" })).toBeVisible()
     await expect(window.getByRole("button", { name: "Collapse sidebar" })).toBeVisible()
@@ -567,6 +573,10 @@ test("covers finished Home to Review flow with fake CLI fixtures", async ({
       }),
     ).toEqual({ appearance: "dark", provider: "codex", telemetryEnabled: false })
     await restartedWindow.getByRole("button", { name: "Open project byfungsi/diffdash" }).click()
+    await expect(restartedWindow.locator("[data-hosted-review-detail]")).toContainText(
+      "Request review flow",
+    )
+    await restartedWindow.getByRole("button", { name: "Open diff" }).click()
     await expect(restartedWindow.locator("[data-review-editor-header]")).toContainText(
       "Request review flow",
     )
@@ -2543,13 +2553,17 @@ if (args[0] === "pr" && args[1] === "view") {
 
   console.log(JSON.stringify({
     ...pullRequest,
+    comments: [],
     commits: [],
     files: [{
       additions: 1,
       changeType: "modified",
       deletions: 1,
       path: "src/app.tsx"
-    }]
+    }],
+    mergeable: "MERGEABLE",
+    mergeStateStatus: "CLEAN",
+    reviews: []
   }))
   process.exit(0)
 }

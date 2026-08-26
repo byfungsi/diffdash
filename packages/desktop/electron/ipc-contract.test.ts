@@ -10,7 +10,11 @@ import { AISettings, DEFAULT_AI_SETTINGS } from "@diffdash/domain/ai-settings"
 import { DiagnosticOperation } from "@diffdash/domain/diagnostic-operation"
 import { CodeWorkspaceLease, CodeWorkspaceLeaseId } from "@diffdash/domain/code-workspace"
 import { DiffFileVisibility } from "@diffdash/domain/diff"
-import { LocalRepositorySource } from "@diffdash/domain/git-provider"
+import {
+  HostedReviewCheck,
+  LocalRepositorySource,
+  makeHostedReviewLocator,
+} from "@diffdash/domain/git-provider"
 import { LocalReviewTarget } from "@diffdash/domain/local-review"
 import {
   LanguagePosition,
@@ -451,6 +455,57 @@ describe("IPC contract", () => {
         Success: ({ value }) => Schema.is(CodeWorkspaceLease)(value),
       }),
     ).toBe(false)
+  })
+
+  it("round-trips hosted review checks through the preload contract", async () => {
+    const checks = [
+      HostedReviewCheck.make({
+        status: "pending",
+        name: "build",
+        workflow: "CI",
+        description: null,
+        startedAt: "2026-08-26T01:00:00.000Z",
+        completedAt: null,
+        detailsUrl: WebUrl.make("https://github.com/fungsi/diffdash/actions/runs/1"),
+      }),
+    ]
+    const responseSchema = InvokeContract[InvokeChannel.getHostedReviewChecks].response
+    const encodedChecks = Schema.encodeSync(responseSchema)(checks)
+    const transport = createRendererTransport(
+      rendererIpc({ _tag: "Success", value: encodedChecks }).api,
+    )
+
+    const result = await transport.invoke(InvokeChannel.getHostedReviewChecks, {
+      review: makeHostedReviewLocator("github", "fungsi", "diffdash", 42),
+    })
+
+    expect(result).toEqual({ _tag: "Success", value: encodedChecks })
+  })
+
+  it("round-trips hosted branch updates through the preload contract", async () => {
+    const transport = createRendererTransport(rendererIpc({ _tag: "Success", value: null }).api)
+    const review = makeHostedReviewLocator("github", "fungsi", "diffdash", 42)
+
+    const result = await transport.invoke(InvokeChannel.updateHostedReviewBranch, { review })
+
+    expect(result).toEqual({ _tag: "Success", value: null })
+  })
+
+  it("round-trips guarded hosted merge input through the preload contract", async () => {
+    const ipc = rendererIpc({ _tag: "Success", value: null })
+    const transport = createRendererTransport(ipc.api)
+    const review = makeHostedReviewLocator("github", "fungsi", "diffdash", 42)
+    const request = {
+      review,
+      method: "squash" as const,
+      bypassRules: true,
+      expectedHeadRevision: ReviewRevision.make("expected-head"),
+    }
+
+    const result = await transport.invoke(InvokeChannel.mergeHostedReview, request)
+
+    expect(result).toEqual({ _tag: "Success", value: null })
+    expect(ipc.invoke).toHaveBeenCalledWith(InvokeChannel.mergeHostedReview, request)
   })
 
   it("preserves structured-clone binary leaves in encoded host responses", async () => {
@@ -1537,6 +1592,11 @@ const testRuntime = (message: string): ApplicationRuntime => {
       listProviders: reject,
       submitHostedReviewDecision: reject,
       getHostedReviewDecision: reject,
+      getHostedReviewDetail: reject,
+      getHostedReviewChecks: reject,
+      closeHostedReview: reject,
+      mergeHostedReview: reject,
+      updateHostedReviewBranch: reject,
       listHostedReviews: reject,
       listAssignedHostedReviews: reject,
       listHostedRepositorySearchScopes: reject,

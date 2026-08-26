@@ -1,5 +1,13 @@
 /* oxlint-disable eslint/no-underscore-dangle -- Domain unions use Effect-compatible _tag discriminants. */
-import { GitFileRevision, type ReviewDecision } from "@diffdash/domain/git-provider"
+import {
+  GitFileRevision,
+  HostedReviewSubmission,
+  type GitProviderDescriptor,
+  type HostedReviewMergeMethod,
+  type HostedReviewSubmissionDecision,
+  type HostedReviewSummary,
+  type ReviewDecision,
+} from "@diffdash/domain/git-provider"
 import { RepositoryCheckoutPath } from "@diffdash/domain/repository"
 import { RepositoryRelativePath } from "@diffdash/domain/repository-path"
 import {
@@ -10,7 +18,9 @@ import {
 import type { DiffDashBridgeApi } from "@diffdash/protocol/api"
 import { InvokeChannel } from "@diffdash/protocol/channels"
 import {
+  CloseHostedReviewRequest,
   HostedReviewRequest,
+  MergeHostedReviewRequest,
   OpenHostedReviewFileRequest,
   SubmitHostedReviewDecisionRequest,
 } from "@diffdash/protocol/hosted-git"
@@ -32,7 +42,10 @@ import { invokePreload } from "./renderer-api-error"
 import { runRendererPromise } from "./renderer-effect"
 
 type ReviewSourcePreloadApi = {
-  readonly hostedReviews: Pick<DiffDashBridgeApi["hostedReviews"], "getDecision" | "submitDecision">
+  readonly hostedReviews: Pick<
+    DiffDashBridgeApi["hostedReviews"],
+    "close" | "getDecision" | "merge" | "submitDecision" | "updateBranch"
+  >
   readonly openLocalRepositoryFile: DiffDashBridgeApi["openLocalRepositoryFile"]
   readonly openRepositoryFile: DiffDashBridgeApi["openRepositoryFile"]
   readonly repositoryComparisons: Pick<DiffDashBridgeApi["repositoryComparisons"], "openFile">
@@ -70,20 +83,99 @@ export type ReviewSourceOperationSet = {
   readonly decision: ReviewDecisionOperations
 }
 
+/** Hosted review mutations available before a diff snapshot has been acquired. */
+export type HostedReviewMutationOperations = {
+  readonly close: (() => Promise<void>) | null
+  readonly merge: ((method: HostedReviewMergeMethod, bypassRules: boolean) => Promise<void>) | null
+  readonly mergeBypassSupported: boolean
+  readonly updateBranch: (() => Promise<void>) | null
+  readonly submit:
+    | ((decision: HostedReviewSubmissionDecision, body: string) => Promise<void>)
+    | null
+}
+
 /** Platform factory for the source-specific operations of an authoritative ready review. */
 export class ReviewSourceOperations extends Context.Service<
   ReviewSourceOperations,
-  { readonly make: (review: RendererReview) => ReviewSourceOperationSet }
+  {
+    readonly make: (review: RendererReview) => ReviewSourceOperationSet
+    readonly makeHostedMutations: (
+      summary: HostedReviewSummary,
+      provider: GitProviderDescriptor | null,
+    ) => HostedReviewMutationOperations
+  }
 >()("@diffdash/app/ReviewSourceOperations") {}
+
+/** Builds capability-gated hosted review mutations directly against one typed preload client. */
+export const makeHostedReviewMutationOperations = (
+  api: ReviewSourcePreloadApi,
+  summary: HostedReviewSummary,
+  provider: GitProviderDescriptor | null,
+): HostedReviewMutationOperations => {
+  const expectedHeadRevision = summary.head.revision
+  return {
+    submit:
+      provider?.capabilities.reviewDecisions === true
+        ? (decision, body) =>
+            runRendererPromise(
+              invokePreload(InvokeChannel.submitHostedReviewDecision, () =>
+                api.hostedReviews.submitDecision(
+                  SubmitHostedReviewDecisionRequest.make({
+                    review: summary.locator,
+                    submission: HostedReviewSubmission.make({ decision, body }),
+                  }),
+                ),
+              ),
+            )
+        : null,
+    close:
+      provider?.capabilities.reviewClosure === true
+        ? () =>
+            runRendererPromise(
+              invokePreload(InvokeChannel.closeHostedReview, () =>
+                api.hostedReviews.close(CloseHostedReviewRequest.make({ review: summary.locator })),
+              ),
+            )
+        : null,
+    merge:
+      provider?.capabilities.reviewMerge === true && expectedHeadRevision !== null
+        ? (method, bypassRules) =>
+            runRendererPromise(
+              invokePreload(InvokeChannel.mergeHostedReview, () =>
+                api.hostedReviews.merge(
+                  MergeHostedReviewRequest.make({
+                    review: summary.locator,
+                    method,
+                    bypassRules,
+                    expectedHeadRevision,
+                  }),
+                ),
+              ),
+            )
+        : null,
+    mergeBypassSupported: provider?.capabilities.reviewMergeBypass === true,
+    updateBranch:
+      provider?.capabilities.reviewBranchUpdates === true
+        ? () =>
+            runRendererPromise(
+              invokePreload(InvokeChannel.updateHostedReviewBranch, () =>
+                api.hostedReviews.updateBranch(
+                  HostedReviewRequest.make({ review: summary.locator }),
+                ),
+              ),
+            )
+        : null,
+  }
+}
 
 /** Builds source operations directly against one typed preload client. */
 export const makeReviewSourceOperations = (
   api: ReviewSourcePreloadApi,
-  review: RendererReview,
+  rendererReview: RendererReview,
 ): ReviewSourceOperationSet => {
-  return Match.valueTags(review, {
-    hosted: (review: HostedRendererReview) => {
-      const summary = review.manifest.detail.summary
+  return Match.valueTags(rendererReview, {
+    hosted: (hostedReview: HostedRendererReview) => {
+      const summary = hostedReview.manifest.detail.summary
       return {
         listViewedFiles: () =>
           runRendererPromise(
@@ -125,7 +217,7 @@ export const makeReviewSourceOperations = (
             ),
           ),
         decision:
-          review.provider?.capabilities.reviewDecisions === true
+          hostedReview.provider?.capabilities.reviewDecisions === true
             ? {
                 _tag: "supported" as const,
                 get: () =>
@@ -142,7 +234,10 @@ export const makeReviewSourceOperations = (
                       api.hostedReviews.submitDecision(
                         SubmitHostedReviewDecisionRequest.make({
                           review: summary.locator,
-                          decision: "approved",
+                          submission: HostedReviewSubmission.make({
+                            decision: "approved",
+                            body: "",
+                          }),
                         }),
                       ),
                     ),
@@ -152,8 +247,8 @@ export const makeReviewSourceOperations = (
       }
     },
 
-    repositoryComparison: (review: RepositoryComparisonRendererReview) => {
-      const target = review.target
+    repositoryComparison: (repositoryComparison: RepositoryComparisonRendererReview) => {
+      const target = repositoryComparison.target
       return {
         listViewedFiles: () =>
           runRendererPromise(
@@ -186,9 +281,9 @@ export const makeReviewSourceOperations = (
       }
     },
 
-    local: (review: LocalRendererReview) => {
-      const detail = review.manifest.detail
-      const target = review.target
+    local: (localReview: LocalRendererReview) => {
+      const detail = localReview.manifest.detail
+      const target = localReview.target
       return {
         listViewedFiles: () =>
           runRendererPromise(
@@ -233,6 +328,8 @@ export const reviewSourceOperationsLayer = Layer.effect(
     const api = yield* PreloadClient
     return ReviewSourceOperations.of({
       make: (review) => makeReviewSourceOperations(api, review),
+      makeHostedMutations: (summary, provider) =>
+        makeHostedReviewMutationOperations(api, summary, provider),
     })
   }),
 )

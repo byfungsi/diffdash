@@ -142,6 +142,36 @@ describe("App review browser interactions", () => {
     await appBrowserScenario("localReview")()
   })
 
+  it("loads the hosted overview before diff and submits provider actions", async () => {
+    expect.hasAssertions()
+    await appBrowserScenario("hostedReviewOverviewActions")()
+  })
+
+  it("returns to the hosted overview when the open pull request is selected again", async () => {
+    expect.hasAssertions()
+    await appBrowserScenario("hostedReviewReselection")()
+  })
+
+  it("updates an out-of-date hosted review branch and refreshes its overview", async () => {
+    expect.hasAssertions()
+    await appBrowserScenario("hostedReviewBranchUpdate")()
+  })
+
+  it("requires explicit confirmation before bypassing hosted merge rules", async () => {
+    expect.hasAssertions()
+    await appBrowserScenario("hostedReviewMergeBypass")()
+  })
+
+  it("disables merge and links to the provider when a hosted review conflicts", async () => {
+    expect.hasAssertions()
+    await appBrowserScenario("hostedReviewMergeConflicts")()
+  })
+
+  it("polls transient hosted merge readiness until GitHub resolves it", async () => {
+    expect.hasAssertions()
+    await appBrowserScenario("hostedReviewMergeStatusPolling")()
+  })
+
   it("FUN-130 AC: uses provider terminology and hides unsupported review decisions", async () => {
     expect.hasAssertions()
     await appBrowserScenario("providerTerminology")()
