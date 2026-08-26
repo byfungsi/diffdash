@@ -1,5 +1,15 @@
 # DiffDash Changelog
 
+## 0.14.0
+
+### Minor Changes
+
+- [#110](https://github.com/byfungsi/diffdash/pull/110) [`43bf52b`](https://github.com/byfungsi/diffdash/commit/43bf52bd284eca551c7ba595a4f39d72b6fada23) Thanks [@hanipcode](https://github.com/hanipcode)! - Add hosted pull request overviews with checks, review actions, branch updates, and guarded merges.
+
+### Patch Changes
+
+- [#108](https://github.com/byfungsi/diffdash/pull/108) [`2a02b57`](https://github.com/byfungsi/diffdash/commit/2a02b57809f307f08fb5ebb880fcb7d1b52f8f3f) Thanks [@hanipcode](https://github.com/hanipcode)! - Fix OpenCode comments for the current OpenCode V2 API.
+
 ## 0.13.1
 
 ### Patch Changes
