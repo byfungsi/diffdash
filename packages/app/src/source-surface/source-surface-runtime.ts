@@ -38,7 +38,14 @@ export interface SourceSurfaceTokenTarget {
   readonly lineCharEnd: number
   readonly tokenText: string
   readonly tokenElement: HTMLElement
+  readonly side: Option.Option<SourceSurfaceSide>
 }
+
+/** Optional old/new side carried by tokens rendered from a diff surface. */
+export const SourceSurfaceSide = Schema.Literals(["additions", "deletions"])
+
+/** Optional old/new side carried by tokens rendered from a diff surface. */
+export type SourceSurfaceSide = typeof SourceSurfaceSide.Type
 
 /** Pierre token coordinates before the adapter associates them with a semantic surface. */
 export type SourceSurfaceTokenCoordinates = Omit<SourceSurfaceTokenTarget, "surfaceId">
@@ -463,6 +470,42 @@ const sourceSurfaceClickInteraction = <Instance>(
   const lineCharStart = decodePierreNonNegativeInteger(tokenElement.value.dataset.char)
   if (Option.isNone(lineCharStart)) return Option.none()
   const tokenText = Option.getOrElse(Option.fromNullishOr(tokenElement.value.textContent), () => "")
+  const code = Option.fromNullishOr(
+    path.find(
+      (candidate): candidate is HTMLElement =>
+        isHTMLElement(candidate) && candidate.hasAttribute("data-code"),
+    ),
+  )
+  const side: Option.Option<SourceSurfaceSide> = Option.flatMap(code, (codeElement) => {
+    const explicitSides = [
+      ["data-deletions", "deletions"],
+      ["data-additions", "additions"],
+    ] as const satisfies readonly (readonly [string, SourceSurfaceSide])[]
+    const explicitSide: Option.Option<SourceSurfaceSide> = Option.map(
+      Option.fromNullishOr(
+        explicitSides.find(([attribute]) => codeElement.hasAttribute(attribute)),
+      ),
+      ([, value]) => value,
+    )
+    if (Option.isSome(explicitSide) || !codeElement.hasAttribute("data-unified")) {
+      return explicitSide
+    }
+    const line = Option.fromNullishOr(
+      path.find(
+        (candidate): candidate is HTMLElement =>
+          isHTMLElement(candidate) && candidate.hasAttribute("data-line-type"),
+      ),
+    )
+    return Option.map(line, (lineElement) =>
+      Option.getOrElse(
+        HashMap.get(
+          HashMap.fromIterable<string, SourceSurfaceSide>([["change-deletion", "deletions"]]),
+          Option.getOrElse(Option.fromNullishOr(lineElement.dataset.lineType), () => ""),
+        ),
+        () => "additions",
+      ),
+    )
+  })
   return Option.some({
     event,
     lineNumber: lineIndex.value + 1,
@@ -473,6 +516,7 @@ const sourceSurfaceClickInteraction = <Instance>(
       lineCharEnd: lineCharStart.value + tokenText.length,
       tokenText,
       tokenElement: tokenElement.value,
+      side,
     }),
   })
 }

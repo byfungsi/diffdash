@@ -10,17 +10,13 @@ import {
   codeLineChangesFromHunks,
   type CodeLineChangeRange,
 } from "@diffdash/domain/code-line-change"
-import {
-  type CodeWorkspaceTarget,
-  HostedReviewCodeWorkspaceTarget,
-  LocalReviewSnapshotCodeWorkspaceTarget,
-  ProjectRevisionCodeWorkspaceTarget,
-} from "@diffdash/domain/code-workspace"
-import { DiffFileVisibility } from "@diffdash/domain/diff"
+import type { CodeWorkspaceTarget } from "@diffdash/domain/code-workspace"
+import { DiffFileVisibility, type ParsedDiffFile } from "@diffdash/domain/diff"
+import type { LanguageRange } from "@diffdash/domain/language"
 import type { ReviewSnapshotFileInventory } from "@diffdash/domain/review-context"
 import type { ReviewFileId } from "@diffdash/domain/review-identity"
 import type { ProjectWorkspaceActivityId } from "@diffdash/domain/project-workspace"
-import type { RepositoryRelativePath } from "@diffdash/domain/repository-path"
+import { RepositoryRelativePath } from "@diffdash/domain/repository-path"
 import {
   ReviewLocationV1,
   ReviewNavigationBehavior,
@@ -36,7 +32,7 @@ import {
 } from "@diffdash/domain/review-thread"
 import { ReviewSnapshotSearchFileAnchor } from "@diffdash/protocol/review-snapshot"
 import { RegistryContext, useAtomValue } from "@effect/atom-react"
-import { Effect, HashMap, HashSet, Match, Option } from "effect"
+import { Effect, Exit, HashMap, HashSet, Match, Option, Schema, Scope } from "effect"
 import {
   Check,
   Ellipsis,
@@ -66,6 +62,7 @@ import {
 } from "@/extensions/review/review-surface-capability"
 import {
   runRendererPromise,
+  useCodeWorkspace,
   useDesktopRuntime,
   useReviewContent,
 } from "@/platform/renderer-runtime"
@@ -80,10 +77,18 @@ import { CommandPaletteDialog, type CommandPaletteItem } from "@/shell/command-p
 import { WorkbenchContextActions } from "@/shell/workbench-context-actions"
 import { ProjectActivityNavigation } from "@/project-workspace/project-activity-navigation"
 import {
+  SourceSurfaceSide,
   SourceSurfaceContributionId,
   type SourceSurfaceRenderObserver,
+  useSourceSurfaceHost,
   useSourceSurfaceRuntime,
 } from "@/source-surface/source-surface-runtime"
+import {
+  type LanguageNavigationSource,
+  type LanguageNavigationDestination,
+  useLanguageNavigationCapability,
+} from "@/source-surface/language-navigation-capability"
+import { CodeDefinitionPeek } from "@/project-workspace/code-definition-peek"
 import { OpenDiffCard } from "./diff-card"
 import type { ReviewDiffAnnotationMetadata } from "./review-diff-annotation"
 import { useReviewDiffContributionHost } from "@/extensions/review-diff-contribution-host"
@@ -112,6 +117,11 @@ import { ReviewNavigationAnchorRegistry, reviewFileAnchorKey } from "./review-na
 import { ReviewPagePlaceholder } from "./review-page-placeholder"
 import { ReviewSearchHighlightManager } from "./review-search-highlights"
 import { ReviewSearchController } from "./review-search-state"
+import {
+  makeReviewCodeWorkspaceSession,
+  ReviewCodeWorkspaceSessionError,
+  reviewCodeWorkspaceTargets,
+} from "./review-code-workspace"
 import { ReviewSearchToolbar } from "./review-search-toolbar"
 import { orderReviewFilesAsTree } from "./file-tree-adapter"
 import type { ReviewSelectionProjection } from "./review-selection"
@@ -157,6 +167,7 @@ export type ReviewDetailEnvironment = {
     target: CodeWorkspaceTarget,
     files: readonly ReviewSnapshotFileInventory[],
     lineChanges: HashMap.HashMap<RepositoryRelativePath, readonly CodeLineChangeRange[]>,
+    revealRange: Option.Option<LanguageRange>,
   ) => void
   readonly onShowFilesActivity: () => void
   readonly onSidebarExpandedChange: (expanded: boolean) => void
@@ -202,6 +213,7 @@ const REVIEW_DIFF_OPTIONS = {
   lineDiffType: "word",
   overflow: "wrap",
   tokenizeMaxLineLength: 2_000,
+  useTokenTransformer: true,
   theme: {
     dark: DEFAULT_CODE_THEME_PREFERENCES.dark,
     light: DEFAULT_CODE_THEME_PREFERENCES.light,
@@ -292,6 +304,32 @@ const REVIEW_DIFF_VIRTUALIZER_CONFIG = {
   overscrollSize: 1_000,
 } as const
 
+class ReviewLanguageSourceRequest extends Schema.Class<ReviewLanguageSourceRequest>(
+  "ReviewLanguageSourceRequest",
+)({
+  path: RepositoryRelativePath,
+  side: SourceSurfaceSide,
+}) {}
+
+const reviewLanguageSourceRequest = (
+  source: LanguageNavigationSource,
+  files: readonly ParsedDiffFile[],
+): Option.Option<ReviewLanguageSourceRequest> =>
+  Option.flatMap(source.side, (side) =>
+    Option.map(
+      Option.fromNullishOr(
+        files.find((file) => file.reviewKey === source.surfaceId || file.path === source.surfaceId),
+      ),
+      (file) => {
+        const pathBySide: Record<SourceSurfaceSide, RepositoryRelativePath> = {
+          additions: file.path,
+          deletions: Option.getOrElse(Option.fromNullishOr(file.oldPath), () => file.path),
+        }
+        return new ReviewLanguageSourceRequest({ path: pathBySide[side], side })
+      },
+    ),
+  )
+
 const REVIEW_DIFF_WORKER_POOL_OPTIONS = {
   poolSize: 1,
   totalASTLRUCacheSize: 20,
@@ -303,6 +341,7 @@ const REVIEW_DIFF_HIGHLIGHTER_OPTIONS = {
   maxLineDiffLength: 1_000,
   theme: REVIEW_DIFF_OPTIONS.theme,
   tokenizeMaxLineLength: REVIEW_DIFF_OPTIONS.tokenizeMaxLineLength,
+  useTokenTransformer: REVIEW_DIFF_OPTIONS.useTokenTransformer,
 } satisfies WorkerInitializationRenderOptions
 
 const reviewDiffHighlighterOptions = (
@@ -338,6 +377,7 @@ export const ReviewDetailView = ({
   const ActivityContextPane = activeActivityContribution?.slots?.contextPane?.component
   const ActivityDetailPane = activeActivityContribution?.slots?.detailPane?.component
   const captureAnalytics = useCaptureAnalytics()
+  const codeWorkspace = useCodeWorkspace()
   const desktop = useDesktopRuntime()
   const reviewContentService = useReviewContent()
   const {
@@ -373,6 +413,23 @@ export const ReviewDetailView = ({
   } = ready
   const review = selection.review
   const manifest = review.manifest
+  const reviewWorkspaceTargets = useMemo(() => reviewCodeWorkspaceTargets(review), [review])
+  const reviewWorkspaceResource = useMemo(() => {
+    const scope = Scope.makeUnsafe()
+    const session = Effect.runSync(
+      makeReviewCodeWorkspaceSession(codeWorkspace, reviewWorkspaceTargets).pipe(
+        Scope.provide(scope),
+      ),
+    )
+    return { scope, session }
+  }, [codeWorkspace, reviewWorkspaceTargets])
+  useEffect(
+    () => () => {
+      Effect.runFork(Scope.close(reviewWorkspaceResource.scope, Exit.void))
+    },
+    [reviewWorkspaceResource],
+  )
+  const reviewWorkspaceSession = reviewWorkspaceResource.session
   const reviewContributionTarget = useMemo(
     () =>
       Match.valueTags(review, {
@@ -428,6 +485,7 @@ export const ReviewDetailView = ({
   const diffResizeFrameRef = useRef<number | null>(null)
   const reviewSurfaceRuntime =
     useSourceSurfaceRuntime<PierreFileDiff<ReviewDiffAnnotationMetadata>>()
+  useSourceSurfaceHost(reviewSurfaceRuntime, diffScrollContainerRef)
   const [diffVirtualizer] = useState(() => new DiffVirtualizer(REVIEW_DIFF_VIRTUALIZER_CONFIG))
   const [reviewNavigationAnchors] = useState(() => new ReviewNavigationAnchorRegistry())
   const [reviewNavigator] = useState(() => new ReviewNavigatorController(atomRegistry))
@@ -636,6 +694,83 @@ export const ReviewDetailView = ({
       }),
     [changedFiles, loadedFilesById],
   )
+  const reviewLineChanges = useMemo(
+    () =>
+      HashMap.fromIterable(
+        loadedChangedFiles.map(
+          (file) => [file.path, codeLineChangesFromHunks(file.hunks)] as const,
+        ),
+      ),
+    [loadedChangedFiles],
+  )
+  const openLanguageDestination = (destination: LanguageNavigationDestination) => {
+    const side = Option.getOrElse(destination.origin.side, () =>
+      SourceSurfaceSide.make("additions"),
+    )
+    const targetBySide: Record<SourceSurfaceSide, CodeWorkspaceTarget> = {
+      additions: reviewWorkspaceTargets.head,
+      deletions: Option.getOrElse(reviewWorkspaceTargets.base, () => reviewWorkspaceTargets.head),
+    }
+    onOpenCodeFile(
+      destination.location.target.path,
+      targetBySide[side],
+      changedFiles,
+      reviewLineChanges,
+      Option.some(destination.location.targetSelectionRange),
+    )
+  }
+  const languageNavigation = useLanguageNavigationCapability({
+    enabled: active,
+    navigate: Option.some(openLanguageDestination),
+    providers: {
+      definitions: Option.some((position, signal, source) => {
+        const request = reviewLanguageSourceRequest(source, loadedChangedFiles)
+        return runRendererPromise(
+          Option.match(request, {
+            onNone: () =>
+              Effect.fail(
+                new ReviewCodeWorkspaceSessionError({
+                  message: `Review diff source is unavailable for ${source.surfaceId}.`,
+                  reason: "sourceUnavailable",
+                }),
+              ),
+            onSome: ({ path, side }) => reviewWorkspaceSession.definitions(side, path, position),
+          }),
+          signal,
+        )
+      }),
+      references: Option.some((position, signal, source) => {
+        const request = reviewLanguageSourceRequest(source, loadedChangedFiles)
+        return runRendererPromise(
+          Option.match(request, {
+            onNone: () =>
+              Effect.fail(
+                new ReviewCodeWorkspaceSessionError({
+                  message: `Review diff source is unavailable for ${source.surfaceId}.`,
+                  reason: "sourceUnavailable",
+                }),
+              ),
+            onSome: ({ path, side }) => reviewWorkspaceSession.references(side, path, position),
+          }),
+          signal,
+        )
+      }),
+    },
+    rootRef: diffScrollContainerRef,
+    runtime: reviewSurfaceRuntime,
+    surfaceId: (token) => {
+      const root = token.tokenElement.getRootNode()
+      let host = token.tokenElement
+      if ("host" in root && isHTMLElement(root.host)) host = root.host
+      return Option.getOrElse(
+        Option.flatMap(
+          Option.fromNullishOr(host.closest<HTMLElement>("[data-diff-card-path]")),
+          (card) => Option.fromNullishOr(card.dataset.diffCardPath),
+        ),
+        () => review.identity,
+      )
+    },
+  })
   const eagerLoadSettled =
     progressiveInventory.length === 0 ||
     (loadingFileIds.size === 0 &&
@@ -831,11 +966,38 @@ export const ReviewDetailView = ({
   }, [diffVirtualizer, lastRenderedFileId])
   const resolvedDiffViewMode =
     aiSettings.diffViewMode === "auto" ? autoDiffViewMode : aiSettings.diffViewMode
+  const onReviewTokenClick = useStableCallback<
+    NonNullable<FileDiffOptions<ReviewDiffAnnotationMetadata>["onTokenClick"]>
+  >((token, event) =>
+    languageNavigation.onTokenClick(
+      { ...token, side: Schema.decodeUnknownOption(SourceSurfaceSide)(token.side) },
+      event,
+    ),
+  )
+  const onReviewTokenEnter = useStableCallback<
+    NonNullable<FileDiffOptions<ReviewDiffAnnotationMetadata>["onTokenEnter"]>
+  >((token, event) =>
+    languageNavigation.onTokenEnter(
+      { ...token, side: Schema.decodeUnknownOption(SourceSurfaceSide)(token.side) },
+      event,
+    ),
+  )
+  const onReviewTokenLeave = useStableCallback<
+    NonNullable<FileDiffOptions<ReviewDiffAnnotationMetadata>["onTokenLeave"]>
+  >((token) =>
+    languageNavigation.onTokenLeave({
+      ...token,
+      side: Schema.decodeUnknownOption(SourceSurfaceSide)(token.side),
+    }),
+  )
   const reviewDiffOptions: FileDiffOptions<ReviewDiffAnnotationMetadata> = {
     ...REVIEW_DIFF_OPTIONS,
     diffStyle: resolvedDiffViewMode,
     theme: aiSettings.codeThemes,
     themeType: colorScheme,
+    onTokenClick: onReviewTokenClick,
+    onTokenEnter: onReviewTokenEnter,
+    onTokenLeave: onReviewTokenLeave,
   }
   const previousResolvedDiffViewModeRef = useRef(resolvedDiffViewMode)
   useEffect(() => {
@@ -1546,35 +1708,14 @@ export const ReviewDetailView = ({
     const file = changedFiles.find((changedFile) => changedFile.path === path)
     if (file !== undefined) submitFileNavigation(file, "file-tree")
   }
-  const codeWorkspaceTarget = Match.valueTags(review, {
-    hosted: (hostedReview) =>
-      HostedReviewCodeWorkspaceTarget.make({
-        projectId: manifest.projectId,
-        review: hostedReview.target,
-        revision: manifest.headRevision,
-      }),
-    local: () =>
-      LocalReviewSnapshotCodeWorkspaceTarget.make({
-        projectId: manifest.projectId,
-        snapshotId: manifest.snapshotId,
-      }),
-    repositoryComparison: (comparisonReview) =>
-      ProjectRevisionCodeWorkspaceTarget.make({
-        projectId: manifest.projectId,
-        revision: comparisonReview.target.headSha,
-      }),
-  })
   const openRepositoryFile = (path: RepositoryRelativePath) => {
     onSelectPath(path)
     onOpenCodeFile(
       path,
-      codeWorkspaceTarget,
+      reviewWorkspaceTargets.head,
       changedFiles,
-      HashMap.fromIterable(
-        loadedChangedFiles.map(
-          (file) => [file.path, codeLineChangesFromHunks(file.hunks)] as const,
-        ),
-      ),
+      reviewLineChanges,
+      Option.none(),
     )
   }
   const approvePullRequest = async () => {
@@ -2003,6 +2144,11 @@ export const ReviewDetailView = ({
                                 onFileAnchorChange={(element, focusElement) =>
                                   registerFileNavigationAnchor(file.fileId, element, focusElement)
                                 }
+                                onLoadDiffFiles={() =>
+                                  runRendererPromise(
+                                    reviewWorkspaceSession.loadDiffFiles(parsedFile.value),
+                                  )
+                                }
                                 onOpenFile={() => openRepositoryFile(file.path)}
                                 onActivateLine={(side, lineNumber) =>
                                   reviewContributionHost.semantic.activateLine(
@@ -2053,6 +2199,27 @@ export const ReviewDetailView = ({
       <WorkbenchContextActions>
         {active ? <ReviewActionsMenu items={reviewActionItems} /> : null}
       </WorkbenchContextActions>
+      {Option.match(languageNavigation.peek, {
+        onNone: () => null,
+        onSome: (peek) => (
+          <CodeDefinitionPeek
+            codeThemes={aiSettings.codeThemes}
+            colorScheme={colorScheme}
+            state={peek}
+            onClose={languageNavigation.closePeek}
+            onLoadSource={(path, signal) =>
+              runRendererPromise(
+                reviewWorkspaceSession.readSource(
+                  Option.getOrElse(peek.origin.side, () => SourceSurfaceSide.make("additions")),
+                  path,
+                ),
+                signal,
+              )
+            }
+            onNavigate={(location) => openLanguageDestination({ location, origin: peek.origin })}
+          />
+        ),
+      })}
     </>
   )
 

@@ -69,7 +69,7 @@ describe("Code navigation contribution", () => {
   it("owns path and definition mutations while ignoring refreshed status metadata in equality", () => {
     const selected = selectCodeNavigationPath(encodedCodeState(), Option.some(targetPath))
     const definition = navigateCodeNavigationDefinition(selected, {
-      origin: { surfaceId: "code", range },
+      origin: { surfaceId: "code", range, side: Option.none() },
       location: RepositoryLanguageLocationLink.make({
         originSelectionRange: Option.none(),
         target: RepositoryLanguageLocation.make({ path: sourcePath, range }),

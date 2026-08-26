@@ -113,10 +113,12 @@ export const createCodeFileNavigationState = ({
   lineChanges = HashMap.empty(),
   path,
   projectId,
+  revealRange,
   target = ProjectHeadCodeWorkspaceTarget.make({ projectId }),
 }: {
   readonly projectId: CodeNavigationState["target"]["projectId"]
   readonly path: RepositoryRelativePath
+  readonly revealRange: Option.Option<LanguageRange>
   readonly target?: CodeWorkspaceTarget
   readonly files?: readonly ReviewSnapshotFileInventory[]
   readonly lineChanges?: HashMap.HashMap<RepositoryRelativePath, readonly CodeLineChangeRange[]>
@@ -124,7 +126,7 @@ export const createCodeFileNavigationState = ({
   encodeCodeNavigationState({
     target,
     path: Option.some(path),
-    revealRange: Option.none(),
+    revealRange,
     fileStatuses: HashMap.fromIterable(
       (files ?? [])
         .filter((file) => file.status !== "deleted")

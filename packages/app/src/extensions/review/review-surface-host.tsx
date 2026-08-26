@@ -228,7 +228,7 @@ export const ReviewExtensionSurface = () => {
             colorScheme: environment.colorScheme,
             onAISettingsChange: environment.updateAISettings,
             onLinkRepository: linkSelectedReviewRepository,
-            onOpenCodeFile: (path, target, files, lineChanges) => {
+            onOpenCodeFile: (path, target, files, lineChanges, revealRange) => {
               if (codeContribution === undefined) return
               const activity = host.activities.find(
                 (candidate) => candidate.id === codeSurfaceContribution?.defaultActivityId,
@@ -240,6 +240,7 @@ export const ReviewExtensionSurface = () => {
                 target,
                 files,
                 lineChanges,
+                revealRange,
               })
               if (host.navigate(codeContribution, activity.id, state)) {
                 void host.persistLocation(codeContribution, activity, state)

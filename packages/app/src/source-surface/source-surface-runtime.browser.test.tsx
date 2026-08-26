@@ -73,6 +73,7 @@ describe("SourceSurfaceRuntime", () => {
       lineCharEnd: 4,
       tokenText: "same",
       tokenElement: first.token,
+      side: Option.none(),
     }
     const anchor = runtime.createTokenAnchor(target)
     first.line.remove()
