@@ -151,6 +151,7 @@ export const ReviewScreen = ({
             summary={selectedHostedReview}
           />
         }
+        preferredActivePane="diff"
         sidebarExpanded={detailEnvironment.sidebarExpanded}
         threadDetailWidth={detailEnvironment.threadDetailWidth}
         onActiveActivityChange={onActiveActivityChange}
