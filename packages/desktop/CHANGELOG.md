@@ -1,5 +1,11 @@
 # DiffDash Changelog
 
+## 0.15.0
+
+### Minor Changes
+
+- [#111](https://github.com/byfungsi/diffdash/pull/111) [`628cc28`](https://github.com/byfungsi/diffdash/commit/628cc287c4f4e9c611f8e30be8f44027237c0bae) Thanks [@hanipcode](https://github.com/hanipcode)! - Expand collapsed diff context and navigate definitions and references directly from review code.
+
 ## 0.14.0
 
 ### Minor Changes
