@@ -70,6 +70,7 @@ describe("CodeDefinitionPeek", () => {
                 id: 1,
                 origin: {
                   surfaceId: "src/source.ts",
+                  side: Option.none(),
                   range: new LanguageRange({
                     start: new LanguagePosition({ line: 0, character: 0 }),
                     end: new LanguagePosition({ line: 0, character: 6 }),

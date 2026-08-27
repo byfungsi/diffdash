@@ -13,6 +13,7 @@ import {
   type SourceSurfaceRuntime,
   type SourceSurfaceTokenCoordinates,
   type SourceSurfaceTokenTarget,
+  SourceSurfaceSide,
 } from "./source-surface-runtime"
 import { useStableCallback } from "@/review/pierre"
 import type { FloatingPaneAnchor } from "@/shared/ui/floating-pane"
@@ -30,6 +31,11 @@ type LanguageNavigationIntent = typeof LanguageNavigationIntent.Type
 const LANGUAGE_NAVIGATION_CAPABILITY_ID = SourceSurfaceContributionId.make(
   "diffdash.builtin.language-navigation",
 )
+
+class LanguageNavigationProviderError extends Schema.TaggedError<LanguageNavigationProviderError>()(
+  "LanguageNavigationProviderError",
+  { message: Schema.String },
+) {}
 
 type LanguageNavigationModifiers = Pick<
   MouseEvent | PointerEvent | globalThis.KeyboardEvent,
@@ -66,10 +72,23 @@ export interface LanguageNavigationPeekState {
 }
 
 /** Semantic source location retained while resolving or selecting a language destination. */
-export interface LanguageNavigationOrigin {
-  readonly range: LanguageRange
-  readonly surfaceId: string
-}
+export class LanguageNavigationOrigin extends Schema.Class<LanguageNavigationOrigin>(
+  "LanguageNavigationOrigin",
+)({
+  range: LanguageRange,
+  side: Schema.Option(SourceSurfaceSide).pipe(
+    Schema.withConstructorDefault(Effect.succeed(Option.none())),
+  ),
+  surfaceId: Schema.String,
+}) {}
+
+/** DOM-free semantic source identity supplied to language providers. */
+export class LanguageNavigationSource extends Schema.Class<LanguageNavigationSource>(
+  "LanguageNavigationSource",
+)({
+  side: Schema.Option(SourceSurfaceSide),
+  surfaceId: Schema.String,
+}) {}
 
 /** Reversible source and target pair produced by language navigation. */
 export interface LanguageNavigationDestination {
@@ -80,16 +99,25 @@ export interface LanguageNavigationDestination {
 /** Definition and reference providers consumed by generic source-surface navigation. */
 export interface LanguageNavigationProviders {
   readonly definitions: Option.Option<
-    (position: LanguagePosition, signal: AbortSignal) => Promise<RepositoryLanguageLocationResult>
+    (
+      position: LanguagePosition,
+      signal: AbortSignal,
+      source: LanguageNavigationSource,
+    ) => Promise<RepositoryLanguageLocationResult>
   >
   readonly references: Option.Option<
-    (position: LanguagePosition, signal: AbortSignal) => Promise<RepositoryLanguageLocationResult>
+    (
+      position: LanguagePosition,
+      signal: AbortSignal,
+      source: LanguageNavigationSource,
+    ) => Promise<RepositoryLanguageLocationResult>
   >
 }
 
 /** Renderer adapter callbacks and Peek state owned by language navigation. */
 export interface LanguageNavigationCapability {
   readonly closePeek: () => void
+  readonly onTokenClick: (token: SourceSurfaceTokenCoordinates, event: MouseEvent) => void
   readonly onTokenEnter: (token: SourceSurfaceTokenCoordinates, event: PointerEvent) => void
   readonly onTokenLeave: (token: SourceSurfaceTokenCoordinates) => void
   readonly peek: Option.Option<LanguageNavigationPeekState>
@@ -97,17 +125,19 @@ export interface LanguageNavigationCapability {
 
 /** Registers generic definition/reference behavior against independently supplied providers. */
 export const useLanguageNavigationCapability = <Instance>({
+  enabled,
   navigate,
   providers,
   rootRef,
   runtime,
   surfaceId,
 }: {
+  readonly enabled: boolean
   readonly navigate: Option.Option<(destination: LanguageNavigationDestination) => void>
   readonly providers: LanguageNavigationProviders
   readonly rootRef: RefObject<HTMLElement | null>
   readonly runtime: SourceSurfaceRuntime<Instance>
-  readonly surfaceId: string
+  readonly surfaceId: (token: SourceSurfaceTokenCoordinates) => string
 }): LanguageNavigationCapability => {
   const [peek, setPeek] = useState<Option.Option<LanguageNavigationPeekState>>(Option.none())
   const hoveredTokenRef = useRef<Option.Option<SourceSurfaceTokenTarget>>(Option.none())
@@ -138,20 +168,27 @@ export const useLanguageNavigationCapability = <Instance>({
     navigationRequestRef.current = Option.none()
   })
   const requestLocations = useStableCallback(
-    async (
-      token: SourceSurfaceTokenTarget,
-      intent: LanguageNavigationIntent,
-      mode: "hover" | "open",
-    ) => {
+    (token: SourceSurfaceTokenTarget, intent: LanguageNavigationIntent, mode: "hover" | "open") => {
+      if (!enabled) return
       const open = mode === "open"
-      const providerRequest = LanguageNavigationRequest.match(
+      const request: LanguageNavigationRequestSelection = LanguageNavigationRequest.match(
         LanguageNavigationRequest.cases[intent].make({}),
         {
-          findReferences: () => providers.references,
-          goToDefinition: () => providers.definitions,
-          peekDefinition: () => providers.definitions,
+          findReferences: (): LanguageNavigationRequestSelection => ({
+            kind: "references",
+            provider: providers.references,
+          }),
+          goToDefinition: (): LanguageNavigationRequestSelection => ({
+            kind: "definitions",
+            provider: providers.definitions,
+          }),
+          peekDefinition: (): LanguageNavigationRequestSelection => ({
+            kind: "definitions",
+            provider: providers.definitions,
+          }),
         },
       )
+      const providerRequest = request.provider
       if (Option.isNone(providerRequest)) return
       if (!open && Option.isSome(navigationRequestRef.current)) {
         hoveredTokenRef.current = Option.some(token)
@@ -178,101 +215,157 @@ export const useLanguageNavigationCapability = <Instance>({
           tokenElement: token.tokenElement,
         })
       }
-      const origin = languageNavigationOrigin(token)
-      try {
-        const result = await providerRequest.value(
-          new LanguagePosition({ line: token.lineNumber - 1, character: token.lineCharStart }),
-          controller.signal,
-        )
-        let requestIsActive = Option.exists(
-          hoverRequestRef.current,
-          (request) => request.sequence === sequence,
-        )
-        if (open) {
-          requestIsActive = Option.exists(
-            navigationRequestRef.current,
-            (request) => request.sequence === sequence,
-          )
-        }
-        if (controller.signal.aborted || !requestIsActive) {
-          return
-        }
-        if (result.locations.length === 0) {
-          if (!open) token.tokenElement.removeAttribute("data-diffdash-definition-link")
-          return
-        }
-        if (!open) {
-          token.tokenElement.setAttribute("data-diffdash-definition-link", "")
-          return
-        }
-        if (intent === "goToDefinition" && result.locations.length === 1) {
-          const target = Option.fromNullishOr(result.locations[0])
-          if (Option.isSome(target) && Option.isSome(navigate)) {
-            navigate.value({ location: target.value, origin })
-          }
-          return
-        }
-        setPeek(
-          Option.some({
-            anchor: runtime.createTokenAnchor(token),
-            content: LanguageNavigationPeekContent.cases.results.make({
-              kind: languageNavigationPeekKind(intent),
-              result,
-            }),
-            id: sequence,
-            origin,
+      const line = token.lineNumber - 1
+      const source = new LanguageNavigationSource({
+        side: token.side,
+        surfaceId: token.surfaceId,
+      })
+      const origin = new LanguageNavigationOrigin({
+        range: new LanguageRange({
+          start: new LanguagePosition({ line, character: token.lineCharStart }),
+          end: new LanguagePosition({ line, character: token.lineCharEnd }),
+        }),
+        side: token.side,
+        surfaceId: token.surfaceId,
+      })
+      const locations = Effect.tryPromise({
+        try: () =>
+          providerRequest.value(
+            new LanguagePosition({ line: token.lineNumber - 1, character: token.lineCharStart }),
+            controller.signal,
+            source,
+          ),
+        catch: (cause) =>
+          new LanguageNavigationProviderError({
+            message: formatError(cause, "Language locations could not be loaded."),
           }),
-        )
-      } catch (error) {
-        if (controller.signal.aborted) return
-        if (
-          !open &&
-          Option.exists(
-            hoverRequestRef.current,
-            ({ tokenElement }) => tokenElement === token.tokenElement,
-          )
-        ) {
-          token.tokenElement.removeAttribute("data-diffdash-definition-link")
-        }
-        if (open) {
-          setPeek(
-            Option.some({
-              anchor: runtime.createTokenAnchor(token),
-              content: LanguageNavigationPeekContent.cases.failure.make({
-                kind: languageNavigationPeekKind(intent),
-                message: formatError(error, "Language locations could not be loaded."),
+      }).pipe(
+        Effect.tap((result) =>
+          Effect.sync(() => {
+            let requestIsActive = Option.exists(
+              hoverRequestRef.current,
+              (activeRequest) => activeRequest.sequence === sequence,
+            )
+            if (open) {
+              requestIsActive = Option.exists(
+                navigationRequestRef.current,
+                (activeRequest) => activeRequest.sequence === sequence,
+              )
+            }
+            if (controller.signal.aborted || !requestIsActive) return
+            if (result.locations.length === 0) {
+              if (!open) token.tokenElement.removeAttribute("data-diffdash-definition-link")
+              return
+            }
+            if (!open) {
+              token.tokenElement.setAttribute("data-diffdash-definition-link", "")
+              return
+            }
+            if (intent === "goToDefinition" && result.locations.length === 1) {
+              Option.map(Option.fromNullishOr(result.locations[0]), (target) =>
+                Option.map(navigate, (navigateTo) => navigateTo({ location: target, origin })),
+              )
+              return
+            }
+            setPeek(
+              Option.some({
+                anchor: runtime.createTokenAnchor(token),
+                content: LanguageNavigationPeekContent.cases.results.make({
+                  kind: request.kind,
+                  result,
+                }),
+                id: sequence,
+                origin,
               }),
-              id: sequence,
-              origin,
+            )
+          }),
+        ),
+      )
+      const handledLocations = locations.pipe(
+        Effect.catchTag("LanguageNavigationProviderError", (error) =>
+          Effect.sync(() => {
+            if (controller.signal.aborted) return
+            if (
+              !open &&
+              Option.exists(
+                hoverRequestRef.current,
+                ({ tokenElement }) => tokenElement === token.tokenElement,
+              )
+            ) {
+              token.tokenElement.removeAttribute("data-diffdash-definition-link")
+            }
+            if (!open) return
+            setPeek(
+              Option.some({
+                anchor: runtime.createTokenAnchor(token),
+                content: LanguageNavigationPeekContent.cases.failure.make({
+                  kind: request.kind,
+                  message: error.message,
+                }),
+                id: sequence,
+                origin,
+              }),
+            )
+          }),
+        ),
+      )
+      Effect.runFork(
+        handledLocations.pipe(
+          Effect.ensuring(
+            Effect.sync(() => {
+              if (
+                open &&
+                Option.exists(
+                  navigationRequestRef.current,
+                  (activeRequest) => activeRequest.sequence === sequence,
+                )
+              ) {
+                navigationRequestRef.current = Option.none()
+              } else if (
+                !open &&
+                Option.exists(
+                  hoverRequestRef.current,
+                  (activeRequest) => activeRequest.sequence === sequence,
+                )
+              ) {
+                hoverRequestRef.current = Option.none()
+              }
             }),
-          )
-        }
-      } finally {
-        if (
-          open &&
-          Option.exists(navigationRequestRef.current, (request) => request.sequence === sequence)
-        ) {
-          navigationRequestRef.current = Option.none()
-        } else if (
-          !open &&
-          Option.exists(hoverRequestRef.current, (request) => request.sequence === sequence)
-        ) {
-          hoverRequestRef.current = Option.none()
-        }
-      }
+          ),
+        ),
+      )
+    },
+  )
+  const resolveToken = useStableCallback(
+    (coordinates: SourceSurfaceTokenCoordinates): SourceSurfaceTokenTarget => ({
+      ...coordinates,
+      surfaceId: surfaceId(coordinates),
+    }),
+  )
+  const onTokenClick = useStableCallback(
+    (coordinates: SourceSurfaceTokenCoordinates, event: MouseEvent) => {
+      if (!enabled) return
+      const intent = languageNavigationIntent(event)
+      if (Option.isNone(intent)) return
+      event.preventDefault()
+      event.stopPropagation()
+      document.getSelection()?.removeAllRanges()
+      requestLocations(resolveToken(coordinates), intent.value, "open")
     },
   )
   const onTokenEnter = useStableCallback(
     (coordinates: SourceSurfaceTokenCoordinates, event: PointerEvent) => {
-      const token = { ...coordinates, surfaceId }
+      if (!enabled) return
+      const token = resolveToken(coordinates)
       hoveredTokenRef.current = Option.some(token)
       const intent = languageNavigationIntent(event)
       if (Option.isNone(intent)) return
       token.tokenElement.setAttribute("data-diffdash-definition-link", "")
-      void requestLocations(token, intent.value, "hover")
+      requestLocations(token, intent.value, "hover")
     },
   )
   const onTokenLeave = useStableCallback((token: SourceSurfaceTokenCoordinates) => {
+    if (!enabled) return
     if (
       !Option.exists(
         hoveredTokenRef.current,
@@ -286,10 +379,11 @@ export const useLanguageNavigationCapability = <Instance>({
   })
   const handleClick = useStableCallback<SourceSurfaceInteractionRoute["handle"]>(
     ({ event, token }) => {
+      if (!enabled) return false
       const intent = languageNavigationIntent(event)
       if (Option.isNone(intent) || Option.isNone(token)) return false
       document.getSelection()?.removeAllRanges()
-      void requestLocations(token.value, intent.value, "open")
+      requestLocations(token.value, intent.value, "open")
       return true
     },
   )
@@ -307,23 +401,32 @@ export const useLanguageNavigationCapability = <Instance>({
   )
 
   useEffect(() => {
+    if (enabled) return
+    clearHover()
+    clearNavigationRequest()
+    setPeek(Option.none())
+  }, [clearHover, clearNavigationRequest, enabled])
+
+  useEffect(() => {
     const root = rootRef.current
     const onKeyDown = (event: globalThis.KeyboardEvent) => {
+      if (!enabled) return
       if (!isLanguageNavigationModifierKey(event) || event.repeat) return
       const token = hoveredTokenRef.current
       if (Option.isNone(token)) return
       const intent = languageNavigationIntent(event)
       if (Option.isNone(intent)) return
       token.value.tokenElement.setAttribute("data-diffdash-definition-link", "")
-      void requestLocations(token.value, intent.value, "hover")
+      requestLocations(token.value, intent.value, "hover")
     }
     const onKeyUp = (event: globalThis.KeyboardEvent) => {
+      if (!enabled) return
       if (!isLanguageNavigationModifierKey(event)) return
       clearHover()
       const token = hoveredTokenRef.current
       const intent = languageNavigationIntent(event)
       if (Option.isSome(token) && Option.isSome(intent)) {
-        void requestLocations(token.value, intent.value, "hover")
+        requestLocations(token.value, intent.value, "hover")
       }
     }
     window.addEventListener("keydown", onKeyDown, true)
@@ -338,24 +441,14 @@ export const useLanguageNavigationCapability = <Instance>({
       clearHover()
       clearNavigationRequest()
     }
-  }, [clearHover, clearNavigationRequest, requestLocations, rootRef])
+  }, [clearHover, clearNavigationRequest, enabled, requestLocations, rootRef])
 
   return {
     closePeek: () => setPeek(Option.none()),
+    onTokenClick,
     onTokenEnter,
     onTokenLeave,
     peek,
-  }
-}
-
-const languageNavigationOrigin = (token: SourceSurfaceTokenTarget): LanguageNavigationOrigin => {
-  const line = token.lineNumber - 1
-  return {
-    surfaceId: token.surfaceId,
-    range: new LanguageRange({
-      start: new LanguagePosition({ line, character: token.lineCharStart }),
-      end: new LanguagePosition({ line, character: token.lineCharEnd }),
-    }),
   }
 }
 
@@ -380,12 +473,10 @@ const LanguageNavigationRequest = Schema.TaggedUnion({
   findReferences: {},
 })
 
-const languageNavigationPeekKind = (intent: LanguageNavigationIntent): LanguageNavigationPeekKind =>
-  LanguageNavigationRequest.match(LanguageNavigationRequest.cases[intent].make({}), {
-    findReferences: () => "references" as const,
-    goToDefinition: () => "definitions" as const,
-    peekDefinition: () => "definitions" as const,
-  })
+type LanguageNavigationRequestSelection = {
+  readonly kind: LanguageNavigationPeekKind
+  readonly provider: LanguageNavigationProviders["definitions"]
+}
 
 const isLanguageNavigationModifierKey = (event: globalThis.KeyboardEvent): boolean =>
   ["Alt", "Control", "Meta", "Shift"].includes(event.key)

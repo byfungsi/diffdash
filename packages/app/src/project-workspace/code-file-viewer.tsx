@@ -22,6 +22,7 @@ import {
   type LineAnnotation,
   type PierreFile,
   type PierreFileDiff,
+  type TokenEventBase,
   useStableCallback,
   WorkerPoolContextProvider,
   type WorkerPoolOptions,
@@ -137,6 +138,7 @@ export const CodeFileViewer = ({
   const codeSourceHost = useCodeSourceContributionHost(contributions, codeSource)
   const surfaceSelection = useSourceSurfaceSelection(surfaceRuntime, codeViewRef)
   const languageNavigation = useLanguageNavigationCapability({
+    enabled: true,
     navigate: Option.fromNullishOr(onNavigateToDefinition),
     providers: {
       definitions: Option.fromNullishOr(onRequestDefinitions),
@@ -144,7 +146,7 @@ export const CodeFileViewer = ({
     },
     rootRef: scrollRootRef,
     runtime: surfaceRuntime,
-    surfaceId: path,
+    surfaceId: () => path,
   })
   const searchInputRef = useRef<HTMLInputElement>(null)
   const [searchOpen, setSearchOpen] = useState(false)
@@ -348,6 +350,12 @@ export const CodeFileViewer = ({
       },
     })
   }, [definitionNavigation, onDefinitionNavigationHandled, path, surfaceSelection])
+  const onTokenEnter = useStableCallback((token: TokenEventBase, event: PointerEvent) =>
+    languageNavigation.onTokenEnter({ ...token, side: Option.none() }, event),
+  )
+  const onTokenLeave = useStableCallback((token: TokenEventBase) =>
+    languageNavigation.onTokenLeave({ ...token, side: Option.none() }),
+  )
 
   return (
     <WorkerPoolContextProvider
@@ -388,8 +396,8 @@ export const CodeFileViewer = ({
           items={items}
           options={{
             disableFileHeader: false,
-            onTokenEnter: languageNavigation.onTokenEnter,
-            onTokenLeave: languageNavigation.onTokenLeave,
+            onTokenEnter,
+            onTokenLeave,
             lineHoverHighlight: "line",
             overflow: "scroll",
             stickyHeaders: true,

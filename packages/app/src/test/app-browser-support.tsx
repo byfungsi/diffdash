@@ -1128,6 +1128,7 @@ type AppBrowserScenarioId =
   | "codeRibbonRelink"
   | "codeRibbonShortcuts"
   | "diffLineContextMenu"
+  | "diffLanguageNavigation"
   | "diffSearchSubstrings"
   | "diffSearchLatestWork"
   | "diffSearchImmutableAnchor"
@@ -1786,6 +1787,146 @@ index 1111111..2222222 100644
     )
     expect(activeMenu).not.toBeNull()
     expect(activeMenu?.textContent).toContain("Copy path")
+  })
+})
+
+scenario("diffLanguageNavigation", async () => {
+  const sourcePath = RepositoryRelativePath.make("src/app.tsx")
+  const definitionPath = RepositoryRelativePath.make("src/definition.ts")
+  const alternatePath = RepositoryRelativePath.make("src/alternate.ts")
+  const targetPosition = new LanguagePosition({ line: 0, character: 13 })
+  const targetRange = new LanguageRange({ start: targetPosition, end: targetPosition })
+  const sourceContents = HashMap.make(
+    [sourcePath, 'const before = true\nexport const app = "new"\nconst after = true\n'],
+    [definitionPath, "export const definition = true\n"],
+    [alternatePath, "export const alternate = true\n"],
+  )
+  const location = (path: RepositoryRelativePath) =>
+    new RepositoryLanguageLocationLink({
+      originSelectionRange: Option.none(),
+      target: new RepositoryLanguageLocation({ path, range: targetRange }),
+      targetSelectionRange: targetRange,
+    })
+  const calls = installDiffDashApi({
+    pullRequestDiff: HostedReviewDiff.make({
+      ...diff,
+      diff: `diff --git a/${sourcePath} b/${sourcePath}
+index 1111111..2222222 100644
+--- a/${sourcePath}
++++ b/${sourcePath}
+@@ -2 +2 @@
+-export const app = "old"
++export const app = "new"`,
+    }),
+    listLocalCheckoutFiles: async () =>
+      LocalCheckoutFileList.make({ paths: [sourcePath, definitionPath, alternatePath] }),
+    readLocalCheckoutFile: async (_projectId, path) =>
+      LocalCheckoutFileContent.make({
+        path,
+        content: Option.getOrElse(HashMap.get(sourceContents, path), () => ""),
+      }),
+    codeWorkspaceDefinitions: async () =>
+      RepositoryLanguageLocationResult.make({
+        locations: [location(definitionPath)],
+        truncated: false,
+      }),
+    codeWorkspaceReferences: async () =>
+      RepositoryLanguageLocationResult.make({
+        locations: [location(definitionPath), location(alternatePath)],
+        truncated: false,
+      }),
+  })
+  renderApp()
+  await openDefaultHostedReview()
+
+  const expandButton = await vi.waitFor(() => {
+    const button = Option.fromNullishOr(
+      getDiffShadowRoot(sourcePath)?.querySelector<HTMLElement>("[data-expand-button]"),
+    )
+    expect(Option.isSome(button)).toBe(true)
+    return Option.getOrElse(button, () => document.createElement("button"))
+  })
+  expandButton.dispatchEvent(new MouseEvent("click", { bubbles: true, composed: true }))
+  await vi.waitFor(() => {
+    expect(calls.readLocalCheckoutFile).toHaveBeenCalledWith(repo.id, sourcePath)
+    const expandedText = getDiffShadowRoot(sourcePath)?.textContent
+    expect(expandedText).toContain("const before = true")
+    expect(expandedText).toContain("const after = true")
+  })
+
+  const findNewToken = async () =>
+    vi.waitFor(() => {
+      const token = Option.flatMap(
+        Option.fromNullishOr(getDiffShadowRoot(sourcePath)),
+        (shadowRoot) =>
+          Option.fromNullishOr(
+            [...shadowRoot.querySelectorAll<HTMLElement>("[data-char]")].find(
+              (candidate) => candidate.textContent === "app",
+            ),
+          ),
+      )
+      expect(Option.isSome(token)).toBe(true)
+      return Option.getOrElse(token, () => document.createElement("span"))
+    })
+  const clickToken = (token: HTMLElement, shiftKey = false) => {
+    const modifiers = {
+      ctrlKey: !isMacPlatform(),
+      metaKey: isMacPlatform(),
+      shiftKey,
+    }
+    token.dispatchEvent(
+      new PointerEvent("pointermove", {
+        bubbles: true,
+        composed: true,
+        pointerType: "mouse",
+        ...modifiers,
+      }),
+    )
+    const event = new MouseEvent("click", {
+      bubbles: true,
+      button: 0,
+      cancelable: true,
+      composed: true,
+      ...modifiers,
+    })
+    token.dispatchEvent(event)
+    return event
+  }
+
+  const referenceToken = await findNewToken()
+  await new Promise<void>((resolve) => window.setTimeout(resolve, 0))
+  const referenceClick = clickToken(referenceToken, true)
+  expect(referenceClick.defaultPrevented).toBe(true)
+  await vi.waitFor(() => {
+    expect(calls.codeWorkspaceReferences).toHaveBeenCalledWith(
+      expect.objectContaining({ path: sourcePath }),
+    )
+    expect(document.querySelector('[aria-label="Peek References, 2 results"]')).not.toBeNull()
+  })
+  const goToReference = dispatchKeyboardShortcut("d", {
+    ctrlKey: !isMacPlatform(),
+    metaKey: isMacPlatform(),
+  })
+  expect(goToReference.defaultPrevented).toBe(true)
+  await vi.waitFor(() => {
+    expect(document.querySelector('button[aria-label="Code"][aria-pressed="true"]')).not.toBeNull()
+    expect(document.querySelector("diffs-container")?.shadowRoot?.textContent).toContain(
+      "export const definition = true",
+    )
+  })
+
+  dispatchSideMouseButton(3)
+  await vi.waitFor(() => {
+    expect(document.querySelector('button[aria-label="Files"][aria-pressed="true"]')).not.toBeNull()
+  })
+  const definitionToken = await findNewToken()
+  await new Promise<void>((resolve) => window.setTimeout(resolve, 0))
+  clickToken(definitionToken)
+  await vi.waitFor(() => {
+    expect(calls.codeWorkspaceDefinitions).toHaveBeenCalledWith(
+      expect.objectContaining({ path: sourcePath }),
+    )
+    expect(document.querySelector('button[aria-label="Code"][aria-pressed="true"]')).not.toBeNull()
   })
 })
 
@@ -7069,6 +7210,9 @@ scenario("homeToReview", async () => {
   const addedLineIndex = addedLine?.getAttribute("data-line-index")
   expect(addedLine).toBeDefined()
   expect(lineNumber).toBe("1")
+  addedLine?.click()
+  await waitForAnimationFrames(2)
+  expect(document.querySelector('textarea[aria-label="Thread message"]')).toBeNull()
   const gutterUtility = await revealGutterUtility(diffShadow!, lineNumber, addedLineIndex)
   clickGutterUtility(gutterUtility)
   await vi.waitFor(() => {

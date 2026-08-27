@@ -22,6 +22,11 @@ describe("App review browser interactions", () => {
     await appBrowserScenario("diffLineContextMenu")()
   })
 
+  it("expands unchanged lines and opens diff language locations in Code", async () => {
+    expect.hasAssertions()
+    await appBrowserScenario("diffLanguageNavigation")()
+  })
+
   it("FUN-212 AC: owns viewport input through supersession, Escape, and stale completion", async () => {
     expect.hasAssertions()
     await appBrowserScenario("reviewNavigationLifecycle")()

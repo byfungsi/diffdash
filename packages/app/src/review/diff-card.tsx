@@ -12,6 +12,7 @@ import { type RefObject, useId, useLayoutEffect, useMemo, useRef, useState } fro
 import {
   FileDiff,
   type FileDiffMetadata,
+  type FileDiffLoadedFiles,
   type FileDiffOptions,
   getSingularPatch,
   type PierreFileDiff,
@@ -66,6 +67,7 @@ export const OpenDiffCard = ({
   surfaceRuntime,
   viewed,
   onFileAnchorChange,
+  onLoadDiffFiles,
   onOpenFile,
   onActivateLine,
   onAnnotationsRendered,
@@ -86,6 +88,7 @@ export const OpenDiffCard = ({
   readonly viewed: boolean
   readonly onFileAnchorChange: (element: HTMLElement, focusElement: HTMLElement) => () => void
   readonly onOpenFile: () => void
+  readonly onLoadDiffFiles: () => Promise<FileDiffLoadedFiles>
   readonly onActivateLine: (side: "additions" | "deletions", lineNumber: number) => boolean
   readonly onAnnotationsRendered: (card: HTMLElement) => void
   readonly onSelect: () => void
@@ -134,18 +137,6 @@ export const OpenDiffCard = ({
     if (side === undefined) return
     onActivateLine(side, start)
   })
-  const onLineClick = useStableCallback<
-    NonNullable<FileDiffOptions<ReviewDiffCardAnnotation["metadata"]>["onLineClick"]>
-  >(({ annotationSide, event, lineNumber, numberColumn }) => {
-    if (numberColumn) return
-    if (
-      isHTMLElement(event.target) &&
-      event.target.closest("[data-review-contribution-annotation]") !== null
-    ) {
-      return
-    }
-    onActivateLine(annotationSide, lineNumber)
-  })
   const publishSurfaceRender = useMemo(
     () => surfaceRuntime.createRenderPublisher(file.reviewKey),
     [file.reviewKey, surfaceRuntime],
@@ -155,18 +146,18 @@ export const OpenDiffCard = ({
       renderAsPlainText
         ? {
             ...diffOptions,
+            loadDiffFiles: onLoadDiffFiles,
             tokenizeMaxLength: 0,
             onGutterUtilityClick,
-            onLineClick,
             onPostRender: publishSurfaceRender,
           }
         : {
             ...diffOptions,
+            loadDiffFiles: onLoadDiffFiles,
             onGutterUtilityClick,
-            onLineClick,
             onPostRender: publishSurfaceRender,
           },
-    [diffOptions, onGutterUtilityClick, onLineClick, publishSurfaceRender, renderAsPlainText],
+    [diffOptions, onGutterUtilityClick, onLoadDiffFiles, publishSurfaceRender, renderAsPlainText],
   )
   useLayoutEffect(
     () =>
