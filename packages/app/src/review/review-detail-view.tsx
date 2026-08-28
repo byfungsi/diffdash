@@ -421,14 +421,24 @@ export const ReviewDetailView = ({
         Scope.provide(scope),
       ),
     )
-    return { scope, session }
+    let closeTimer: number | null = null
+    const cancelClose = () => {
+      if (closeTimer === null) return
+      window.clearTimeout(closeTimer)
+      closeTimer = null
+    }
+    const scheduleClose = () => {
+      closeTimer = window.setTimeout(() => {
+        closeTimer = null
+        Effect.runFork(Scope.close(scope, Exit.void))
+      }, 0)
+    }
+    return { cancelClose, scheduleClose, session }
   }, [codeWorkspace, reviewWorkspaceTargets])
-  useEffect(
-    () => () => {
-      Effect.runFork(Scope.close(reviewWorkspaceResource.scope, Exit.void))
-    },
-    [reviewWorkspaceResource],
-  )
+  useEffect(() => {
+    reviewWorkspaceResource.cancelClose()
+    return reviewWorkspaceResource.scheduleClose
+  }, [reviewWorkspaceResource])
   const reviewWorkspaceSession = reviewWorkspaceResource.session
   const reviewContributionTarget = useMemo(
     () =>

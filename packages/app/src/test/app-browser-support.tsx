@@ -7214,6 +7214,22 @@ scenario("homeToReview", async () => {
   await waitForAnimationFrames(2)
   expect(document.querySelector('textarea[aria-label="Thread message"]')).toBeNull()
   const gutterUtility = await revealGutterUtility(diffShadow!, lineNumber, addedLineIndex)
+  const fileFilter = document.querySelector<HTMLInputElement>('input[placeholder="Filter files"]')
+  expect(fileFilter).not.toBeNull()
+  if (fileFilter !== null) {
+    setInputValue(fileFilter, "src/app")
+    fileFilter.dispatchEvent(new Event("input", { bubbles: true }))
+    await vi.waitFor(() => {
+      expect(getDiffCardPaths()).toEqual(["src/app.tsx"])
+      expect(gutterUtility.isConnected).toBe(true)
+      expect(diffShadow?.querySelector("[data-utility-button]")).toBe(gutterUtility)
+    })
+    setInputValue(fileFilter, "")
+    fileFilter.dispatchEvent(new Event("input", { bubbles: true }))
+    await vi.waitFor(() => {
+      expect(getDiffCardPaths()).toEqual(["docs/readme.md", "src/app.tsx"])
+    })
+  }
   clickGutterUtility(gutterUtility)
   await vi.waitFor(() => {
     expect(document.querySelector('textarea[aria-label="Thread message"]')).not.toBeNull()
