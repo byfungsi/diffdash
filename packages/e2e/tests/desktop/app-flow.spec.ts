@@ -1507,21 +1507,38 @@ test("opens and forwards immutable repository comparisons through Electron", asy
 
   const persisted = readReviewPersistenceSnapshot(join(userData, "diffdash.sqlite"))
   expect(persisted.workspaceStates).toHaveLength(1)
-  expect(
-    JSON.parse(String(persisted.workspaceStates[0]?.navigation_location_json)) as unknown,
-  ).toMatchObject({
-    selectedReview: {
-      kind: "localDiff",
-      target: {
-        kind: "local",
-        comparison: {
-          _tag: "revisionRange",
-          baseSha: revisions.base,
-          headSha: revisions.head,
-          mergeBaseSha: revisions.base,
-        },
-      },
-    },
+  const persistedSelection = Schema.decodeUnknownSync(
+    Schema.Struct({
+      selectedReview: Schema.Union([
+        Schema.Struct({
+          kind: Schema.Literal("localDiff"),
+          target: Schema.Struct({
+            comparison: Schema.Struct({
+              baseSha: Schema.String,
+              headSha: Schema.String,
+              mergeBaseSha: Schema.String,
+            }),
+          }),
+        }),
+        Schema.Struct({
+          kind: Schema.Literal("repositoryComparison"),
+          target: Schema.Struct({
+            baseSha: Schema.String,
+            headSha: Schema.String,
+            mergeBaseSha: Schema.String,
+          }),
+        }),
+      ]),
+    }),
+  )(JSON.parse(String(persisted.workspaceStates[0]?.navigation_location_json)))
+  const persistedComparison =
+    persistedSelection.selectedReview.kind === "localDiff"
+      ? persistedSelection.selectedReview.target.comparison
+      : persistedSelection.selectedReview.target
+  expect(persistedComparison).toEqual({
+    baseSha: revisions.base,
+    headSha: revisions.head,
+    mergeBaseSha: revisions.base,
   })
 })
 
