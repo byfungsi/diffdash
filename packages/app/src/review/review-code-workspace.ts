@@ -46,12 +46,13 @@ export const reviewCodeWorkspaceTargets = (
   ReviewCodeWorkspaceReview.match(review, {
     hosted: (hosted) =>
       new ReviewCodeWorkspaceTargets({
-        base: Option.some(
-          HostedReviewCodeWorkspaceTarget.make({
-            projectId: hosted.manifest.projectId,
-            review: hosted.target,
-            revision: hosted.baseRevision,
-          }),
+        base: Option.map(
+          Schema.decodeUnknownOption(GitCommitSha)(hosted.baseRevision),
+          (revision) =>
+            ProjectRevisionCodeWorkspaceTarget.make({
+              projectId: hosted.manifest.projectId,
+              revision,
+            }),
         ),
         head: HostedReviewCodeWorkspaceTarget.make({
           projectId: hosted.manifest.projectId,

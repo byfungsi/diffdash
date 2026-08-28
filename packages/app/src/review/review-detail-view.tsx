@@ -208,6 +208,7 @@ const REVIEW_DIFF_OPTIONS = {
   disableFileHeader: true,
   diffStyle: "split",
   enableGutterUtility: true,
+  expansionLineCount: 20,
   hunkSeparators: "line-info-basic",
   lineHoverHighlight: "both",
   lineDiffType: "word",

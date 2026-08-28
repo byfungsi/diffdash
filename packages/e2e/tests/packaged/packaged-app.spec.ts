@@ -264,11 +264,79 @@ test("FUN-141 AC: verifies final packaged composition and provider persistence",
 
     const fixtureDiffCard = window.locator('[data-diff-card-path="src/fixture.ts"]')
     await expect(fixtureDiffCard).toHaveAttribute("data-diff-render-mode", "highlighted")
+    const expandButton = fixtureDiffCard.locator("diffs-container [data-expand-button]").first()
+    await expect(expandButton).toBeVisible()
+    await expandButton.evaluate((button) => {
+      button.dispatchEvent(new MouseEvent("click", { bubbles: true, composed: true }))
+    })
+    await expect(fixtureDiffCard.locator("diffs-container")).toContainText("const before59 = true")
+    await expect(fixtureDiffCard.locator("diffs-container")).not.toContainText(
+      "const before0 = true",
+    )
+    await expect(
+      fixtureDiffCard.locator("diffs-container [data-expand-button]").first(),
+    ).toBeVisible()
+
     const addedLine = fixtureDiffCard
       .locator('diffs-container [data-content] > [data-line-type="change-addition"]')
       .filter({ hasText: "new fixture" })
       .first()
     await expect(addedLine).toBeVisible()
+    const symbolToken = addedLine.locator("[data-char]").filter({ hasText: "fixtureValue" }).first()
+    await expect(symbolToken).toBeVisible()
+    const referencesClickHandled = await symbolToken.evaluate((token) => {
+      const isMac = navigator.platform.startsWith("Mac")
+      const modifiers = { ctrlKey: !isMac, metaKey: isMac, shiftKey: true }
+      token.dispatchEvent(
+        new PointerEvent("pointermove", {
+          bubbles: true,
+          composed: true,
+          pointerType: "mouse",
+          ...modifiers,
+        }),
+      )
+      const event = new MouseEvent("click", {
+        bubbles: true,
+        button: 0,
+        cancelable: true,
+        composed: true,
+        ...modifiers,
+      })
+      token.dispatchEvent(event)
+      return event.defaultPrevented
+    })
+    expect(referencesClickHandled).toBe(true)
+    const referencesPeek = window.getByLabel(/Peek References, \d+ results?/u)
+    await expect(referencesPeek).toBeVisible()
+    await window.keyboard.press("Escape")
+    await expect(referencesPeek).toBeHidden()
+
+    const definitionClickHandled = await symbolToken.evaluate((token) => {
+      const isMac = navigator.platform.startsWith("Mac")
+      const modifiers = { ctrlKey: !isMac, metaKey: isMac }
+      token.dispatchEvent(
+        new PointerEvent("pointermove", {
+          bubbles: true,
+          composed: true,
+          pointerType: "mouse",
+          ...modifiers,
+        }),
+      )
+      const event = new MouseEvent("click", {
+        bubbles: true,
+        button: 0,
+        cancelable: true,
+        composed: true,
+        ...modifiers,
+      })
+      token.dispatchEvent(event)
+      return event.defaultPrevented
+    })
+    expect(definitionClickHandled).toBe(true)
+    await expect(window.getByRole("button", { name: "Code", pressed: true })).toBeVisible()
+    await window.getByRole("button", { name: "Files" }).click()
+    await expect(fixtureDiffCard).toBeVisible()
+
     const lineIndex = await addedLine.getAttribute("data-line-index")
     if (lineIndex === null) throw new Error("Fixture addition line has no rendered index")
     const gutterNumber = fixtureDiffCard
@@ -412,7 +480,7 @@ test("FUN-141 AC: verifies final packaged composition and provider persistence",
       "Fixture merge request flow",
     )
     const persistedReviewDisclosure = restartedWindow.getByRole("button", {
-      name: "Review on R1",
+      name: "Review on R62",
     })
     await expect(persistedReviewDisclosure).toBeVisible()
     await persistedReviewDisclosure.click()
@@ -709,11 +777,21 @@ function resolveExecutable(command: string) {
 const installFixtureRepository = async (source: string, remote: string) => {
   await mkdir(join(source, "src"), { recursive: true })
   execGit(source, "init")
-  await writeFile(join(source, "src", "fixture.ts"), "old fixture\n", "utf8")
+  const beforeContext = Array.from(
+    { length: 60 },
+    (_, index) => `const before${String(index)} = true\n`,
+  ).join("")
+  const afterContext = Array.from(
+    { length: 60 },
+    (_, index) => `const after${String(index)} = true\n`,
+  ).join("")
+  const sourceContents = (value: "old fixture" | "new fixture") =>
+    `export const fixtureValue = 1\n${beforeContext}export const result = fixtureValue + ${JSON.stringify(value)}\n${afterContext}`
+  await writeFile(join(source, "src", "fixture.ts"), sourceContents("old fixture"), "utf8")
   execGit(source, "add", ".")
   commit(source, "fixture base")
   const base = execGit(source, "rev-parse", "HEAD")
-  await writeFile(join(source, "src", "fixture.ts"), "new fixture\n", "utf8")
+  await writeFile(join(source, "src", "fixture.ts"), sourceContents("new fixture"), "utf8")
   execGit(source, "add", ".")
   commit(source, "fixture head")
   const head = execGit(source, "rev-parse", "HEAD")
