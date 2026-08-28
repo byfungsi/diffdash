@@ -115,6 +115,7 @@ const prepare = Effect.fn("SnapshotBlockStoreTest.prepare")(function* (
   store: SnapshotBlockStore["Service"],
   deltaId: ReturnType<typeof makeFileDeltaId>,
   suffix: string,
+  nowMs = 10,
 ) {
   const id = DiffBlockId.make(`block:${suffix}`)
   expect(
@@ -128,8 +129,8 @@ const prepare = Effect.fn("SnapshotBlockStoreTest.prepare")(function* (
       byteCount: bytes.byteLength,
       checksum,
       reservationId: ResourceReservationId.make(`reservation:${suffix}`),
-      nowMs: 10,
-      expiresAtMs: 1_000,
+      nowMs,
+      expiresAtMs: nowMs + 1_000,
       quotaBytes: 1024 * 1024,
     }),
   ).toEqual({ kind: "prepared", id })
@@ -474,6 +475,114 @@ describe("SnapshotBlockStore", () => {
         yield* store.completeCollection(resourceId, token, 33)
         expect(yield* store.visibleBlocks(deltaId)).toEqual([])
         expect(yield* catalog.get(resourceId)).toMatchObject({ state: "deleted", bytes: 0 })
+      }).pipe(Effect.provide(makeLayer(directory)))
+    }),
+  )
+
+  it.effect("recreates a collected content-addressed block as a new resource generation", () =>
+    Effect.gen(function* () {
+      const directory = yield* makeTempDirectory
+      yield* Effect.gen(function* () {
+        const { catalog, deltaId, store } = yield* registerRootAndDelta(directory)
+        const blockId = yield* prepare(store, deltaId, "0")
+        yield* store.stageBlock(blockId, bytes)
+        yield* store.promoteBlock(blockId)
+        yield* store.finalizeBlock(blockId)
+        yield* publish(store, "snapshot:collected", deltaId, blockId)
+        const [resourceId] = (yield* store.deleteSnapshot(
+          StoredSnapshotId.make("snapshot:collected"),
+        )).collectibleResourceIds
+        if (resourceId === undefined) return
+        const token = ResourceRecoveryToken.make("collect:collected")
+        yield* store.beginCollection(resourceId, token, 30)
+        yield* store.quarantineCollection(resourceId, token, 31)
+        yield* store.completeCollection(resourceId, token, 32)
+
+        const recreatedDeltaId = yield* store.registerFileDelta({
+          identity,
+          hunks: [
+            {
+              id: "hunk:one",
+              ordinal: 0,
+              fingerprint: "hunk-content:one",
+              header: "@@ -1 +1 @@",
+              oldStart: 1,
+              oldLines: 1,
+              newStart: 1,
+              newLines: 1,
+              lineCount: 3,
+            },
+          ],
+        })
+        expect(recreatedDeltaId).toBe(deltaId)
+        const mismatched = yield* store
+          .prepareBlock({
+            id: blockId,
+            deltaId: recreatedDeltaId,
+            hunkId: "hunk:one",
+            ordinal: 0,
+            firstLine: 0,
+            lineCount: 3,
+            byteCount: bytes.byteLength,
+            checksum: "sha256:mismatched",
+            reservationId: ResourceReservationId.make("reservation:0"),
+            nowMs: 33,
+            expiresAtMs: 1_033,
+            quotaBytes: 1024 * 1024,
+          })
+          .pipe(Effect.result)
+        expect(Result.isFailure(mismatched)).toBe(true)
+        expect(yield* catalog.get(resourceId)).toMatchObject({ state: "deleted", generation: 1 })
+
+        expect(yield* prepare(store, recreatedDeltaId, "0", 34)).toBe(blockId)
+        expect(yield* catalog.get(resourceId)).toMatchObject({
+          state: "writing",
+          generation: 2,
+          reservedBytes: bytes.byteLength,
+        })
+        yield* store.stageBlock(blockId, bytes)
+        yield* store.promoteBlock(blockId)
+        yield* store.finalizeBlock(blockId)
+        yield* publish(store, "snapshot:recreated", recreatedDeltaId, blockId)
+        expect(yield* store.visibleBlocks(recreatedDeltaId)).toHaveLength(1)
+        expect(yield* catalog.get(resourceId)).toMatchObject({
+          state: "ready",
+          generation: 2,
+          bytes: bytes.byteLength,
+          reservedBytes: 0,
+        })
+      }).pipe(Effect.provide(makeLayer(directory)))
+    }),
+  )
+
+  it.effect("recreates matching block metadata retained by catalog reconciliation", () =>
+    Effect.gen(function* () {
+      const directory = yield* makeTempDirectory
+      yield* Effect.gen(function* () {
+        const { catalog, deltaId, store } = yield* registerRootAndDelta(directory)
+        const blockId = yield* prepare(store, deltaId, "0")
+        yield* store.stageBlock(blockId, bytes)
+        yield* store.promoteBlock(blockId)
+        yield* store.finalizeBlock(blockId)
+        yield* publish(store, "snapshot:catalog-collected", deltaId, blockId)
+        const [block] = yield* store.visibleBlocks(deltaId)
+        const [resourceId] = (yield* store.deleteSnapshot(
+          StoredSnapshotId.make("snapshot:catalog-collected"),
+        )).collectibleResourceIds
+        if (block === undefined || resourceId === undefined) return
+        const token = ResourceRecoveryToken.make("collect:catalog-collected")
+        yield* catalog.beginCollection({ resourceId, recoveryToken: token, nowMs: 30 })
+        rmSync(join(options(directory).rootPath, block.final_path))
+        yield* catalog.quarantine({ resourceId, recoveryToken: token, nowMs: 31 })
+        yield* catalog.completeDeletion({ resourceId, recoveryToken: token, nowMs: 32 })
+
+        expect(yield* prepare(store, deltaId, "0", 33)).toBe(blockId)
+        yield* store.stageBlock(blockId, bytes)
+        yield* store.promoteBlock(blockId)
+        yield* store.finalizeBlock(blockId)
+        yield* publish(store, "snapshot:catalog-recreated", deltaId, blockId)
+        expect(yield* store.visibleBlocks(deltaId)).toHaveLength(1)
+        expect(yield* catalog.get(resourceId)).toMatchObject({ state: "ready", generation: 2 })
       }).pipe(Effect.provide(makeLayer(directory)))
     }),
   )

@@ -55,6 +55,7 @@ const makeLayer = (input: {
     ResourceCollection.of({
       collect: () => Effect.die(new Error("collection is not used by workspace registration")),
       reconcile: () => Effect.void,
+      expireStaleOwnership: () => Effect.succeed(0),
       collectPolicy: () => Effect.succeed(0),
     }),
   )

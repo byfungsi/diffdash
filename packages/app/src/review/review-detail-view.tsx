@@ -75,6 +75,7 @@ import { EmptyState } from "@/shared/ui/empty-state"
 import { Input } from "@/shared/ui/input"
 import { CommandPaletteDialog, type CommandPaletteItem } from "@/shell/command-palette"
 import { WorkbenchContextActions } from "@/shell/workbench-context-actions"
+import { LanguageNavigationActivity } from "@/source-surface/language-navigation-activity"
 import { ProjectActivityNavigation } from "@/project-workspace/project-activity-navigation"
 import {
   SourceSurfaceSide,
@@ -208,6 +209,7 @@ const REVIEW_DIFF_OPTIONS = {
   disableFileHeader: true,
   diffStyle: "split",
   enableGutterUtility: true,
+  expansionLineCount: 20,
   hunkSeparators: "line-info-basic",
   lineHoverHighlight: "both",
   lineDiffType: "word",
@@ -261,6 +263,12 @@ const REVIEW_DIFF_OPTIONS = {
     [data-column-number] {
       line-height: 20px !important;
       min-height: 20px !important;
+    }
+
+    [data-diffdash-definition-link] {
+      color: var(--link) !important;
+      cursor: pointer;
+      text-decoration: underline;
     }
 
     [data-indicators="bars"] [data-line-type="change-addition"][data-column-number]::before,
@@ -413,7 +421,7 @@ export const ReviewDetailView = ({
   } = ready
   const review = selection.review
   const manifest = review.manifest
-  const reviewWorkspaceTargets = useMemo(() => reviewCodeWorkspaceTargets(review), [review])
+  const reviewWorkspaceTargets = useMemo(() => reviewCodeWorkspaceTargets(manifest), [manifest])
   const reviewWorkspaceResource = useMemo(() => {
     const scope = Scope.makeUnsafe()
     const session = Effect.runSync(
@@ -421,14 +429,24 @@ export const ReviewDetailView = ({
         Scope.provide(scope),
       ),
     )
-    return { scope, session }
+    let closeTimer: number | null = null
+    const cancelClose = () => {
+      if (closeTimer === null) return
+      window.clearTimeout(closeTimer)
+      closeTimer = null
+    }
+    const scheduleClose = () => {
+      closeTimer = window.setTimeout(() => {
+        closeTimer = null
+        Effect.runFork(Scope.close(scope, Exit.void))
+      }, 0)
+    }
+    return { cancelClose, scheduleClose, session }
   }, [codeWorkspace, reviewWorkspaceTargets])
-  useEffect(
-    () => () => {
-      Effect.runFork(Scope.close(reviewWorkspaceResource.scope, Exit.void))
-    },
-    [reviewWorkspaceResource],
-  )
+  useEffect(() => {
+    reviewWorkspaceResource.cancelClose()
+    return reviewWorkspaceResource.scheduleClose
+  }, [reviewWorkspaceResource])
   const reviewWorkspaceSession = reviewWorkspaceResource.session
   const reviewContributionTarget = useMemo(
     () =>
@@ -990,15 +1008,25 @@ export const ReviewDetailView = ({
       side: Schema.decodeUnknownOption(SourceSurfaceSide)(token.side),
     }),
   )
-  const reviewDiffOptions: FileDiffOptions<ReviewDiffAnnotationMetadata> = {
-    ...REVIEW_DIFF_OPTIONS,
-    diffStyle: resolvedDiffViewMode,
-    theme: aiSettings.codeThemes,
-    themeType: colorScheme,
-    onTokenClick: onReviewTokenClick,
-    onTokenEnter: onReviewTokenEnter,
-    onTokenLeave: onReviewTokenLeave,
-  }
+  const reviewDiffOptions = useMemo<FileDiffOptions<ReviewDiffAnnotationMetadata>>(
+    () => ({
+      ...REVIEW_DIFF_OPTIONS,
+      diffStyle: resolvedDiffViewMode,
+      theme: aiSettings.codeThemes,
+      themeType: colorScheme,
+      onTokenClick: onReviewTokenClick,
+      onTokenEnter: onReviewTokenEnter,
+      onTokenLeave: onReviewTokenLeave,
+    }),
+    [
+      aiSettings.codeThemes,
+      colorScheme,
+      onReviewTokenClick,
+      onReviewTokenEnter,
+      onReviewTokenLeave,
+      resolvedDiffViewMode,
+    ],
+  )
   const previousResolvedDiffViewModeRef = useRef(resolvedDiffViewMode)
   useEffect(() => {
     const previousMode = previousResolvedDiffViewModeRef.current
@@ -2199,6 +2227,7 @@ export const ReviewDetailView = ({
       <WorkbenchContextActions>
         {active ? <ReviewActionsMenu items={reviewActionItems} /> : null}
       </WorkbenchContextActions>
+      {active ? <LanguageNavigationActivity pending={languageNavigation.operationPending} /> : null}
       {Option.match(languageNavigation.peek, {
         onNone: () => null,
         onSome: (peek) => (

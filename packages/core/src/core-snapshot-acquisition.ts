@@ -59,6 +59,7 @@ import {
 } from "@diffdash/persistence/resource-catalog"
 import {
   FileDeltaIdentity,
+  SnapshotBlockStoreError,
   type SnapshotStorageSource,
 } from "@diffdash/persistence/snapshot-block-store"
 import {
@@ -1058,6 +1059,8 @@ const persistAcquisitionDiagnostic = (
     timestamp: new Date().toISOString(),
     stage,
     category: details.category,
+    failureTag: cause._tag,
+    failureOperation: Schema.is(SnapshotBlockStoreError)(cause) ? cause.operation : null,
     typedReason,
   })}\n`
   return Effect.tryPromise(async () => {

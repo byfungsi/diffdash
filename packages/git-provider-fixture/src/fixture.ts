@@ -81,9 +81,9 @@ export const createFixtureGitProvider = (
     "index 1111111..2222222 100644",
     "--- a/src/fixture.ts",
     "+++ b/src/fixture.ts",
-    "@@ -1 +1 @@",
-    "-old fixture",
-    "+new fixture",
+    "@@ -62 +62 @@",
+    '-export const result = fixtureValue + "old fixture"',
+    '+export const result = fixtureValue + "new fixture"',
   ].join("\n")
   const summary = HostedReviewSummary.make({
     locator: review,

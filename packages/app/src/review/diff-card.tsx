@@ -120,7 +120,7 @@ export const OpenDiffCard = ({
       }) satisfies FileDiffMetadata,
     [file.fileId, file.patch],
   )
-  const annotations = useMemo<readonly ReviewDiffCardAnnotation[]>(
+  const annotations = useMemo<ReviewDiffCardAnnotation[]>(
     () =>
       annotationProvider(file, navigationAnchor).map(
         ({ lineNumber, side, render }: ReviewDiffContributionAnnotation) => ({
@@ -137,6 +137,7 @@ export const OpenDiffCard = ({
     if (side === undefined) return
     onActivateLine(side, start)
   })
+  const loadDiffFiles = useStableCallback(onLoadDiffFiles)
   const publishSurfaceRender = useMemo(
     () => surfaceRuntime.createRenderPublisher(file.reviewKey),
     [file.reviewKey, surfaceRuntime],
@@ -146,18 +147,18 @@ export const OpenDiffCard = ({
       renderAsPlainText
         ? {
             ...diffOptions,
-            loadDiffFiles: onLoadDiffFiles,
+            loadDiffFiles,
             tokenizeMaxLength: 0,
             onGutterUtilityClick,
             onPostRender: publishSurfaceRender,
           }
         : {
             ...diffOptions,
-            loadDiffFiles: onLoadDiffFiles,
+            loadDiffFiles,
             onGutterUtilityClick,
             onPostRender: publishSurfaceRender,
           },
-    [diffOptions, onGutterUtilityClick, onLoadDiffFiles, publishSurfaceRender, renderAsPlainText],
+    [diffOptions, loadDiffFiles, onGutterUtilityClick, publishSurfaceRender, renderAsPlainText],
   )
   useLayoutEffect(
     () =>
@@ -204,6 +205,7 @@ export const OpenDiffCard = ({
         id={diffCardDomId(file.reviewKey)}
         data-review-file-id={file.fileId}
         data-diff-card-path={file.path}
+        data-diff-card-review-key={file.reviewKey}
         data-diff-file-status={file.status}
         data-diff-selected={selected ? "" : undefined}
         className="bg-card scroll-mt-14 overflow-clip rounded-2xl border"
@@ -237,6 +239,7 @@ export const OpenDiffCard = ({
       id={diffCardDomId(file.reviewKey)}
       data-review-file-id={file.fileId}
       data-diff-card-path={file.path}
+      data-diff-card-review-key={file.reviewKey}
       data-diff-file-status={file.status}
       data-diff-selected={selected ? "" : undefined}
       data-diff-render-mode={renderAsPlainText ? "plain" : "highlighted"}
@@ -289,7 +292,7 @@ export const OpenDiffCard = ({
               <FileDiff<ReviewDiffCardAnnotation["metadata"]>
                 className="block text-xs"
                 fileDiff={pierreFileDiff}
-                lineAnnotations={[...annotations]}
+                lineAnnotations={annotations}
                 metrics={REVIEW_DIFF_METRICS}
                 options={interactiveDiffOptions}
                 renderAnnotation={(annotation) => annotation.metadata.render()}

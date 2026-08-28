@@ -1794,10 +1794,18 @@ scenario("diffLanguageNavigation", async () => {
   const sourcePath = RepositoryRelativePath.make("src/app.tsx")
   const definitionPath = RepositoryRelativePath.make("src/definition.ts")
   const alternatePath = RepositoryRelativePath.make("src/alternate.ts")
+  const beforeContext = Array.from(
+    { length: 60 },
+    (_, index) => `const before${String(index)} = true\n`,
+  ).join("")
+  const afterContext = Array.from(
+    { length: 60 },
+    (_, index) => `const after${String(index)} = true\n`,
+  ).join("")
   const targetPosition = new LanguagePosition({ line: 0, character: 13 })
   const targetRange = new LanguageRange({ start: targetPosition, end: targetPosition })
   const sourceContents = HashMap.make(
-    [sourcePath, 'const before = true\nexport const app = "new"\nconst after = true\n'],
+    [sourcePath, `${beforeContext}export const app = "new"\n${afterContext}`],
     [definitionPath, "export const definition = true\n"],
     [alternatePath, "export const alternate = true\n"],
   )
@@ -1814,7 +1822,7 @@ scenario("diffLanguageNavigation", async () => {
 index 1111111..2222222 100644
 --- a/${sourcePath}
 +++ b/${sourcePath}
-@@ -2 +2 @@
+@@ -61 +61 @@
 -export const app = "old"
 +export const app = "new"`,
     }),
@@ -1849,9 +1857,16 @@ index 1111111..2222222 100644
   expandButton.dispatchEvent(new MouseEvent("click", { bubbles: true, composed: true }))
   await vi.waitFor(() => {
     expect(calls.readLocalCheckoutFile).toHaveBeenCalledWith(repo.id, sourcePath)
-    const expandedText = getDiffShadowRoot(sourcePath)?.textContent
-    expect(expandedText).toContain("const before = true")
-    expect(expandedText).toContain("const after = true")
+    const shadowRoot = getDiffShadowRoot(sourcePath)
+    const expandedText = shadowRoot?.textContent
+    expect(expandedText).toContain("const before59 = true")
+    expect(expandedText).not.toContain("const before0 = true")
+    const remainingExpansionIndexes = new Set(
+      [...(shadowRoot?.querySelectorAll("[data-expand-index]") ?? [])].map((separator) =>
+        separator.getAttribute("data-expand-index"),
+      ),
+    )
+    expect(remainingExpansionIndexes.size).toBe(2)
   })
 
   const findNewToken = async () =>
@@ -1893,13 +1908,39 @@ index 1111111..2222222 100644
     return event
   }
 
+  Option.map(
+    Option.fromNullishOr(
+      document.querySelector<HTMLElement>(`[data-diff-card-path=${JSON.stringify(sourcePath)}]`),
+    ),
+    (sourceCard) => {
+      sourceCard.dataset.diffCardReviewKey = "stale-review-key"
+    },
+  )
   const referenceToken = await findNewToken()
   await new Promise<void>((resolve) => window.setTimeout(resolve, 0))
+  referenceToken.dispatchEvent(
+    new PointerEvent("pointermove", {
+      bubbles: true,
+      composed: true,
+      ctrlKey: !isMacPlatform(),
+      metaKey: isMacPlatform(),
+      pointerType: "mouse",
+    }),
+  )
+  await vi.waitFor(() => {
+    expect(referenceToken.hasAttribute("data-diffdash-definition-link")).toBe(true)
+    const style = getComputedStyle(referenceToken)
+    expect(style.cursor).toBe("pointer")
+    expect(style.textDecorationLine).toContain("underline")
+  })
   const referenceClick = clickToken(referenceToken, true)
   expect(referenceClick.defaultPrevented).toBe(true)
   await vi.waitFor(() => {
     expect(calls.codeWorkspaceReferences).toHaveBeenCalledWith(
-      expect.objectContaining({ path: sourcePath }),
+      expect.objectContaining({
+        path: sourcePath,
+        position: expect.objectContaining({ character: 13, line: 60 }),
+      }),
     )
     expect(document.querySelector('[aria-label="Peek References, 2 results"]')).not.toBeNull()
   })
@@ -7214,6 +7255,22 @@ scenario("homeToReview", async () => {
   await waitForAnimationFrames(2)
   expect(document.querySelector('textarea[aria-label="Thread message"]')).toBeNull()
   const gutterUtility = await revealGutterUtility(diffShadow!, lineNumber, addedLineIndex)
+  const fileFilter = document.querySelector<HTMLInputElement>('input[placeholder="Filter files"]')
+  expect(fileFilter).not.toBeNull()
+  if (fileFilter !== null) {
+    setInputValue(fileFilter, "src/app")
+    fileFilter.dispatchEvent(new Event("input", { bubbles: true }))
+    await vi.waitFor(() => {
+      expect(getDiffCardPaths()).toEqual(["src/app.tsx"])
+      expect(gutterUtility.isConnected).toBe(true)
+      expect(diffShadow?.querySelector("[data-utility-button]")).toBe(gutterUtility)
+    })
+    setInputValue(fileFilter, "")
+    fileFilter.dispatchEvent(new Event("input", { bubbles: true }))
+    await vi.waitFor(() => {
+      expect(getDiffCardPaths()).toEqual(["docs/readme.md", "src/app.tsx"])
+    })
+  }
   clickGutterUtility(gutterUtility)
   await vi.waitFor(() => {
     expect(document.querySelector('textarea[aria-label="Thread message"]')).not.toBeNull()

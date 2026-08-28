@@ -10,6 +10,7 @@ import {
   CodeWorkspaceError,
   type CodeWorkspaceFailureReason,
 } from "@diffdash/domain/code-workspace"
+import { LanguageOperationError } from "@diffdash/domain/language"
 import { getCoreRpcMethodPolicy, type CoreRpcMethodPolicy } from "@diffdash/core-rpc/method-policy"
 import { Cause, Effect, Fiber, FiberSet, Option, Predicate, Schema } from "effect"
 import * as RpcSerialization from "effect/unstable/rpc/RpcSerialization"
@@ -167,6 +168,18 @@ export const makeCoreApplicationOperationFailure = <Method extends CoreMethodTyp
       code: CoreApplicationFailureCode.make(details.code),
       retryClass: "userAction",
       safeMessage: details.safeMessage,
+    }
+  }
+  if (Schema.is(LanguageOperationError)(error)) {
+    return {
+      _tag: "CoreApplicationFailure",
+      applicationInstanceId: request.applicationInstanceId,
+      processEpoch: request.processEpoch,
+      requestId: request.requestId,
+      method,
+      code: CoreApplicationFailureCode.make("LANGUAGE_OPERATION_FAILED"),
+      retryClass: "userAction",
+      safeMessage: error.message,
     }
   }
   if (Schema.is(ReviewContextError)(error)) {

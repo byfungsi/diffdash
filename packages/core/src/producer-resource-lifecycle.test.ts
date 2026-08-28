@@ -32,6 +32,7 @@ const fixture = Effect.acquireRelease(
 )
 
 const inertMutation: ResourceMutationAdapter = {
+  exists: () => Effect.succeed(true),
   quarantine: () => Effect.void,
   delete: () => Effect.void,
 }

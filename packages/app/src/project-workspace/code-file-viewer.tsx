@@ -41,6 +41,7 @@ import {
   useCodeSourceContributionHost,
 } from "@/source-surface/code-source-contribution-host"
 import { useLineChangeCapability } from "@/source-surface/line-change-capability"
+import { LanguageNavigationActivity } from "@/source-surface/language-navigation-activity"
 import {
   type CodeSearchHighlightMatch,
   useCodeSearchHighlightCapability,
@@ -370,6 +371,7 @@ export const CodeFileViewer = ({
     >
       <CodeViewThemeSync codeThemes={codeThemes} />
       {codeSourceHost.mounts}
+      <LanguageNavigationActivity pending={languageNavigation.operationPending} />
       <div
         data-code-render-mode={renderAsPlainText ? "plain" : "highlighted"}
         className="relative flex h-full min-h-0 flex-col bg-diff-canvas"

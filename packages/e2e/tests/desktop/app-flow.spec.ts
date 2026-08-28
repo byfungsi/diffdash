@@ -3,10 +3,17 @@ import { mkdir, readFile, writeFile } from "node:fs/promises"
 import { join } from "node:path"
 import { DatabaseSync } from "node:sqlite"
 import { _electron as electron, expect, type Locator, type Page, test } from "@playwright/test"
+import { Schema } from "effect"
 import { installDiffDashE2eApi } from "../helpers/diffdash-bridge"
 import { installExecutableFixture, prependExecutablePath } from "../helpers/executable-fixture"
 
 const desktopRoot = join(process.cwd(), "../desktop")
+const FloatingPaneFrame = Schema.Struct({
+  visibility: Schema.String,
+  x: Schema.Number,
+  y: Schema.Number,
+})
+const FloatingPaneFrames = Schema.Array(FloatingPaneFrame)
 
 test("FUN-171 AC: keeps keyboard shortcuts discoverable at the minimum window width", async ({
   browserName: _browserName,
@@ -479,7 +486,7 @@ test("covers finished Home to Review flow with fake CLI fixtures", async ({
     await expect(window.getByText("CRITICAL")).toBeVisible()
 
     await window.getByRole("button", { name: "Back" }).click()
-    await expect(window.getByRole("button", { name: "Files" })).toHaveAttribute(
+    await expect(window.getByRole("button", { name: "Files", exact: true })).toHaveAttribute(
       "aria-pressed",
       "true",
     )
@@ -492,7 +499,7 @@ test("covers finished Home to Review flow with fake CLI fixtures", async ({
     )
 
     await window.getByRole("button", { name: "Back" }).click()
-    await expect(window.getByRole("button", { name: "Files" })).toHaveAttribute(
+    await expect(window.getByRole("button", { name: "Files", exact: true })).toHaveAttribute(
       "aria-pressed",
       "true",
     )
@@ -1268,21 +1275,23 @@ test("opens a merge-base branch comparison from the versioned CLI command", asyn
 }, testInfo) => {
   const fakeBin = testInfo.outputPath("fake-bin")
   const localRepo = testInfo.outputPath("local-repo")
+  const localWorktreePool = testInfo.outputPath("worktree-pool")
   const xdgConfigHome = testInfo.outputPath("xdg-config")
   const userData = testInfo.outputPath("user-data")
   await mkdir(fakeBin, { recursive: true })
   await mkdir(localRepo, { recursive: true })
+  await mkdir(localWorktreePool, { recursive: true })
   await mkdir(xdgConfigHome, { recursive: true })
   await mkdir(userData, { recursive: true })
   await installFakeCli(fakeBin)
   await installCodexSettings(xdgConfigHome)
   await mkdir(join(localRepo, "src"), { recursive: true })
   realGit(localRepo, "init")
-  await writeFile(join(localRepo, "src", "local.ts"), "export const value = 'dev'\n")
+  await writeFile(join(localRepo, "src", "local.ts"), comparisonSourceContents("dev"))
   realGit(localRepo, "add", ".")
   commit(localRepo, "dev base")
   realGit(localRepo, "branch", "dev")
-  await writeFile(join(localRepo, "src", "local.ts"), "export const value = 'feature'\n")
+  await writeFile(join(localRepo, "src", "local.ts"), comparisonSourceContents("feature"))
   realGit(localRepo, "add", ".")
   commit(localRepo, "feature work")
   realGit(localRepo, "remote", "add", "origin", "git@github.com:byfungsi/diffdash.git")
@@ -1301,6 +1310,7 @@ test("opens a merge-base branch comparison from the versioned CLI command", asyn
       ...process.env,
       DIFFDASH_ALLOW_MULTIPLE_INSTANCES: "1",
       DIFFDASH_E2E_HIDDEN: "1",
+      DIFFDASH_WORKTREE_POOL_PATH: localWorktreePool,
       FAKE_REPO_ROOT: localRepo,
       PATH: `/usr/bin:${prependExecutablePath(fakeBin)}`,
       XDG_CONFIG_HOME: xdgConfigHome,
@@ -1312,6 +1322,7 @@ test("opens a merge-base branch comparison from the versioned CLI command", asyn
     await dismissOnboardingIfPresent(window)
     await expect(window.locator("[data-review-editor-header]")).toContainText("Changes vs dev")
     await expect(window.getByText("src/local.ts").first()).toBeVisible()
+    await exerciseDiffExpansionAndNavigation(window, "src/local.ts", "feature", "value")
   } finally {
     await app.close()
   }
@@ -1459,6 +1470,8 @@ test("opens and forwards immutable repository comparisons through Electron", asy
     await expect(window.getByText("src/comparison.ts").first()).toBeVisible()
     await expect(window.getByRole("menuitem", { name: /Approve/ })).toHaveCount(0)
 
+    await exerciseDiffExpansionAndNavigation(window, "src/comparison.ts", "head", "value")
+
     const electronExecutable = execFileSync(process.execPath, ["-p", "require('electron')"], {
       cwd: desktopRoot,
       encoding: "utf8",
@@ -1494,17 +1507,38 @@ test("opens and forwards immutable repository comparisons through Electron", asy
 
   const persisted = readReviewPersistenceSnapshot(join(userData, "diffdash.sqlite"))
   expect(persisted.workspaceStates).toHaveLength(1)
-  expect(
-    JSON.parse(String(persisted.workspaceStates[0]?.navigation_location_json)) as unknown,
-  ).toMatchObject({
-    selectedReview: {
-      kind: "repositoryComparison",
-      target: {
-        baseSha: revisions.base,
-        headSha: revisions.head,
-        mergeBaseSha: revisions.base,
-      },
-    },
+  const persistedSelection = Schema.decodeUnknownSync(
+    Schema.Struct({
+      selectedReview: Schema.Union([
+        Schema.Struct({
+          kind: Schema.Literal("localDiff"),
+          target: Schema.Struct({
+            comparison: Schema.Struct({
+              baseSha: Schema.String,
+              headSha: Schema.String,
+              mergeBaseSha: Schema.String,
+            }),
+          }),
+        }),
+        Schema.Struct({
+          kind: Schema.Literal("repositoryComparison"),
+          target: Schema.Struct({
+            baseSha: Schema.String,
+            headSha: Schema.String,
+            mergeBaseSha: Schema.String,
+          }),
+        }),
+      ]),
+    }),
+  )(JSON.parse(String(persisted.workspaceStates[0]?.navigation_location_json)))
+  const persistedComparison =
+    persistedSelection.selectedReview.kind === "localDiff"
+      ? persistedSelection.selectedReview.target.comparison
+      : persistedSelection.selectedReview.target
+  expect(persistedComparison).toEqual({
+    baseSha: revisions.base,
+    headSha: revisions.head,
+    mergeBaseSha: revisions.base,
   })
 })
 
@@ -2023,6 +2057,95 @@ function isJsonValue(value: unknown): value is JsonValue {
   return typeof value === "object" && value !== null && Object.values(value).every(isJsonValue)
 }
 
+const comparisonSourceContents = (revision: string) => {
+  const beforeContext = Array.from(
+    { length: 60 },
+    (_, index) => `const before${String(index)} = true\n`,
+  ).join("")
+  const afterContext = Array.from(
+    { length: 60 },
+    (_, index) => `const after${String(index)} = true\n`,
+  ).join("")
+  return `export const value = 1\n${beforeContext}export const result = value + ${JSON.stringify(revision)}\n${afterContext}`
+}
+
+const modifierClickSymbol = async (window: Page, symbolToken: Locator, shiftKey: boolean) => {
+  const primaryModifier = process.platform === "darwin" ? "Meta" : "Control"
+  await window.keyboard.down(primaryModifier)
+  if (shiftKey) await window.keyboard.down("Shift")
+  try {
+    await symbolToken.hover()
+    await expect(symbolToken).toHaveAttribute("data-diffdash-definition-link", "")
+    await symbolToken.click()
+  } finally {
+    if (shiftKey) await window.keyboard.up("Shift")
+    await window.keyboard.up(primaryModifier)
+  }
+}
+
+const exerciseDiffExpansionAndNavigation = async (
+  window: Page,
+  path: string,
+  changedText: string,
+  symbol: string,
+) => {
+  const diffCard = window.locator(`[data-diff-card-path=${JSON.stringify(path)}]`)
+  const diffContainer = diffCard.locator("diffs-container")
+  const expandButton = diffContainer.locator("[data-expand-button]").first()
+  await expect(expandButton).toBeVisible()
+  await expandButton.evaluate((button) => {
+    button.dispatchEvent(new MouseEvent("click", { bubbles: true, composed: true }))
+  })
+  await expect(diffContainer).toContainText("const before39 = true")
+  await expect(diffContainer).not.toContainText("const before0 = true")
+
+  const changedLine = diffContainer
+    .locator('[data-content] > [data-line-type="change-addition"]')
+    .filter({ hasText: changedText })
+    .first()
+  const symbolToken = changedLine.locator("[data-char]").filter({ hasText: symbol }).first()
+  await expect(symbolToken).toBeVisible()
+  await modifierClickSymbol(window, symbolToken, true)
+  const referencesPane = window.getByLabel(/Peek References, \d+ results?/u)
+  await expect(referencesPane).toBeVisible()
+  const encodedPaneFrames = await referencesPane.evaluate(async (pane) => {
+    const frames: Array<{ readonly visibility: string; readonly x: number; readonly y: number }> =
+      []
+    await Array.from({ length: 8 }, (_value, frame) => frame).reduce(
+      (previousFrame) =>
+        previousFrame.then(
+          () =>
+            new Promise<void>((resolve) =>
+              requestAnimationFrame(() => {
+                const rect = pane.getBoundingClientRect()
+                frames.push({ visibility: getComputedStyle(pane).visibility, x: rect.x, y: rect.y })
+                resolve()
+              }),
+            ),
+        ),
+      Promise.resolve(),
+    )
+    return frames
+  })
+  const paneFrames = Schema.decodeUnknownSync(FloatingPaneFrames)(encodedPaneFrames)
+  expect(paneFrames.every(({ visibility }) => visibility === "visible")).toBe(true)
+  expect(
+    Math.max(...paneFrames.map(({ x }) => x)) - Math.min(...paneFrames.map(({ x }) => x)),
+  ).toBe(0)
+  expect(
+    Math.max(...paneFrames.map(({ y }) => y)) - Math.min(...paneFrames.map(({ y }) => y)),
+  ).toBe(0)
+  await window.keyboard.press("Escape")
+
+  await modifierClickSymbol(window, symbolToken, false)
+  await expect(window.getByRole("button", { name: "Code", pressed: true })).toBeVisible()
+  await window.getByRole("button", { name: "Reviews" }).click()
+  await window.getByRole("button", { name: "Files", exact: true }).click()
+  await expect(
+    window.getByRole("button", { name: "Files", exact: true, pressed: true }),
+  ).toBeVisible()
+}
+
 const installPullRequestRepository = async (source: string, remote: string) => {
   await mkdir(source, { recursive: true })
   realGit(source, "init")
@@ -2045,12 +2168,12 @@ const installPullRequestRepository = async (source: string, remote: string) => {
 const installComparisonRepository = async (source: string, remote: string) => {
   await mkdir(join(source, "src"), { recursive: true })
   realGit(source, "init")
-  await writeFile(join(source, "src", "comparison.ts"), "export const value = 'base'\n")
+  await writeFile(join(source, "src", "comparison.ts"), comparisonSourceContents("base"))
   realGit(source, "add", ".")
   commit(source, "comparison base")
   const base = realGit(source, "rev-parse", "HEAD")
   realGit(source, "tag", "comparison-base")
-  await writeFile(join(source, "src", "comparison.ts"), "export const value = 'head'\n")
+  await writeFile(join(source, "src", "comparison.ts"), comparisonSourceContents("head"))
   realGit(source, "add", ".")
   commit(source, "comparison head")
   const head = realGit(source, "rev-parse", "HEAD")

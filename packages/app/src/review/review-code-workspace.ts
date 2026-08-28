@@ -10,12 +10,12 @@ import { type DiffFileStatus, type ParsedDiffFile } from "@diffdash/domain/diff"
 import type { LanguagePosition, RepositoryLanguageLocationResult } from "@diffdash/domain/language"
 import { GitCommitSha } from "@diffdash/domain/repository-comparison"
 import type { RepositoryRelativePath } from "@diffdash/domain/repository-path"
+import { ReviewSnapshotManifest } from "@diffdash/domain/review-context"
 import { Effect, Option, Schema, Scope, SynchronizedRef } from "effect"
 
 import type { CodeWorkspace } from "@/platform/code-workspace"
 import type { RendererApiError } from "@/platform/renderer-api-error"
 import type { SourceSurfaceSide } from "@/source-surface/source-surface-runtime"
-import { RendererReview, type RendererReview as RendererReviewType } from "./review-subject"
 import type { FileDiffLoadedFiles } from "./pierre"
 
 const REVIEW_WORKSPACE_HEARTBEAT_INTERVAL = "20 minutes"
@@ -37,54 +37,55 @@ export class ReviewCodeWorkspaceSessionError extends Schema.TaggedError<ReviewCo
   },
 ) {}
 
-const ReviewCodeWorkspaceReview = RendererReview.pipe(Schema.toTaggedUnion("_tag"))
+const ReviewCodeWorkspaceManifest = ReviewSnapshotManifest.pipe(Schema.toTaggedUnion("_tag"))
 
 /** Derives side-specific Code workspace targets from an authoritative review snapshot. */
 export const reviewCodeWorkspaceTargets = (
-  review: RendererReviewType,
+  manifest: ReviewSnapshotManifest,
 ): ReviewCodeWorkspaceTargets =>
-  ReviewCodeWorkspaceReview.match(review, {
+  ReviewCodeWorkspaceManifest.match(manifest, {
     hosted: (hosted) =>
       new ReviewCodeWorkspaceTargets({
-        base: Option.some(
-          HostedReviewCodeWorkspaceTarget.make({
-            projectId: hosted.manifest.projectId,
-            review: hosted.target,
-            revision: hosted.baseRevision,
-          }),
+        base: Option.map(
+          Schema.decodeUnknownOption(GitCommitSha)(hosted.baseRevision),
+          (revision) =>
+            ProjectRevisionCodeWorkspaceTarget.make({
+              projectId: hosted.projectId,
+              revision,
+            }),
         ),
         head: HostedReviewCodeWorkspaceTarget.make({
-          projectId: hosted.manifest.projectId,
-          review: hosted.target,
+          projectId: hosted.projectId,
+          review: hosted.detail.summary.locator,
           revision: hosted.headRevision,
         }),
       }),
     local: (local) =>
       new ReviewCodeWorkspaceTargets({
         base: Option.map(
-          Schema.decodeUnknownOption(GitCommitSha)(local.manifest.detail.baseSha),
+          Schema.decodeUnknownOption(GitCommitSha)(local.detail.baseSha),
           (revision) =>
             ProjectRevisionCodeWorkspaceTarget.make({
-              projectId: local.manifest.projectId,
+              projectId: local.projectId,
               revision,
             }),
         ),
         head: LocalReviewSnapshotCodeWorkspaceTarget.make({
-          projectId: local.manifest.projectId,
-          snapshotId: local.manifest.snapshotId,
+          projectId: local.projectId,
+          snapshotId: local.snapshotId,
         }),
       }),
     repositoryComparison: (comparison) =>
       new ReviewCodeWorkspaceTargets({
         base: Option.some(
           ProjectRevisionCodeWorkspaceTarget.make({
-            projectId: comparison.manifest.projectId,
-            revision: comparison.target.mergeBaseSha,
+            projectId: comparison.projectId,
+            revision: comparison.detail.target.mergeBaseSha,
           }),
         ),
         head: ProjectRevisionCodeWorkspaceTarget.make({
-          projectId: comparison.manifest.projectId,
-          revision: comparison.target.headSha,
+          projectId: comparison.projectId,
+          revision: comparison.detail.target.headSha,
         }),
       }),
   })

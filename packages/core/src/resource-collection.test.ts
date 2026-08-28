@@ -1,10 +1,12 @@
 import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
+import { ApplicationInstanceId, CoreProcessEpoch } from "@diffdash/core-rpc"
 import {
   CatalogResource,
   CatalogResourceId,
   ResourceCatalog,
+  ResourceLeaseId,
   ResourceRecoveryToken,
   ResourceRootId,
 } from "@diffdash/persistence/resource-catalog"
@@ -189,6 +191,7 @@ describe("resource collection", () => {
         })
         let failDelete = true
         const fake: ResourceMutationAdapter = {
+          exists: () => Effect.succeed(true),
           quarantine: () => Effect.void,
           delete: () =>
             failDelete
@@ -222,6 +225,139 @@ describe("resource collection", () => {
         failDelete = false
         yield* collection.reconcile(3, 10)
         expect(yield* catalog.get(resource.id)).toMatchObject({ state: "deleted", bytes: 0 })
+      }).pipe(Effect.provide(makeLayer(databasePath)))
+    }),
+  )
+
+  it.effect("expires catalog leases owned by prior Core process epochs", () =>
+    Effect.gen(function* () {
+      const directory = yield* makeTempDirectory
+      const databasePath = join(directory, "catalog.sqlite")
+      yield* Effect.gen(function* () {
+        const catalog = yield* ResourceCatalog
+        yield* catalog.registerRoot({
+          id: ResourceRootId.make("workspace-root"),
+          path: directory,
+          createdAtMs: 1,
+        })
+        const resource = yield* catalog.register({
+          id: CatalogResourceId.make("stale-worktree"),
+          parentId: null,
+          kind: "localWorktreePool",
+          policyClass: "cache",
+          state: "ready",
+          generation: 1,
+          location: {
+            kind: "filesystem",
+            rootId: ResourceRootId.make("workspace-root"),
+            relativePath: "revision-workspaces/stale",
+          },
+          bytes: 512,
+          nowMs: 1,
+          checksum: null,
+          validation: null,
+        })
+        yield* catalog.acquireLease({
+          id: ResourceLeaseId.make("stale-worktree-lease"),
+          resourceId: resource.id,
+          ownerKind: "agentRun",
+          ownerId: "old-session",
+          applicationInstanceId: "old-application",
+          processEpoch: "old-epoch",
+          acquiredAtMs: 1,
+          renewedAtMs: 1,
+          expiresAtMs: 60_000,
+          purpose: "managed workspace",
+        })
+        const collection = makeResourceCollection(catalog, {
+          filesystem: makeFilesystemResourceAdapter(
+            new Map([[ResourceRootId.make("workspace-root"), directory]]),
+          ),
+          gitRef: logicalAdapter,
+          updaterPartial: logicalAdapter,
+        })
+
+        expect(
+          yield* collection.expireStaleOwnership({
+            applicationInstanceId: ApplicationInstanceId.make("current-application"),
+            processEpoch: CoreProcessEpoch.make("current-epoch"),
+          }),
+        ).toBe(1)
+        expect((yield* catalog.get(resource.id)).leases).toEqual([])
+        yield* collection.reconcile(2, 10)
+        expect(yield* catalog.get(resource.id)).toMatchObject({ state: "deleted", bytes: 0 })
+      }).pipe(Effect.provide(makeLayer(databasePath)))
+    }),
+  )
+
+  it.effect("bounds failed deletion recovery during one reconciliation pass", () =>
+    Effect.gen(function* () {
+      const directory = yield* makeTempDirectory
+      const databasePath = join(directory, "catalog.sqlite")
+      yield* Effect.gen(function* () {
+        const catalog = yield* ResourceCatalog
+        yield* Effect.forEach(
+          Array.from({ length: 21 }, (_, index) => index),
+          (index) =>
+            Effect.gen(function* () {
+              const resource = yield* catalog.register({
+                id: CatalogResourceId.make(`failed-ref-${String(index).padStart(2, "0")}`),
+                parentId: null,
+                kind: "reviewRef",
+                policyClass: "cache",
+                state: "ready",
+                generation: 1,
+                location: { kind: "gitRef", identity: `refs/diffdash/failed-${index}` },
+                bytes: 1,
+                nowMs: 1,
+                checksum: null,
+                validation: null,
+              })
+              const recoveryToken = ResourceRecoveryToken.make(`failed-token-${index}`)
+              yield* catalog.beginCollection({ resourceId: resource.id, recoveryToken, nowMs: 2 })
+              yield* catalog.failDeletion({
+                resourceId: resource.id,
+                recoveryToken,
+                failure: "quarantine:injected failure",
+                retryAtMs: 3,
+                nowMs: 2,
+              })
+            }),
+          { discard: true },
+        )
+        let attempts = 0
+        const failingAdapter: ResourceMutationAdapter = {
+          exists: () => Effect.succeed(true),
+          quarantine: (resource) =>
+            Effect.sync(() => {
+              attempts += 1
+            }).pipe(
+              Effect.andThen(
+                Effect.fail(
+                  ResourceAdapterError.make({
+                    operation: "quarantine",
+                    resourceId: resource.id,
+                    reason: "injected failure",
+                    cause: new Error("injected failure"),
+                  }),
+                ),
+              ),
+            ),
+          delete: () => Effect.void,
+        }
+        const collection = makeResourceCollection(catalog, {
+          filesystem: failingAdapter,
+          gitRef: failingAdapter,
+          updaterPartial: failingAdapter,
+        })
+
+        yield* collection.reconcile(10, 20)
+
+        expect(attempts).toBe(20)
+        expect(yield* catalog.get(CatalogResourceId.make("failed-ref-20"))).toMatchObject({
+          state: "deletionFailed",
+          retryAtMs: 3,
+        })
       }).pipe(Effect.provide(makeLayer(databasePath)))
     }),
   )

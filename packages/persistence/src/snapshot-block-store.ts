@@ -591,57 +591,126 @@ export class SnapshotBlockStore extends Context.Service<
                     requiredBytes: input.byteCount,
                     availableBytes,
                   } as const
-                yield* database.run(
-                  `INSERT INTO resources (
+                const preparedResources = yield* Schema.decodeUnknownEffect(
+                  Schema.Array(Schema.Struct({ id: CatalogResourceId })),
+                )(
+                  yield* database.all(
+                    `INSERT INTO resources (
                     id, parent_id, kind, policy_class, state, generation, location_kind, root_id,
                     location_value, bytes, reserved_bytes, created_at_ms, updated_at_ms,
                     last_used_at_ms, checksum, validation
                   ) VALUES (?, NULL, 'snapshot-block', 'cache', 'writing', 1, 'filesystem', ?, ?,
-                    0, ?, ?, ?, ?, ?, 'sha256')`,
-                  [
-                    resourceId,
-                    options.rootId,
-                    finalPath,
-                    input.byteCount,
-                    input.nowMs,
-                    input.nowMs,
-                    input.nowMs,
-                    input.checksum,
-                  ],
+                    0, ?, ?, ?, ?, ?, 'sha256')
+                  ON CONFLICT(id) DO UPDATE SET
+                    state = 'writing',
+                    generation = resources.generation + 1,
+                    bytes = 0,
+                    reserved_bytes = excluded.reserved_bytes,
+                    updated_at_ms = excluded.updated_at_ms,
+                    last_used_at_ms = excluded.last_used_at_ms,
+                    recovery_token = NULL,
+                    failure = NULL,
+                    retry_at_ms = NULL
+                  WHERE resources.state = 'deleted'
+                    AND resources.parent_id IS NULL
+                    AND resources.kind = 'snapshot-block'
+                    AND resources.policy_class = 'cache'
+                    AND resources.location_kind = 'filesystem'
+                    AND resources.root_id = excluded.root_id
+                    AND resources.location_value = excluded.location_value
+                    AND resources.checksum = excluded.checksum
+                    AND resources.validation = 'sha256'
+                  RETURNING id`,
+                    [
+                      resourceId,
+                      options.rootId,
+                      finalPath,
+                      input.byteCount,
+                      input.nowMs,
+                      input.nowMs,
+                      input.nowMs,
+                      input.checksum,
+                    ],
+                  ),
                 )
-                yield* database.run(
-                  `INSERT INTO resource_reservations
+                if (preparedResources.length !== 1)
+                  return yield* Effect.fail(
+                    new Error("Snapshot block resource cannot be prepared in its current state"),
+                  )
+                const preparedReservations = yield* Schema.decodeUnknownEffect(
+                  Schema.Array(Schema.Struct({ id: ResourceReservationId })),
+                )(
+                  yield* database.all(
+                    `INSERT INTO resource_reservations
                    (id, resource_id, bytes, state, created_at_ms, expires_at_ms)
-                   VALUES (?, ?, ?, 'active', ?, ?)`,
-                  [
-                    input.reservationId,
-                    resourceId,
-                    input.byteCount,
-                    input.nowMs,
-                    input.expiresAtMs,
-                  ],
+                   VALUES (?, ?, ?, 'active', ?, ?)
+                   ON CONFLICT(id) DO UPDATE SET
+                     bytes = excluded.bytes,
+                     state = 'active',
+                     created_at_ms = excluded.created_at_ms,
+                     expires_at_ms = excluded.expires_at_ms,
+                     consumed_at_ms = NULL
+                   WHERE resource_reservations.resource_id = excluded.resource_id
+                     AND resource_reservations.state IN ('consumed', 'expired')
+                   RETURNING id`,
+                    [
+                      input.reservationId,
+                      resourceId,
+                      input.byteCount,
+                      input.nowMs,
+                      input.expiresAtMs,
+                    ],
+                  ),
                 )
-                yield* database.run(
-                  `INSERT INTO review_diff_blocks (
+                if (preparedReservations.length !== 1)
+                  return yield* Effect.fail(
+                    new Error("Snapshot block reservation cannot be prepared in its current state"),
+                  )
+                const preparedBlocks = yield* Schema.decodeUnknownEffect(
+                  Schema.Array(Schema.Struct({ id: DiffBlockId })),
+                )(
+                  yield* database.all(
+                    `INSERT INTO review_diff_blocks (
                     id, delta_id, hunk_id, ordinal, first_line, line_count, byte_count, checksum,
-                    resource_id, reservation_id, temporary_path, final_path, state, created_at_ms
-                  ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?)`,
-                  [
-                    input.id,
-                    input.deltaId,
-                    input.hunkId,
-                    input.ordinal,
-                    input.firstLine,
-                    input.lineCount,
-                    input.byteCount,
-                    input.checksum,
-                    resourceId,
-                    input.reservationId,
-                    temporaryPath,
-                    finalPath,
-                    input.nowMs,
-                  ],
+                   resource_id, reservation_id, temporary_path, final_path, state, created_at_ms
+                   ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?)
+                   ON CONFLICT(id) DO UPDATE SET
+                     state = 'pending',
+                     created_at_ms = excluded.created_at_ms
+                   WHERE review_diff_blocks.delta_id = excluded.delta_id
+                     AND review_diff_blocks.hunk_id IS excluded.hunk_id
+                     AND review_diff_blocks.ordinal = excluded.ordinal
+                     AND review_diff_blocks.first_line = excluded.first_line
+                     AND review_diff_blocks.line_count = excluded.line_count
+                     AND review_diff_blocks.byte_count = excluded.byte_count
+                     AND review_diff_blocks.checksum = excluded.checksum
+                     AND review_diff_blocks.resource_id = excluded.resource_id
+                     AND review_diff_blocks.reservation_id = excluded.reservation_id
+                     AND review_diff_blocks.temporary_path = excluded.temporary_path
+                     AND review_diff_blocks.final_path = excluded.final_path
+                     AND review_diff_blocks.state = 'ready'
+                   RETURNING id`,
+                    [
+                      input.id,
+                      input.deltaId,
+                      input.hunkId,
+                      input.ordinal,
+                      input.firstLine,
+                      input.lineCount,
+                      input.byteCount,
+                      input.checksum,
+                      resourceId,
+                      input.reservationId,
+                      temporaryPath,
+                      finalPath,
+                      input.nowMs,
+                    ],
+                  ),
                 )
+                if (preparedBlocks.length !== 1)
+                  return yield* Effect.fail(
+                    new Error("Snapshot block cannot be prepared in its current state"),
+                  )
                 return { kind: "prepared", id: input.id } as const
               }),
             )

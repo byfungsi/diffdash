@@ -90,7 +90,6 @@ const LanguageSessionRetryPolicy = Data.taggedEnum<LanguageSessionRetryPolicy>()
 const restartableLanguageFailureReasons = HashSet.fromIterable<LanguageOperationError["reason"]>([
   "serverUnavailable",
   "serverFailed",
-  "timeout",
   "malformedResponse",
 ])
 
@@ -100,14 +99,32 @@ interface CodeWorkspaceOwner {
 }
 
 interface CodeWorkspaceSession extends CodeWorkspaceOwner {
+  readonly backingKey: string
+  readonly backingRelease: Deferred.Deferred<void>
+  readonly backingClosed: Deferred.Deferred<void>
   readonly localPath: RepositoryCheckoutPath
   readonly workingTreePath: Option.Option<RepositoryCheckoutPath>
   readonly revision: ReviewRevision
   readonly gitRevision: Option.Option<GitCommitSha>
   readonly expiresAtMs: number
-  readonly release: Deferred.Deferred<void>
   readonly index: Effect.Effect<readonly RepositoryRelativePath[], CodeWorkspaceError>
   readonly languageSessions: HashMap.HashMap<LanguageAdapterId, CodeWorkspaceLanguageSession>
+}
+
+interface CodeWorkspacePreparedBacking {
+  readonly localPath: RepositoryCheckoutPath
+  readonly workingTreePath: Option.Option<RepositoryCheckoutPath>
+  readonly revision: ReviewRevision
+  readonly gitRevision: Option.Option<GitCommitSha>
+  readonly index: Effect.Effect<readonly RepositoryRelativePath[], CodeWorkspaceError>
+  readonly languageSessions: HashMap.HashMap<LanguageAdapterId, CodeWorkspaceLanguageSession>
+}
+
+interface CodeWorkspaceBacking {
+  readonly ready: Deferred.Deferred<CodeWorkspacePreparedBacking, CodeWorkspaceError>
+  readonly release: Deferred.Deferred<void>
+  readonly closed: Deferred.Deferred<void>
+  readonly referenceCount: number
 }
 
 class CodeWorkspaceLanguageSession {
@@ -214,7 +231,40 @@ export class CodeWorkspaceService extends Context.Service<
       const languageAdapters = yield* LanguageAdapterRegistry
       const snapshotSource = yield* CodeWorkspaceSnapshotSource
       const sessions = yield* Ref.make(HashMap.empty<CodeWorkspaceLeaseId, CodeWorkspaceSession>())
+      const backings = yield* Ref.make(HashMap.empty<string, CodeWorkspaceBacking>())
       const scope = yield* Scope.Scope
+
+      const releaseBacking = Effect.fn("CodeWorkspaceService.releaseBacking")(function* (
+        backingKey: string,
+        backingRelease: Deferred.Deferred<void>,
+        backingClosed: Deferred.Deferred<void>,
+        waitForClose: boolean,
+      ) {
+        const lastReference = yield* Ref.modify(backings, (current) =>
+          Option.match(HashMap.get(current, backingKey), {
+            onNone: () => [false, current] as const,
+            onSome: (backing) => {
+              if (backing.release !== backingRelease) return [false, current] as const
+              if (backing.referenceCount > 1) {
+                return [
+                  false,
+                  HashMap.set(current, backingKey, {
+                    ...backing,
+                    referenceCount: backing.referenceCount - 1,
+                  }),
+                ] as const
+              }
+              return [true, HashMap.remove(current, backingKey)] as const
+            },
+          }),
+        )
+        if (!lastReference) return
+        yield* Deferred.succeed(backingRelease, undefined)
+        if (waitForClose) yield* Deferred.await(backingClosed)
+      })
+
+      const closeSession = (session: CodeWorkspaceSession) =>
+        releaseBacking(session.backingKey, session.backingRelease, session.backingClosed, true)
 
       const expireLeases = Effect.gen(function* () {
         const nowMs = yield* Clock.currentTimeMillis
@@ -229,13 +279,9 @@ export class CodeWorkspaceService extends Context.Service<
           ]
         })
         if (expired.length === 0) return
-        yield* Effect.forEach(
-          expired,
-          ([, session]) => Deferred.succeed(session.release, undefined),
-          {
-            discard: true,
-          },
-        )
+        yield* Effect.forEach(expired, ([, session]) => closeSession(session), {
+          discard: true,
+        })
       })
       yield* Effect.forkIn(expireLeases.pipe(Effect.repeat(Schedule.spaced("1 minute"))), scope)
 
@@ -262,7 +308,7 @@ export class CodeWorkspaceService extends Context.Service<
                   session.expiresAtMs > nowMs
                     ? [Effect.succeed(session), current]
                     : [
-                        Deferred.succeed(session.release, undefined).pipe(
+                        closeSession(session).pipe(
                           Effect.andThen(workspaceFailure("lookup", "leaseExpired")),
                         ),
                         HashMap.remove(current, leaseId),
@@ -274,14 +320,53 @@ export class CodeWorkspaceService extends Context.Service<
         return yield* lookup
       })
 
-      const languageLocations = Effect.fn("CodeWorkspaceService.languageLocations")(function* (
-        operation: CodeWorkspaceLanguageLocationOperation,
+      const acquireSession = Effect.fn("CodeWorkspaceService.acquireSession")(function* (
         leaseId: CodeWorkspaceLeaseId,
         owner: CodeWorkspaceOwner,
+      ) {
+        const session = yield* getSession(leaseId, owner)
+        const retained = yield* Ref.modify(
+          backings,
+          (
+            current,
+          ): readonly [
+            Effect.Effect<CodeWorkspaceSession, CodeWorkspaceError>,
+            HashMap.HashMap<string, CodeWorkspaceBacking>,
+          ] =>
+            Option.match(HashMap.get(current, session.backingKey), {
+              onNone: () => [workspaceFailure("lookup", "leaseNotFound"), current],
+              onSome: (backing) => {
+                if (backing.release !== session.backingRelease) {
+                  return [workspaceFailure("lookup", "leaseNotFound"), current]
+                }
+                return [
+                  Effect.succeed(session),
+                  HashMap.set(current, session.backingKey, {
+                    ...backing,
+                    referenceCount: backing.referenceCount + 1,
+                  }),
+                ]
+              },
+            }),
+        )
+        return yield* retained
+      })
+
+      const withSession = <A, E>(
+        leaseId: CodeWorkspaceLeaseId,
+        owner: CodeWorkspaceOwner,
+        use: (session: CodeWorkspaceSession) => Effect.Effect<A, E>,
+      ): Effect.Effect<A, E | CodeWorkspaceError> =>
+        Effect.acquireUseRelease(acquireSession(leaseId, owner), use, closeSession)
+
+      const languageLocationsForSession = Effect.fn(
+        "CodeWorkspaceService.languageLocationsForSession",
+      )(function* (
+        operation: CodeWorkspaceLanguageLocationOperation,
+        session: CodeWorkspaceSession,
         path: RepositoryRelativePath,
         position: LanguagePosition,
       ) {
-        const session = yield* getSession(leaseId, owner)
         const fileName = path.slice(path.lastIndexOf("/") + 1)
         const dot = fileName.lastIndexOf(".")
         const extension = dot <= 0 ? "" : fileName.slice(dot).toLocaleLowerCase()
@@ -364,6 +449,19 @@ export class CodeWorkspaceService extends Context.Service<
         return yield* handledRequest
       })
 
+      const languageLocations = Effect.fn("CodeWorkspaceService.languageLocations")(
+        (
+          operation: CodeWorkspaceLanguageLocationOperation,
+          leaseId: CodeWorkspaceLeaseId,
+          owner: CodeWorkspaceOwner,
+          path: RepositoryRelativePath,
+          position: LanguagePosition,
+        ) =>
+          withSession(leaseId, owner, (session) =>
+            languageLocationsForSession(operation, session, path, position),
+          ),
+      )
+
       const open = Effect.fn("CodeWorkspaceService.open")(function* (
         target: CodeWorkspaceTarget,
         owner: CodeWorkspaceOwner,
@@ -380,20 +478,47 @@ export class CodeWorkspaceService extends Context.Service<
           ),
         )
         const leaseId = CodeWorkspaceLeaseId.make(crypto.randomUUID())
-        const ready = yield* Deferred.make<
-          {
-            readonly localPath: RepositoryCheckoutPath
-            readonly revision: ReviewRevision
-            readonly gitRevision: Option.Option<GitCommitSha>
-            readonly workingTreePath: Option.Option<RepositoryCheckoutPath>
-            readonly languageSessions: HashMap.HashMap<
-              LanguageAdapterId,
-              CodeWorkspaceLanguageSession
-            >
-          },
-          CodeWorkspaceError
-        >()
-        const release = yield* Deferred.make<void>()
+        const projectHeadRevision = yield* CodeWorkspaceTarget.match(target, {
+          projectHead: (projectHeadTarget) =>
+            resolveRevisionInput(projectHeadTarget, repository, providers, git).pipe(
+              Effect.map((resolved) => Option.some(resolved.revision)),
+            ),
+          hostedReview: () => Effect.succeed(Option.none<GitCommitSha>()),
+          localReviewSnapshot: () => Effect.succeed(Option.none<GitCommitSha>()),
+          projectRevision: () => Effect.succeed(Option.none<GitCommitSha>()),
+        })
+        const backingKey = codeWorkspaceBackingKey(target, owner, projectHeadRevision)
+        const candidate: CodeWorkspaceBacking = {
+          ready: yield* Deferred.make<CodeWorkspacePreparedBacking, CodeWorkspaceError>(),
+          release: yield* Deferred.make<void>(),
+          closed: yield* Deferred.make<void>(),
+          referenceCount: 1,
+        }
+        const { backing, created } = yield* Ref.modify(
+          backings,
+          (
+            current,
+          ): readonly [
+            { readonly backing: CodeWorkspaceBacking; readonly created: boolean },
+            HashMap.HashMap<string, CodeWorkspaceBacking>,
+          ] =>
+            Option.match(HashMap.get(current, backingKey), {
+              onNone: () => [
+                { backing: candidate, created: true },
+                HashMap.set(current, backingKey, candidate),
+              ],
+              onSome: (existing) => {
+                const retained: CodeWorkspaceBacking = {
+                  ...existing,
+                  referenceCount: existing.referenceCount + 1,
+                }
+                return [
+                  { backing: retained, created: false },
+                  HashMap.set(current, backingKey, retained),
+                ]
+              },
+            }),
+        )
         const runSession = (
           localPath: RepositoryCheckoutPath,
           revision: ReviewRevision,
@@ -427,14 +552,20 @@ export class CodeWorkspaceService extends Context.Service<
                   ] as const
                 }),
               )
-              yield* Deferred.succeed(ready, {
+              const index = yield* Effect.cached(
+                files
+                  .indexFiles(localPath)
+                  .pipe(Effect.mapError(() => workspaceError("search", "workspaceUnavailable"))),
+              )
+              yield* Deferred.succeed(backing.ready, {
                 localPath,
                 revision,
                 gitRevision,
                 workingTreePath,
+                index,
                 languageSessions: HashMap.fromIterable(languageSessionEntries),
               })
-              yield* Deferred.await(release)
+              yield* Deferred.await(backing.release)
             }),
           )
         const managedSession = (
@@ -516,20 +647,20 @@ export class CodeWorkspaceService extends Context.Service<
           },
         )
         const worker = CodeWorkspaceTarget.match(target, {
-          projectHead: (projectHeadTarget) => {
+          projectHead: () => {
             return Option.match(Option.fromNullishOr(repository.localPath), {
               onNone: () => workspaceFailure("open", "repositoryUnavailable"),
               onSome: (localPath) =>
-                resolveRevisionInput(projectHeadTarget, repository, providers, git).pipe(
-                  Effect.flatMap(({ revision }) =>
+                Option.match(projectHeadRevision, {
+                  onNone: () => workspaceFailure("open", "revisionUnavailable"),
+                  onSome: (resolvedRevision) =>
                     runSession(
                       localPath,
-                      ReviewRevision.make(revision),
-                      Option.some(revision),
+                      ReviewRevision.make(resolvedRevision),
+                      Option.some(resolvedRevision),
                       Option.some(localPath),
                     ),
-                  ),
-                ),
+                }),
             })
           },
           projectRevision: (projectRevisionTarget) =>
@@ -561,9 +692,25 @@ export class CodeWorkspaceService extends Context.Service<
             if (Schema.is(CodeWorkspaceError)(error)) return Effect.fail(error)
             return workspaceFailure("open", "workspaceUnavailable")
           }),
-          Effect.tapError((error) => Deferred.fail(ready, error)),
+          Effect.tapError((error) => Deferred.fail(backing.ready, error)),
           Effect.ensuring(
-            Ref.update(sessions, HashMap.remove(leaseId)).pipe(
+            Ref.update(sessions, (current) =>
+              HashMap.filter(
+                current,
+                (session) =>
+                  session.backingKey !== backingKey || session.backingRelease !== backing.release,
+              ),
+            ).pipe(
+              Effect.andThen(
+                Ref.update(backings, (current) =>
+                  Option.exists(
+                    HashMap.get(current, backingKey),
+                    (currentBacking) => currentBacking.release === backing.release,
+                  )
+                    ? HashMap.remove(current, backingKey)
+                    : current,
+                ),
+              ),
               Effect.andThen(
                 CodeWorkspaceTarget.match(target, {
                   projectHead: () => Effect.void,
@@ -586,25 +733,23 @@ export class CodeWorkspaceService extends Context.Service<
               ),
             ),
           ),
+          Effect.ensuring(Deferred.succeed(backing.closed, undefined)),
         )
-        yield* Effect.forkIn(handledWorker, scope)
+        if (created) yield* Effect.forkIn(handledWorker, scope)
         return yield* Effect.gen(function* () {
-          const prepared = yield* Deferred.await(ready)
-          const index = yield* Effect.cached(
-            files
-              .indexFiles(prepared.localPath)
-              .pipe(Effect.mapError(() => workspaceError("search", "workspaceUnavailable"))),
-          )
+          const prepared = yield* Deferred.await(backing.ready)
           const nowMs = yield* Clock.currentTimeMillis
           const session: CodeWorkspaceSession = {
             ...owner,
+            backingKey,
+            backingRelease: backing.release,
+            backingClosed: backing.closed,
             localPath: prepared.localPath,
             workingTreePath: prepared.workingTreePath,
             revision: prepared.revision,
             gitRevision: prepared.gitRevision,
             expiresAtMs: nowMs + LEASE_LIFETIME_MS,
-            release,
-            index,
+            index: prepared.index,
             languageSessions: prepared.languageSessions,
           }
           yield* Ref.update(sessions, HashMap.set(leaseId, session))
@@ -615,10 +760,14 @@ export class CodeWorkspaceService extends Context.Service<
             expiresAtMs: session.expiresAtMs,
           })
         }).pipe(
-          Effect.onInterrupt(() =>
-            Ref.update(sessions, HashMap.remove(leaseId)).pipe(
-              Effect.andThen(Deferred.succeed(release, undefined)),
-            ),
+          Effect.onExit((exit) =>
+            Exit.isSuccess(exit)
+              ? Effect.void
+              : Ref.update(sessions, HashMap.remove(leaseId)).pipe(
+                  Effect.andThen(
+                    releaseBacking(backingKey, backing.release, backing.closed, false),
+                  ),
+                ),
           ),
         )
       })
@@ -644,7 +793,7 @@ export class CodeWorkspaceService extends Context.Service<
                   onSome: (session) => {
                     if (session.expiresAtMs <= nowMs) {
                       return [
-                        Deferred.succeed(session.release, undefined).pipe(
+                        closeSession(session).pipe(
                           Effect.andThen(workspaceFailure("heartbeat", "leaseExpired")),
                         ),
                         HashMap.remove(current, leaseId),
@@ -682,74 +831,78 @@ export class CodeWorkspaceService extends Context.Service<
           })
           yield* Option.match(session, {
             onNone: () => Effect.void,
-            onSome: (found) => Deferred.succeed(found.release, undefined),
+            onSome: closeSession,
           })
         }),
         listDirectory: Effect.fn("CodeWorkspaceService.listDirectory")(
-          function* (leaseId, owner, path, offset, limit) {
-            const session = yield* getSession(leaseId, owner)
-            return yield* files.listDirectory(session.localPath, path, offset, limit)
-          },
+          (leaseId, owner, path, offset, limit) =>
+            withSession(leaseId, owner, (session) =>
+              files.listDirectory(session.localPath, path, offset, limit),
+            ),
         ),
-        search: Effect.fn("CodeWorkspaceService.search")(
-          function* (leaseId, owner, query, offset, limit) {
-            const session = yield* getSession(leaseId, owner)
-            const normalized = query.trim().toLocaleLowerCase()
-            const matches = (yield* session.index).filter(
-              (path) => normalized.length === 0 || path.toLocaleLowerCase().includes(normalized),
-            )
-            const end = Math.min(offset + limit, matches.length)
-            return CodeWorkspaceSearchResult.make({
-              paths: matches.slice(offset, end),
-              nextOffset: end < matches.length ? end : null,
-            })
-          },
+        search: Effect.fn("CodeWorkspaceService.search")((leaseId, owner, query, offset, limit) =>
+          withSession(leaseId, owner, (session) =>
+            Effect.gen(function* () {
+              const normalized = query.trim().toLocaleLowerCase()
+              const matches = (yield* session.index).filter(
+                (path) => normalized.length === 0 || path.toLocaleLowerCase().includes(normalized),
+              )
+              const end = Math.min(offset + limit, matches.length)
+              return CodeWorkspaceSearchResult.make({
+                paths: matches.slice(offset, end),
+                nextOffset: end < matches.length ? end : null,
+              })
+            }),
+          ),
         ),
-        readFile: Effect.fn("CodeWorkspaceService.readFile")(function* (leaseId, owner, path) {
-          const session = yield* getSession(leaseId, owner)
-          const result = yield* checkoutFiles.read(session.localPath, path)
-          return LocalCheckoutFileReadResult.match<CodeWorkspaceFileReadResult>(result, {
-            content: (content) => CodeWorkspaceFileContent.make(content),
-            rejected: (rejected) => {
-              const reason: CodeWorkspaceFileReadRejectionReason =
-                rejected.reason === "checkoutUnavailable" ||
-                rejected.reason === "repositoryNotFound" ||
-                rejected.reason === "repositoryUnavailable"
-                  ? "ioFailure"
-                  : rejected.reason
-              return CodeWorkspaceFileReadRejected.make({ path, reason })
-            },
-          })
-        }),
+        readFile: Effect.fn("CodeWorkspaceService.readFile")((leaseId, owner, path) =>
+          withSession(leaseId, owner, (session) =>
+            Effect.gen(function* () {
+              const result = yield* checkoutFiles.read(session.localPath, path)
+              return LocalCheckoutFileReadResult.match<CodeWorkspaceFileReadResult>(result, {
+                content: (content) => CodeWorkspaceFileContent.make(content),
+                rejected: (rejected) => {
+                  const reason: CodeWorkspaceFileReadRejectionReason =
+                    rejected.reason === "checkoutUnavailable" ||
+                    rejected.reason === "repositoryNotFound" ||
+                    rejected.reason === "repositoryUnavailable"
+                      ? "ioFailure"
+                      : rejected.reason
+                  return CodeWorkspaceFileReadRejected.make({ path, reason })
+                },
+              })
+            }),
+          ),
+        ),
         streamFile: (leaseId, owner, path) =>
           Stream.unwrap(
-            getSession(leaseId, owner).pipe(
+            Effect.acquireRelease(acquireSession(leaseId, owner), closeSession).pipe(
               Effect.map((session) => checkoutFiles.stream(session.localPath, path)),
             ),
           ),
-        changes: Effect.fn("CodeWorkspaceService.changes")(function* (leaseId, owner) {
-          const session = yield* getSession(leaseId, owner)
-          return yield* Option.match(session.workingTreePath, {
-            onNone: () =>
-              Effect.succeed(CodeWorkspaceChangesResult.make({ changes: [], truncated: false })),
-            onSome: (workingTreePath) =>
-              git.workingTreeChanges(workingTreePath).pipe(
-                Effect.mapError(() => workspaceError("changes", "workspaceUnavailable")),
-                Effect.map((changes) =>
-                  CodeWorkspaceChangesResult.make({
-                    changes: changes
-                      .slice(0, 5_000)
-                      .map(({ path, status }) => CodeWorkspaceFileChange.make({ path, status })),
-                    truncated: changes.length > 5_000,
-                  }),
+        changes: Effect.fn("CodeWorkspaceService.changes")((leaseId, owner) =>
+          withSession(leaseId, owner, (session) =>
+            Option.match(session.workingTreePath, {
+              onNone: () =>
+                Effect.succeed(CodeWorkspaceChangesResult.make({ changes: [], truncated: false })),
+              onSome: (workingTreePath) =>
+                git.workingTreeChanges(workingTreePath).pipe(
+                  Effect.mapError(() => workspaceError("changes", "workspaceUnavailable")),
+                  Effect.map((changes) =>
+                    CodeWorkspaceChangesResult.make({
+                      changes: changes
+                        .slice(0, 5_000)
+                        .map(({ path, status }) => CodeWorkspaceFileChange.make({ path, status })),
+                      truncated: changes.length > 5_000,
+                    }),
+                  ),
                 ),
-              ),
-          })
-        }),
-        lineChanges: Effect.fn("CodeWorkspaceService.lineChanges")(
-          function* (leaseId, owner, path) {
-            const session = yield* getSession(leaseId, owner)
-            return yield* Option.match(session.workingTreePath, {
+            }),
+          ),
+        ),
+        lineChanges: Effect.fn("CodeWorkspaceService.lineChanges")((leaseId, owner, path) =>
+          withSession(leaseId, owner, (session) =>
+            Option.match(session.workingTreePath, {
               onNone: () =>
                 Effect.succeed(
                   CodeWorkspaceLineChangesResult.make({ changes: [], truncated: false }),
@@ -764,8 +917,8 @@ export class CodeWorkspaceService extends Context.Service<
                     }),
                   ),
                 ),
-            })
-          },
+            }),
+          ),
         ),
         definitions: Effect.fn("CodeWorkspaceService.definitions")(
           (leaseId, owner, path, position) =>
@@ -883,6 +1036,18 @@ const projectRevisionInput = (
           .pipe(Effect.mapError(() => new Error("Repository bootstrap failed"))),
     }),
 })
+
+const codeWorkspaceBackingKey = (
+  target: CodeWorkspaceTarget,
+  owner: CodeWorkspaceOwner,
+  projectHeadRevision: Option.Option<GitCommitSha>,
+): string =>
+  JSON.stringify({
+    applicationInstanceId: owner.applicationInstanceId,
+    processEpoch: owner.processEpoch,
+    projectHeadRevision: Option.getOrNull(projectHeadRevision),
+    target: Schema.encodeSync(CodeWorkspaceTarget)(target),
+  })
 
 const sameOwner = (session: CodeWorkspaceSession, owner: CodeWorkspaceOwner): boolean =>
   session.applicationInstanceId === owner.applicationInstanceId &&

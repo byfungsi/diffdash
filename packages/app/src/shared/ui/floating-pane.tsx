@@ -250,7 +250,6 @@ const AnchoredFloatingPaneContent = ({
               avoidCollisions
               collisionBoundary={hostElement}
               collisionPadding={FLOATING_PANE_MARGIN}
-              hideWhenDetached
               side={side}
               sideOffset={sideOffset}
               sticky="always"

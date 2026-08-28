@@ -482,164 +482,198 @@ describe("CodeWorkspaceService", () => {
     }),
   )
 
-  it.effect("owns one lazy language session and closes it before workspace cleanup", () =>
-    Effect.gen(function* () {
-      const languagePath = RepositoryRelativePath.make("src/a.ts")
-      const lifecycle = yield* Ref.make<readonly string[]>([])
-      const workspaceReleased = yield* Deferred.make<void>()
-      const probeCount = yield* Ref.make(0)
-      const openCount = yield* Ref.make(0)
-      const definitionCount = yield* Ref.make(0)
-      const referenceCount = yield* Ref.make(0)
-      const result = new RepositoryLanguageLocationResult({ locations: [], truncated: false })
-      const registration: LanguageAdapterRegistration = {
-        descriptor: new LanguageAdapterDescriptor({
-          id: LanguageAdapterId.make("test-typescript"),
-          displayName: "Test TypeScript",
-          languageIds: [LanguageId.make("typescript")],
-          extensions: [".ts"],
-          capabilities: new LanguageAdapterCapabilities({
-            definitions: true,
-            documentSymbols: false,
-            references: true,
-            workspaceSymbols: false,
-          }),
-        }),
-        probe: Ref.update(probeCount, (count) => count + 1),
-        openSession: () =>
-          Effect.acquireRelease(
-            Effect.gen(function* () {
-              yield* Ref.update(openCount, (count) => count + 1)
-              yield* Ref.update(lifecycle, (events) => [...events, "opened"])
-              return {
-                definitions: () =>
-                  Effect.gen(function* () {
-                    const definitions = yield* Ref.updateAndGet(
-                      definitionCount,
-                      (count) => count + 1,
-                    )
-                    const opens = yield* Ref.get(openCount)
-                    if (opens === 1 && definitions === 3) {
-                      return yield* Effect.fail(
-                        new LanguageOperationError({
-                          operation: "definitions",
-                          reason: "serverUnavailable",
-                          message: "Test server exited",
-                        }),
-                      )
-                    }
-                    return result
-                  }),
-                documentSymbols: () => Effect.die("Not used by this test"),
-                references: () =>
-                  Ref.update(referenceCount, (count) => count + 1).pipe(Effect.as(result)),
-                workspaceSymbols: () => Effect.die("Not used by this test"),
-              }
+  it.effect(
+    "shares one lazy language session across leases and closes it after the last release",
+    () =>
+      Effect.gen(function* () {
+        const languagePath = RepositoryRelativePath.make("src/a.ts")
+        const lifecycle = yield* Ref.make<readonly string[]>([])
+        const workspaceReleased = yield* Deferred.make<void>()
+        const workspaceOpenCount = yield* Ref.make(0)
+        const referenceStarted = yield* Deferred.make<void>()
+        const completeReference = yield* Deferred.make<void>()
+        const probeCount = yield* Ref.make(0)
+        const openCount = yield* Ref.make(0)
+        const definitionCount = yield* Ref.make(0)
+        const referenceCount = yield* Ref.make(0)
+        const result = new RepositoryLanguageLocationResult({ locations: [], truncated: false })
+        const registration: LanguageAdapterRegistration = {
+          descriptor: new LanguageAdapterDescriptor({
+            id: LanguageAdapterId.make("test-typescript"),
+            displayName: "Test TypeScript",
+            languageIds: [LanguageId.make("typescript")],
+            extensions: [".ts"],
+            capabilities: new LanguageAdapterCapabilities({
+              definitions: true,
+              documentSymbols: false,
+              references: true,
+              workspaceSymbols: false,
             }),
-            () => Ref.update(lifecycle, (events) => [...events, "languageClosed"]),
-          ),
-      }
-      const languageLayer = CodeWorkspaceService.layer.pipe(
-        Layer.provide(Layer.mock(RepositoryStore, { getById: () => Effect.succeed(repository) })),
-        Layer.provide(Layer.mock(GitProvider, {})),
-        Layer.provide(Layer.mock(GitService, {})),
-        Layer.provide(
-          Layer.mock(HostedReviewWorkspacePool, {
-            useRevision: (_input, use) =>
-              use(workspacePath).pipe(
-                Effect.ensuring(
-                  Ref.update(lifecycle, (events) => [...events, "workspaceReleased"]).pipe(
-                    Effect.andThen(Deferred.succeed(workspaceReleased, undefined)),
+          }),
+          probe: Ref.update(probeCount, (count) => count + 1),
+          openSession: () =>
+            Effect.acquireRelease(
+              Effect.gen(function* () {
+                yield* Ref.update(openCount, (count) => count + 1)
+                yield* Ref.update(lifecycle, (events) => [...events, "opened"])
+                return {
+                  definitions: () =>
+                    Effect.gen(function* () {
+                      const definitions = yield* Ref.updateAndGet(
+                        definitionCount,
+                        (count) => count + 1,
+                      )
+                      const opens = yield* Ref.get(openCount)
+                      if (opens === 1 && definitions === 3) {
+                        return yield* Effect.fail(
+                          new LanguageOperationError({
+                            operation: "definitions",
+                            reason: "timeout",
+                            message: "Test request timed out",
+                          }),
+                        )
+                      }
+                      if (opens === 1 && definitions === 4) {
+                        return yield* Effect.fail(
+                          new LanguageOperationError({
+                            operation: "definitions",
+                            reason: "serverUnavailable",
+                            message: "Test server exited",
+                          }),
+                        )
+                      }
+                      return result
+                    }),
+                  documentSymbols: () => Effect.die("Not used by this test"),
+                  references: () =>
+                    Ref.update(referenceCount, (count) => count + 1).pipe(
+                      Effect.andThen(Deferred.succeed(referenceStarted, undefined)),
+                      Effect.andThen(Deferred.await(completeReference)),
+                      Effect.as(result),
+                    ),
+                  workspaceSymbols: () => Effect.die("Not used by this test"),
+                }
+              }),
+              () => Ref.update(lifecycle, (events) => [...events, "languageClosed"]),
+            ),
+        }
+        const languageLayer = CodeWorkspaceService.layer.pipe(
+          Layer.provide(Layer.mock(RepositoryStore, { getById: () => Effect.succeed(repository) })),
+          Layer.provide(Layer.mock(GitProvider, {})),
+          Layer.provide(Layer.mock(GitService, {})),
+          Layer.provide(
+            Layer.mock(HostedReviewWorkspacePool, {
+              useRevision: (_input, use) =>
+                Ref.update(workspaceOpenCount, (count) => count + 1).pipe(
+                  Effect.andThen(use(workspacePath)),
+                  Effect.ensuring(
+                    Ref.update(lifecycle, (events) => [...events, "workspaceReleased"]).pipe(
+                      Effect.andThen(Deferred.succeed(workspaceReleased, undefined)),
+                    ),
                   ),
                 ),
-              ),
-          }),
-        ),
-        Layer.provide(Layer.mock(AgentWorkspaceResources, { protect: (_input, use) => use })),
-        Layer.provide(
-          Layer.mock(ManagedWorkspaceFiles, {
-            indexFiles: () => Effect.succeed([languagePath]),
-          }),
-        ),
-        Layer.provide(
-          Layer.mock(LocalCheckoutFiles, {
-            read: (_root, path) =>
-              Effect.succeed(
-                CodeWorkspaceFileContent.make({ path, content: "export const a = 1" }),
-              ),
-            stream: (_root, path) =>
-              Stream.succeed(
-                LocalCheckoutFileChunk.make({
-                  path,
-                  bytes: new TextEncoder().encode("export const a = 1"),
-                }),
-              ),
-          }),
-        ),
-        Layer.provide(Layer.mock(ResourceCollection, { collectPolicy: () => Effect.succeed(0) })),
-        Layer.provide(LanguageAdapterRegistry.layer([registration])),
-        Layer.provide(unusedSnapshotLayer),
-      )
-
-      yield* Effect.gen(function* () {
-        const workspaces = yield* CodeWorkspaceService
-        const lease = yield* workspaces.open(
-          ProjectRevisionCodeWorkspaceTarget.make({
-            projectId,
-            revision,
-          }),
-          owner,
+            }),
+          ),
+          Layer.provide(Layer.mock(AgentWorkspaceResources, { protect: (_input, use) => use })),
+          Layer.provide(
+            Layer.mock(ManagedWorkspaceFiles, {
+              indexFiles: () => Effect.succeed([languagePath]),
+            }),
+          ),
+          Layer.provide(
+            Layer.mock(LocalCheckoutFiles, {
+              read: (_root, path) =>
+                Effect.succeed(
+                  CodeWorkspaceFileContent.make({ path, content: "export const a = 1" }),
+                ),
+              stream: (_root, path) =>
+                Stream.succeed(
+                  LocalCheckoutFileChunk.make({
+                    path,
+                    bytes: new TextEncoder().encode("export const a = 1"),
+                  }),
+                ),
+            }),
+          ),
+          Layer.provide(Layer.mock(ResourceCollection, { collectPolicy: () => Effect.succeed(0) })),
+          Layer.provide(LanguageAdapterRegistry.layer([registration])),
+          Layer.provide(unusedSnapshotLayer),
         )
-        expect(yield* Ref.get(openCount)).toBe(0)
-        expect(
-          yield* workspaces.definitions(
-            lease.id,
-            owner,
-            languagePath,
-            new LanguagePosition({ line: 0, character: 1 }),
-          ),
-        ).toBe(result)
-        expect(
-          yield* workspaces.definitions(
-            lease.id,
-            owner,
-            languagePath,
-            new LanguagePosition({ line: 0, character: 2 }),
-          ),
-        ).toBe(result)
-        expect(yield* Ref.get(probeCount)).toBe(1)
-        expect(yield* Ref.get(openCount)).toBe(1)
-        expect(yield* Ref.get(definitionCount)).toBe(2)
-        expect(
-          yield* workspaces.definitions(
-            lease.id,
-            owner,
-            languagePath,
-            new LanguagePosition({ line: 0, character: 3 }),
-          ),
-        ).toBe(result)
-        expect(yield* Ref.get(openCount)).toBe(2)
-        expect(yield* Ref.get(definitionCount)).toBe(4)
-        expect(
-          yield* workspaces.references(
-            lease.id,
-            owner,
-            languagePath,
-            new LanguagePosition({ line: 0, character: 4 }),
-          ),
-        ).toBe(result)
-        expect(yield* Ref.get(referenceCount)).toBe(1)
 
-        yield* workspaces.release(lease.id, owner)
-        yield* Deferred.await(workspaceReleased)
-        expect(yield* Ref.get(lifecycle)).toEqual([
-          "opened",
-          "languageClosed",
-          "opened",
-          "languageClosed",
-          "workspaceReleased",
-        ])
-      }).pipe(Effect.provide(languageLayer))
-    }),
+        yield* Effect.gen(function* () {
+          const workspaces = yield* CodeWorkspaceService
+          const target = ProjectRevisionCodeWorkspaceTarget.make({ projectId, revision })
+          const [lease, sharedLease] = yield* Effect.all(
+            [workspaces.open(target, owner), workspaces.open(target, owner)],
+            { concurrency: "unbounded" },
+          )
+          expect(sharedLease.id).not.toBe(lease.id)
+          expect(yield* Ref.get(workspaceOpenCount)).toBe(1)
+          expect(yield* Ref.get(openCount)).toBe(0)
+          expect(
+            yield* workspaces.definitions(
+              sharedLease.id,
+              owner,
+              languagePath,
+              new LanguagePosition({ line: 0, character: 1 }),
+            ),
+          ).toBe(result)
+          expect(
+            yield* workspaces.definitions(
+              lease.id,
+              owner,
+              languagePath,
+              new LanguagePosition({ line: 0, character: 2 }),
+            ),
+          ).toBe(result)
+          expect(yield* Ref.get(probeCount)).toBe(1)
+          expect(yield* Ref.get(openCount)).toBe(1)
+          expect(yield* Ref.get(definitionCount)).toBe(2)
+          const timeout = yield* Effect.flip(
+            workspaces.definitions(
+              lease.id,
+              owner,
+              languagePath,
+              new LanguagePosition({ line: 0, character: 3 }),
+            ),
+          )
+          expect(timeout.reason).toBe("timeout")
+          expect(yield* Ref.get(openCount)).toBe(1)
+          expect(
+            yield* workspaces.definitions(
+              lease.id,
+              owner,
+              languagePath,
+              new LanguagePosition({ line: 0, character: 4 }),
+            ),
+          ).toBe(result)
+          expect(yield* Ref.get(openCount)).toBe(2)
+          expect(yield* Ref.get(definitionCount)).toBe(5)
+          yield* workspaces.release(lease.id, owner)
+          const reference = yield* workspaces
+            .references(
+              sharedLease.id,
+              owner,
+              languagePath,
+              new LanguagePosition({ line: 0, character: 5 }),
+            )
+            .pipe(Effect.forkChild)
+          yield* Deferred.await(referenceStarted)
+          yield* workspaces.release(sharedLease.id, owner)
+          expect(yield* Deferred.isDone(workspaceReleased)).toBe(false)
+          yield* Deferred.succeed(completeReference, undefined)
+          expect(yield* Fiber.join(reference)).toBe(result)
+          expect(yield* Ref.get(referenceCount)).toBe(1)
+
+          yield* Deferred.await(workspaceReleased)
+          expect(yield* Ref.get(lifecycle)).toEqual([
+            "opened",
+            "languageClosed",
+            "opened",
+            "languageClosed",
+            "workspaceReleased",
+          ])
+        }).pipe(Effect.provide(languageLayer))
+      }),
   )
 })

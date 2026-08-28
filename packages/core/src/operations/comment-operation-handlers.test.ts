@@ -170,8 +170,8 @@ describe("comment operation handlers", () => {
               data: {
                 id: "msg_example",
                 sessionID: sessionId,
-                admittedSeq: 1,
-                prompt: { text: "accepted" },
+                type: "user",
+                payload: { text: "accepted" },
                 delivery: "queue",
                 timeCreated: 1,
               },

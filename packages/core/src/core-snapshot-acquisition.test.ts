@@ -358,7 +358,11 @@ const acquisitionLayer = (
   const collectionLayer = Layer.effect(
     ResourceCollection,
     Effect.gen(function* () {
-      const noOpAdapter = { quarantine: () => Effect.void, delete: () => Effect.void }
+      const noOpAdapter = {
+        exists: () => Effect.succeed(true),
+        quarantine: () => Effect.void,
+        delete: () => Effect.void,
+      }
       return makeResourceCollection(yield* ResourceCatalog, {
         filesystem: makeFilesystemResourceAdapter(new Map([[rootId, join(directory, "managed")]])),
         gitRef: noOpAdapter,
@@ -497,6 +501,8 @@ describe("CoreSnapshotAcquisition", () => {
       expect(diagnostic).toMatchObject({
         stage: "hosted.snapshot",
         category: "cacheFull",
+        failureTag: "ReviewDiffSourceFailure",
+        failureOperation: null,
         typedReason: "cacheFull",
       })
       expect(JSON.stringify(diagnostic)).not.toContain("fungsi")

@@ -116,6 +116,7 @@ const CodeDefinitionPeekResults = ({
   const selected = Option.orElse(Option.fromNullishOr(locations[selectedIndex]), () =>
     Option.fromNullishOr(locations[0]),
   )
+  const selectedPath = Option.getOrNull(Option.map(selected, (location) => location.target.path))
   const paneRef = useRef<HTMLDivElement>(null)
   const selectRelative = (offset: number) => {
     setSelectedIndex((current) => (current + offset + locations.length) % locations.length)
@@ -124,6 +125,7 @@ const CodeDefinitionPeekResults = ({
     Option.map(selected, onNavigate)
   }
   const navigateFromEffect = useEffectEvent(navigateSelected)
+  const loadSourceFromEffect = useEffectEvent(onLoadSource)
   const selectRelativeFromEffect = useEffectEvent(selectRelative)
 
   useKeyboardShortcut("code.peek.goTo", navigateSelected, {
@@ -140,20 +142,17 @@ const CodeDefinitionPeekResults = ({
   })
 
   useEffect(() => {
-    const selectedForLoad = Option.orElse(Option.fromNullishOr(locations[selectedIndex]), () =>
-      Option.fromNullishOr(locations[0]),
-    )
-    if (Option.isNone(selectedForLoad)) return undefined
-    const path = selectedForLoad.value.target.path
+    if (selectedPath === null) return undefined
     const controller = new AbortController()
-    setSourceState(DefinitionSourceState.cases.loading.make({ path }))
-    void onLoadSource(path, controller.signal)
+    setSourceState(DefinitionSourceState.cases.loading.make({ path: selectedPath }))
+    void loadSourceFromEffect(selectedPath, controller.signal)
       .then((content) => {
         if (!controller.signal.aborted) {
           setSourceState(
             Option.match(content, {
-              onNone: () => DefinitionSourceState.cases.unavailable.make({ path }),
-              onSome: (source) => DefinitionSourceState.cases.ready.make({ content: source, path }),
+              onNone: () => DefinitionSourceState.cases.unavailable.make({ path: selectedPath }),
+              onSome: (source) =>
+                DefinitionSourceState.cases.ready.make({ content: source, path: selectedPath }),
             }),
           )
         }
@@ -163,7 +162,7 @@ const CodeDefinitionPeekResults = ({
         if (!controller.signal.aborted) {
           setSourceState(
             DefinitionSourceState.cases.failed.make({
-              path,
+              path: selectedPath,
               message: formatError(error, "Definition preview could not be loaded."),
             }),
           )
@@ -172,7 +171,7 @@ const CodeDefinitionPeekResults = ({
     return () => {
       controller.abort()
     }
-  }, [locations, onLoadSource, selectedIndex])
+  }, [selectedPath])
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
