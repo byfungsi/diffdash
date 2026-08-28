@@ -1008,15 +1008,25 @@ export const ReviewDetailView = ({
       side: Schema.decodeUnknownOption(SourceSurfaceSide)(token.side),
     }),
   )
-  const reviewDiffOptions: FileDiffOptions<ReviewDiffAnnotationMetadata> = {
-    ...REVIEW_DIFF_OPTIONS,
-    diffStyle: resolvedDiffViewMode,
-    theme: aiSettings.codeThemes,
-    themeType: colorScheme,
-    onTokenClick: onReviewTokenClick,
-    onTokenEnter: onReviewTokenEnter,
-    onTokenLeave: onReviewTokenLeave,
-  }
+  const reviewDiffOptions = useMemo<FileDiffOptions<ReviewDiffAnnotationMetadata>>(
+    () => ({
+      ...REVIEW_DIFF_OPTIONS,
+      diffStyle: resolvedDiffViewMode,
+      theme: aiSettings.codeThemes,
+      themeType: colorScheme,
+      onTokenClick: onReviewTokenClick,
+      onTokenEnter: onReviewTokenEnter,
+      onTokenLeave: onReviewTokenLeave,
+    }),
+    [
+      aiSettings.codeThemes,
+      colorScheme,
+      onReviewTokenClick,
+      onReviewTokenEnter,
+      onReviewTokenLeave,
+      resolvedDiffViewMode,
+    ],
+  )
   const previousResolvedDiffViewModeRef = useRef(resolvedDiffViewMode)
   useEffect(() => {
     const previousMode = previousResolvedDiffViewModeRef.current

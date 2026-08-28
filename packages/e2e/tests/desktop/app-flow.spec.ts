@@ -486,7 +486,7 @@ test("covers finished Home to Review flow with fake CLI fixtures", async ({
     await expect(window.getByText("CRITICAL")).toBeVisible()
 
     await window.getByRole("button", { name: "Back" }).click()
-    await expect(window.getByRole("button", { name: "Files" })).toHaveAttribute(
+    await expect(window.getByRole("button", { name: "Files", exact: true })).toHaveAttribute(
       "aria-pressed",
       "true",
     )
@@ -499,7 +499,7 @@ test("covers finished Home to Review flow with fake CLI fixtures", async ({
     )
 
     await window.getByRole("button", { name: "Back" }).click()
-    await expect(window.getByRole("button", { name: "Files" })).toHaveAttribute(
+    await expect(window.getByRole("button", { name: "Files", exact: true })).toHaveAttribute(
       "aria-pressed",
       "true",
     )
@@ -1511,11 +1511,15 @@ test("opens and forwards immutable repository comparisons through Electron", asy
     JSON.parse(String(persisted.workspaceStates[0]?.navigation_location_json)) as unknown,
   ).toMatchObject({
     selectedReview: {
-      kind: "repositoryComparison",
+      kind: "localDiff",
       target: {
-        baseSha: revisions.base,
-        headSha: revisions.head,
-        mergeBaseSha: revisions.base,
+        kind: "local",
+        comparison: {
+          _tag: "revisionRange",
+          baseSha: revisions.base,
+          headSha: revisions.head,
+          mergeBaseSha: revisions.base,
+        },
       },
     },
   })
@@ -2119,8 +2123,10 @@ const exerciseDiffExpansionAndNavigation = async (
   await modifierClickSymbol(window, symbolToken, false)
   await expect(window.getByRole("button", { name: "Code", pressed: true })).toBeVisible()
   await window.getByRole("button", { name: "Reviews" }).click()
-  await window.getByRole("button", { name: "Files" }).click()
-  await expect(window.getByRole("button", { name: "Files", pressed: true })).toBeVisible()
+  await window.getByRole("button", { name: "Files", exact: true }).click()
+  await expect(
+    window.getByRole("button", { name: "Files", exact: true, pressed: true }),
+  ).toBeVisible()
 }
 
 const installPullRequestRepository = async (source: string, remote: string) => {
