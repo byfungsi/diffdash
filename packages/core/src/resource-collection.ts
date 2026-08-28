@@ -15,6 +15,7 @@ import { Context, Effect, Predicate, Schema } from "effect"
 import { type ManagedResource, planResourceCollection, ResourceId } from "./resource-policy"
 
 const MAX_POLICY_COLLECTIONS_PER_PASS = 50
+const MAX_RECOVERY_ATTEMPTS_PER_PASS = 20
 
 /** External mutation stage performed after durable collection intent commits. */
 export const ResourceAdapterOperation = Schema.Literals(["quarantine", "delete"])
@@ -35,6 +36,7 @@ export class ResourceAdapterError extends Schema.TaggedError<ResourceAdapterErro
 
 /** Bounded mutation capability for one typed catalog location. */
 export interface ResourceMutationAdapter {
+  readonly exists: (resource: CatalogResource) => Effect.Effect<boolean, ResourceAdapterError>
   readonly quarantine: (
     resource: CatalogResource,
     token: ResourceRecoveryToken,
@@ -69,6 +71,10 @@ export class ResourceCollection extends Context.Service<
       nowMs: number,
       retryAtMs: number,
     ) => Effect.Effect<void, ResourceCatalogError>
+    readonly expireStaleOwnership: (owner: {
+      readonly applicationInstanceId: ApplicationInstanceId
+      readonly processEpoch: CoreProcessEpoch
+    }) => Effect.Effect<number, ResourceCatalogError>
     readonly collectPolicy: (
       nowMs: number,
       retryAtMs: number,
@@ -85,6 +91,20 @@ export const makeFilesystemResourceAdapter = (
     mutation: Effect.Effect<void, ResourceAdapterError>,
   ) => Effect.Effect<void, ResourceAdapterError>,
 ): ResourceMutationAdapter => ({
+  exists: (resource) =>
+    filesystemPaths(
+      roots,
+      resource,
+      ResourceRecoveryToken.make("filesystem-presence-check"),
+      "quarantine",
+    ).pipe(
+      Effect.flatMap(({ original }) =>
+        Effect.tryPromise({
+          try: () => validatePath(original.root, original.path),
+          catch: (cause) => adapterError("quarantine", resource.id, cause),
+        }),
+      ),
+    ),
   quarantine: (resource, token) =>
     withFilesystemMutationLock(
       lock,
@@ -167,6 +187,7 @@ export const makeBoundedLogicalResourceAdapter = (
       ),
     )
   return {
+    exists: () => Effect.succeed(true),
     quarantine: (resource, token) => run("quarantine", resource, token),
     delete: (resource, token) => run("delete", resource, token),
   }
@@ -217,6 +238,7 @@ export const makeUpdaterPartialResourceAdapter = (
     )
   }
   return {
+    exists: () => Effect.succeed(true),
     quarantine: (resource, token) => run("quarantine", resource, token),
     delete: (resource, token) => run("delete", resource, token),
   }
@@ -275,16 +297,63 @@ export const makeResourceCollection = (
     }),
     reconcile: Effect.fn("ResourceCollection.reconcile")(function* (nowMs, retryAtMs) {
       const resources = yield* catalog.list()
+      let recoveryAttempts = 0
       for (const resource of resources) {
+        if (resource.state === "ready" && resource.policyClass !== "durableUserData") {
+          const adapter = adapters[resource.location.kind]
+          const exists = yield* adapter
+            .exists(resource)
+            .pipe(Effect.catch(() => Effect.succeed(true)))
+          if (!exists) {
+            if (recoveryAttempts >= MAX_RECOVERY_ATTEMPTS_PER_PASS) continue
+            recoveryAttempts += 1
+            yield* catalog
+              .beginCollection({
+                resourceId: resource.id,
+                recoveryToken: ResourceRecoveryToken.make(`missing:${randomUUID()}`),
+                nowMs,
+              })
+              .pipe(
+                Effect.flatMap((missing) => resume(missing, nowMs, retryAtMs)),
+                Effect.catch(() => Effect.void),
+              )
+            continue
+          }
+        }
         if (
           (resource.state === "collecting" ||
             resource.state === "quarantined" ||
             resource.state === "deletionFailed") &&
-          (resource.retryAtMs === null || resource.retryAtMs <= nowMs)
+          (resource.retryAtMs === null || resource.retryAtMs <= nowMs) &&
+          recoveryAttempts < MAX_RECOVERY_ATTEMPTS_PER_PASS
         ) {
+          recoveryAttempts += 1
           yield* resume(resource, nowMs, retryAtMs)
         }
       }
+    }),
+    expireStaleOwnership: Effect.fn("ResourceCollection.expireStaleOwnership")(function* (owner) {
+      const resources = yield* catalog.list()
+      const staleOwners = new Map<
+        string,
+        { readonly applicationInstanceId: string; readonly processEpoch: string }
+      >()
+      for (const resource of resources) {
+        for (const lease of resource.leases) {
+          if (
+            lease.applicationInstanceId === owner.applicationInstanceId &&
+            lease.processEpoch === owner.processEpoch
+          ) {
+            continue
+          }
+          staleOwners.set(`${lease.applicationInstanceId}\0${lease.processEpoch}`, {
+            applicationInstanceId: lease.applicationInstanceId,
+            processEpoch: lease.processEpoch,
+          })
+        }
+      }
+      yield* Effect.forEach(staleOwners.values(), catalog.expireOwnership, { discard: true })
+      return staleOwners.size
     }),
     collectPolicy: Effect.fn("ResourceCollection.collectPolicy")(function* (nowMs, retryAtMs) {
       const resources = (yield* catalog.list()).flatMap((resource): ManagedResource[] => {

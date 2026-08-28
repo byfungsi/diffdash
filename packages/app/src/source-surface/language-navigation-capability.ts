@@ -120,6 +120,7 @@ export interface LanguageNavigationCapability {
   readonly onTokenClick: (token: SourceSurfaceTokenCoordinates, event: MouseEvent) => void
   readonly onTokenEnter: (token: SourceSurfaceTokenCoordinates, event: PointerEvent) => void
   readonly onTokenLeave: (token: SourceSurfaceTokenCoordinates) => void
+  readonly operationPending: boolean
   readonly peek: Option.Option<LanguageNavigationPeekState>
 }
 
@@ -140,37 +141,32 @@ export const useLanguageNavigationCapability = <Instance>({
   readonly surfaceId: (token: SourceSurfaceTokenCoordinates) => string
 }): LanguageNavigationCapability => {
   const [peek, setPeek] = useState<Option.Option<LanguageNavigationPeekState>>(Option.none())
+  const [operationPending, setOperationPending] = useState(false)
   const hoveredTokenRef = useRef<Option.Option<SourceSurfaceTokenTarget>>(Option.none())
-  const hoverRequestRef = useRef<
-    Option.Option<{
-      controller: AbortController
-      sequence: number
-      tokenElement: HTMLElement
-    }>
-  >(Option.none())
   const navigationRequestRef = useRef<
     Option.Option<{
       controller: AbortController
+      identity: LanguageNavigationRequestIdentity
       sequence: number
     }>
   >(Option.none())
   const sequenceRef = useRef(0)
 
   const clearHover = useStableCallback(() => {
-    Option.map(hoverRequestRef.current, ({ controller }) => controller.abort())
-    hoverRequestRef.current = Option.none()
     Option.map(hoveredTokenRef.current, ({ tokenElement }) =>
       tokenElement.removeAttribute("data-diffdash-definition-link"),
     )
   })
   const clearNavigationRequest = useStableCallback(() => {
-    Option.map(navigationRequestRef.current, ({ controller }) => controller.abort())
+    Option.map(navigationRequestRef.current, ({ controller }) => {
+      controller.abort()
+    })
     navigationRequestRef.current = Option.none()
+    setOperationPending(false)
   })
   const requestLocations = useStableCallback(
-    (token: SourceSurfaceTokenTarget, intent: LanguageNavigationIntent, mode: "hover" | "open") => {
+    (token: SourceSurfaceTokenTarget, intent: LanguageNavigationIntent) => {
       if (!enabled) return
-      const open = mode === "open"
       const request: LanguageNavigationRequestSelection = LanguageNavigationRequest.match(
         LanguageNavigationRequest.cases[intent].make({}),
         {
@@ -190,31 +186,28 @@ export const useLanguageNavigationCapability = <Instance>({
       )
       const providerRequest = request.provider
       if (Option.isNone(providerRequest)) return
-      if (!open && Option.isSome(navigationRequestRef.current)) {
-        hoveredTokenRef.current = Option.some(token)
-        token.tokenElement.setAttribute("data-diffdash-definition-link", "")
+      const identity: LanguageNavigationRequestIdentity = {
+        character: token.lineCharStart,
+        intent,
+        line: token.lineNumber - 1,
+        side: Option.getOrNull(token.side),
+        surfaceId: token.surfaceId,
+      }
+      if (
+        Option.exists(navigationRequestRef.current, (activeRequest) =>
+          sameLanguageNavigationRequest(activeRequest.identity, identity),
+        )
+      ) {
         return
       }
-      if (open) {
-        clearHover()
-        clearNavigationRequest()
-        setPeek(Option.none())
-      } else {
-        clearHover()
-        hoveredTokenRef.current = Option.some(token)
-        token.tokenElement.setAttribute("data-diffdash-definition-link", "")
-      }
+      clearHover()
+      clearNavigationRequest()
+      setPeek(Option.none())
       const sequence = sequenceRef.current + 1
       sequenceRef.current = sequence
       const controller = new AbortController()
-      if (open) navigationRequestRef.current = Option.some({ controller, sequence })
-      else {
-        hoverRequestRef.current = Option.some({
-          controller,
-          sequence,
-          tokenElement: token.tokenElement,
-        })
-      }
+      navigationRequestRef.current = Option.some({ controller, identity, sequence })
+      setOperationPending(true)
       const line = token.lineNumber - 1
       const source = new LanguageNavigationSource({
         side: token.side,
@@ -243,25 +236,12 @@ export const useLanguageNavigationCapability = <Instance>({
       }).pipe(
         Effect.tap((result) =>
           Effect.sync(() => {
-            let requestIsActive = Option.exists(
-              hoverRequestRef.current,
+            const requestIsActive = Option.exists(
+              navigationRequestRef.current,
               (activeRequest) => activeRequest.sequence === sequence,
             )
-            if (open) {
-              requestIsActive = Option.exists(
-                navigationRequestRef.current,
-                (activeRequest) => activeRequest.sequence === sequence,
-              )
-            }
             if (controller.signal.aborted || !requestIsActive) return
-            if (result.locations.length === 0) {
-              if (!open) token.tokenElement.removeAttribute("data-diffdash-definition-link")
-              return
-            }
-            if (!open) {
-              token.tokenElement.setAttribute("data-diffdash-definition-link", "")
-              return
-            }
+            if (result.locations.length === 0) return
             if (intent === "goToDefinition" && result.locations.length === 1) {
               Option.map(Option.fromNullishOr(result.locations[0]), (target) =>
                 Option.map(navigate, (navigateTo) => navigateTo({ location: target, origin })),
@@ -286,16 +266,6 @@ export const useLanguageNavigationCapability = <Instance>({
         Effect.catchTag("LanguageNavigationProviderError", (error) =>
           Effect.sync(() => {
             if (controller.signal.aborted) return
-            if (
-              !open &&
-              Option.exists(
-                hoverRequestRef.current,
-                ({ tokenElement }) => tokenElement === token.tokenElement,
-              )
-            ) {
-              token.tokenElement.removeAttribute("data-diffdash-definition-link")
-            }
-            if (!open) return
             setPeek(
               Option.some({
                 anchor,
@@ -315,21 +285,13 @@ export const useLanguageNavigationCapability = <Instance>({
           Effect.ensuring(
             Effect.sync(() => {
               if (
-                open &&
                 Option.exists(
                   navigationRequestRef.current,
                   (activeRequest) => activeRequest.sequence === sequence,
                 )
               ) {
                 navigationRequestRef.current = Option.none()
-              } else if (
-                !open &&
-                Option.exists(
-                  hoverRequestRef.current,
-                  (activeRequest) => activeRequest.sequence === sequence,
-                )
-              ) {
-                hoverRequestRef.current = Option.none()
+                setOperationPending(false)
               }
             }),
           ),
@@ -351,7 +313,7 @@ export const useLanguageNavigationCapability = <Instance>({
       event.preventDefault()
       event.stopPropagation()
       document.getSelection()?.removeAllRanges()
-      requestLocations(resolveToken(coordinates), intent.value, "open")
+      requestLocations(resolveToken(coordinates), intent.value)
     },
   )
   const onTokenEnter = useStableCallback(
@@ -362,7 +324,6 @@ export const useLanguageNavigationCapability = <Instance>({
       const intent = languageNavigationIntent(event)
       if (Option.isNone(intent)) return
       token.tokenElement.setAttribute("data-diffdash-definition-link", "")
-      requestLocations(token, intent.value, "hover")
     },
   )
   const onTokenLeave = useStableCallback((token: SourceSurfaceTokenCoordinates) => {
@@ -384,7 +345,7 @@ export const useLanguageNavigationCapability = <Instance>({
       const intent = languageNavigationIntent(event)
       if (Option.isNone(intent) || Option.isNone(token)) return false
       document.getSelection()?.removeAllRanges()
-      requestLocations(token.value, intent.value, "open")
+      requestLocations(token.value, intent.value)
       return true
     },
   )
@@ -418,7 +379,6 @@ export const useLanguageNavigationCapability = <Instance>({
       const intent = languageNavigationIntent(event)
       if (Option.isNone(intent)) return
       token.value.tokenElement.setAttribute("data-diffdash-definition-link", "")
-      requestLocations(token.value, intent.value, "hover")
     }
     const onKeyUp = (event: globalThis.KeyboardEvent) => {
       if (!enabled) return
@@ -427,7 +387,7 @@ export const useLanguageNavigationCapability = <Instance>({
       const token = hoveredTokenRef.current
       const intent = languageNavigationIntent(event)
       if (Option.isSome(token) && Option.isSome(intent)) {
-        requestLocations(token.value, intent.value, "hover")
+        token.value.tokenElement.setAttribute("data-diffdash-definition-link", "")
       }
     }
     window.addEventListener("keydown", onKeyDown, true)
@@ -442,13 +402,14 @@ export const useLanguageNavigationCapability = <Instance>({
       clearHover()
       clearNavigationRequest()
     }
-  }, [clearHover, clearNavigationRequest, enabled, requestLocations, rootRef])
+  }, [clearHover, clearNavigationRequest, enabled, rootRef])
 
   return {
     closePeek: () => setPeek(Option.none()),
     onTokenClick,
     onTokenEnter,
     onTokenLeave,
+    operationPending,
     peek,
   }
 }
@@ -478,6 +439,24 @@ type LanguageNavigationRequestSelection = {
   readonly kind: LanguageNavigationPeekKind
   readonly provider: LanguageNavigationProviders["definitions"]
 }
+
+interface LanguageNavigationRequestIdentity {
+  readonly character: number
+  readonly intent: LanguageNavigationIntent
+  readonly line: number
+  readonly side: SourceSurfaceSide | null
+  readonly surfaceId: string
+}
+
+const sameLanguageNavigationRequest = (
+  left: LanguageNavigationRequestIdentity,
+  right: LanguageNavigationRequestIdentity,
+): boolean =>
+  left.character === right.character &&
+  left.intent === right.intent &&
+  left.line === right.line &&
+  left.side === right.side &&
+  left.surfaceId === right.surfaceId
 
 const isLanguageNavigationModifierKey = (event: globalThis.KeyboardEvent): boolean =>
   ["Alt", "Control", "Meta", "Shift"].includes(event.key)

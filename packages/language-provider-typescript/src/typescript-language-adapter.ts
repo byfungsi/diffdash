@@ -47,7 +47,7 @@ import { JsonRpcClient, type JsonRpcClientError } from "./json-rpc-client"
 
 const require = createRequire(import.meta.url)
 const execFileAsync = promisify(execFile)
-const OPERATION_TIMEOUT = "10 seconds"
+const OPERATION_TIMEOUT = "30 seconds"
 const INITIALIZE_TIMEOUT = "15 seconds"
 const LOCATION_LIMIT = 100
 const DOCUMENT_SYMBOL_LIMIT = 1_000

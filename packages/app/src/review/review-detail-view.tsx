@@ -12,7 +12,7 @@ import {
 } from "@diffdash/domain/code-line-change"
 import type { CodeWorkspaceTarget } from "@diffdash/domain/code-workspace"
 import { DiffFileVisibility, type ParsedDiffFile } from "@diffdash/domain/diff"
-import type { LanguageRange, RepositoryLanguageLocationLink } from "@diffdash/domain/language"
+import type { LanguageRange } from "@diffdash/domain/language"
 import type { ReviewSnapshotFileInventory } from "@diffdash/domain/review-context"
 import type { ReviewFileId } from "@diffdash/domain/review-identity"
 import type { ProjectWorkspaceActivityId } from "@diffdash/domain/project-workspace"
@@ -75,6 +75,7 @@ import { EmptyState } from "@/shared/ui/empty-state"
 import { Input } from "@/shared/ui/input"
 import { CommandPaletteDialog, type CommandPaletteItem } from "@/shell/command-palette"
 import { WorkbenchContextActions } from "@/shell/workbench-context-actions"
+import { LanguageNavigationActivity } from "@/source-surface/language-navigation-activity"
 import { ProjectActivityNavigation } from "@/project-workspace/project-activity-navigation"
 import {
   SourceSurfaceSide,
@@ -780,40 +781,13 @@ export const ReviewDetailView = ({
       let host = token.tokenElement
       if ("host" in root && isHTMLElement(root.host)) host = root.host
       return Option.getOrElse(
-        Option.orElse(
-          Option.flatMap(
-            Option.fromNullishOr(host.closest<HTMLElement>("[data-diff-card-review-key]")),
-            (card) => Option.fromNullishOr(card.dataset.diffCardReviewKey),
-          ),
-          () =>
-            Option.flatMap(
-              Option.fromNullishOr(host.closest<HTMLElement>("[data-diff-card-path]")),
-              (card) => Option.fromNullishOr(card.dataset.diffCardPath),
-            ),
+        Option.flatMap(
+          Option.fromNullishOr(host.closest<HTMLElement>("[data-diff-card-path]")),
+          (card) => Option.fromNullishOr(card.dataset.diffCardPath),
         ),
         () => review.identity,
       )
     },
-  })
-  const loadLanguagePeekSource = useStableCallback(
-    (path: RepositoryRelativePath, signal: AbortSignal) =>
-      Option.match(languageNavigation.peek, {
-        onNone: () => Promise.resolve(Option.none<string>()),
-        onSome: (peek) =>
-          runRendererPromise(
-            reviewWorkspaceSession.readSource(
-              Option.getOrElse(peek.origin.side, () => SourceSurfaceSide.make("additions")),
-              path,
-            ),
-            signal,
-          ),
-      }),
-  )
-  const navigateFromLanguagePeek = useStableCallback((location: RepositoryLanguageLocationLink) => {
-    Option.map(languageNavigation.peek, (peek) => {
-      languageNavigation.closePeek()
-      openLanguageDestination({ location, origin: peek.origin })
-    })
   })
   const eagerLoadSettled =
     progressiveInventory.length === 0 ||
@@ -1034,25 +1008,15 @@ export const ReviewDetailView = ({
       side: Schema.decodeUnknownOption(SourceSurfaceSide)(token.side),
     }),
   )
-  const reviewDiffOptions = useMemo<FileDiffOptions<ReviewDiffAnnotationMetadata>>(
-    () => ({
-      ...REVIEW_DIFF_OPTIONS,
-      diffStyle: resolvedDiffViewMode,
-      theme: aiSettings.codeThemes,
-      themeType: colorScheme,
-      onTokenClick: onReviewTokenClick,
-      onTokenEnter: onReviewTokenEnter,
-      onTokenLeave: onReviewTokenLeave,
-    }),
-    [
-      aiSettings.codeThemes,
-      colorScheme,
-      onReviewTokenClick,
-      onReviewTokenEnter,
-      onReviewTokenLeave,
-      resolvedDiffViewMode,
-    ],
-  )
+  const reviewDiffOptions: FileDiffOptions<ReviewDiffAnnotationMetadata> = {
+    ...REVIEW_DIFF_OPTIONS,
+    diffStyle: resolvedDiffViewMode,
+    theme: aiSettings.codeThemes,
+    themeType: colorScheme,
+    onTokenClick: onReviewTokenClick,
+    onTokenEnter: onReviewTokenEnter,
+    onTokenLeave: onReviewTokenLeave,
+  }
   const previousResolvedDiffViewModeRef = useRef(resolvedDiffViewMode)
   useEffect(() => {
     const previousMode = previousResolvedDiffViewModeRef.current
@@ -2253,17 +2217,25 @@ export const ReviewDetailView = ({
       <WorkbenchContextActions>
         {active ? <ReviewActionsMenu items={reviewActionItems} /> : null}
       </WorkbenchContextActions>
+      {active ? <LanguageNavigationActivity pending={languageNavigation.operationPending} /> : null}
       {Option.match(languageNavigation.peek, {
         onNone: () => null,
         onSome: (peek) => (
           <CodeDefinitionPeek
-            key={String(peek.id)}
             codeThemes={aiSettings.codeThemes}
             colorScheme={colorScheme}
             state={peek}
             onClose={languageNavigation.closePeek}
-            onLoadSource={loadLanguagePeekSource}
-            onNavigate={navigateFromLanguagePeek}
+            onLoadSource={(path, signal) =>
+              runRendererPromise(
+                reviewWorkspaceSession.readSource(
+                  Option.getOrElse(peek.origin.side, () => SourceSurfaceSide.make("additions")),
+                  path,
+                ),
+                signal,
+              )
+            }
+            onNavigate={(location) => openLanguageDestination({ location, origin: peek.origin })}
           />
         ),
       })}

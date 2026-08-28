@@ -147,11 +147,10 @@ const launchStandaloneCoreProcess = Effect.fn("launchStandaloneCoreProcess")(fun
             const operations = Context.get(runtimeContext, CoreOperationService)
             yield* operations.start
             const nowMs = yield* Clock.currentTimeMillis
-            yield* Context.get(runtimeContext, ResourceCollection).reconcile(nowMs, nowMs + 60_000)
-            yield* Context.get(runtimeContext, ResourceCollection).collectPolicy(
-              nowMs,
-              nowMs + 60_000,
-            )
+            const resourceCollection = Context.get(runtimeContext, ResourceCollection)
+            yield* resourceCollection.expireStaleOwnership(identity)
+            yield* resourceCollection.reconcile(nowMs, nowMs + 60_000)
+            yield* resourceCollection.collectPolicy(nowMs, nowMs + 60_000)
             yield* runtimeServices.install({
               operations,
               commands: Context.get(runtimeContext, CoreDurableCommandService),

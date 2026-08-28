@@ -20,6 +20,7 @@ import { page } from "vitest/browser"
 
 import "../styles.css"
 import { isMacPlatform } from "@/shell/keyboard-shortcut-platform"
+import { WorkbenchContextActionsProvider } from "@/shell/workbench-context-actions"
 import { isHTMLElement } from "@/shared/dom"
 import { FloatingPaneWorkspace } from "@/shared/ui/floating-pane"
 import type { LanguageNavigationDestination } from "@/source-surface/language-navigation-capability"
@@ -414,6 +415,8 @@ describe("CodeFileViewer", () => {
     container.style.height = "480px"
     container.style.width = "800px"
     document.body.append(container)
+    const contextActionsHost = document.createElement("div")
+    document.body.append(contextActionsHost)
     root = createRoot(container)
     const target = definition("src/target.ts", 4, 7)
     let resolveRequest = (_result: RepositoryLanguageLocationResult): void => undefined
@@ -426,16 +429,18 @@ describe("CodeFileViewer", () => {
     const navigate = vi.fn<(destination: LanguageNavigationDestination) => void>()
     flushSync(() => {
       root?.render(
-        <CodeFileViewer
-          codeThemes={DEFAULT_CODE_THEME_PREFERENCES}
-          colorScheme="light"
-          contents={'export const greeting = "hello"\n'}
-          path={RepositoryRelativePath.make("src/greeting.ts")}
-          projectId={projectId}
-          revision={revision}
-          onNavigateToDefinition={navigate}
-          onRequestDefinitions={request}
-        />,
+        <WorkbenchContextActionsProvider host={contextActionsHost}>
+          <CodeFileViewer
+            codeThemes={DEFAULT_CODE_THEME_PREFERENCES}
+            colorScheme="light"
+            contents={'export const greeting = "hello"\n'}
+            path={RepositoryRelativePath.make("src/greeting.ts")}
+            projectId={projectId}
+            revision={revision}
+            onNavigateToDefinition={navigate}
+            onRequestDefinitions={request}
+          />
+        </WorkbenchContextActionsProvider>,
       )
     })
 
@@ -461,6 +466,11 @@ describe("CodeFileViewer", () => {
       .querySelector<HTMLElement>("[data-code-file-scroll]")
       ?.dispatchEvent(new Event("scroll"))
     expect(request.mock.calls[0]?.[1].aborted).toBe(false)
+    await vi.waitFor(() => {
+      expect(
+        contextActionsHost.querySelector('[aria-label="Loading code navigation"]'),
+      ).not.toBeNull()
+    })
     resolveRequest(new RepositoryLanguageLocationResult({ locations: [target], truncated: false }))
 
     await vi.waitFor(() => {
@@ -475,6 +485,7 @@ describe("CodeFileViewer", () => {
         }),
       )
       expect(document.body.textContent).not.toContain("Code comments in DiffDash")
+      expect(contextActionsHost.querySelector('[aria-label="Loading code navigation"]')).toBeNull()
     })
   })
 
@@ -621,6 +632,16 @@ describe("CodeFileViewer", () => {
       }),
     )
     token.dispatchEvent(
+      new MouseEvent("click", {
+        bubbles: true,
+        button: 0,
+        composed: true,
+        ctrlKey: !macPrimaryModifier,
+        metaKey: macPrimaryModifier,
+        shiftKey: true,
+      }),
+    )
+    token.dispatchEvent(
       new PointerEvent("pointermove", {
         bubbles: true,
         composed: true,
@@ -647,7 +668,7 @@ describe("CodeFileViewer", () => {
         '[role="dialog"][aria-label="Peek References, 2 results"]',
       )
       expect(peek?.textContent).toContain("References (2)")
-      expect(references).toHaveBeenCalled()
+      expect(references).toHaveBeenCalledTimes(1)
       expect(definitions).not.toHaveBeenCalled()
     })
   })
@@ -660,33 +681,39 @@ describe("CodeFileViewer", () => {
     root = createRoot(container)
     const first = definition("src/first.ts", 1, 6)
     const second = definition("src/second.ts", 3, 2)
-    flushSync(() => {
-      root?.render(
-        <FloatingPaneWorkspace className="h-full w-full">
-          <CodeFileViewer
-            codeThemes={DEFAULT_CODE_THEME_PREFERENCES}
-            colorScheme="light"
-            contents={`${Array.from({ length: 80 }, (_, index) => `const filler${index} = ${index}`).join("\n")}\nexport function greeting() {}\n`}
-            path={RepositoryRelativePath.make("src/greeting.ts")}
-            projectId={projectId}
-            revision={revision}
-            onLoadDefinitionSource={async (path) => {
-              if (path === first.target.path) {
-                return Option.some("zero\nexport const first = 1\ntwo")
-              }
-              return Option.some("zero\none\ntwo\nexport const second = 2")
-            }}
-            onNavigateToDefinition={vi.fn<(destination: LanguageNavigationDestination) => void>()}
-            onRequestDefinitions={async () =>
-              new RepositoryLanguageLocationResult({
-                locations: [first, second],
-                truncated: false,
-              })
-            }
-          />
-        </FloatingPaneWorkspace>,
-      )
+    const loadDefinitionSource = vi.fn<
+      (path: RepositoryRelativePath) => Promise<Option.Option<string>>
+    >(async (path) => {
+      if (path === first.target.path) {
+        return Option.some("zero\nexport const first = 1\ntwo")
+      }
+      return Option.some("zero\none\ntwo\nexport const second = 2")
     })
+    const renderViewer = () => {
+      flushSync(() => {
+        root?.render(
+          <FloatingPaneWorkspace className="h-full w-full">
+            <CodeFileViewer
+              codeThemes={DEFAULT_CODE_THEME_PREFERENCES}
+              colorScheme="light"
+              contents={`${Array.from({ length: 80 }, (_, index) => `const filler${index} = ${index}`).join("\n")}\nexport function greeting() {}\n`}
+              path={RepositoryRelativePath.make("src/greeting.ts")}
+              projectId={projectId}
+              revision={revision}
+              onLoadDefinitionSource={(path) => loadDefinitionSource(path)}
+              onNavigateToDefinition={vi.fn<(destination: LanguageNavigationDestination) => void>()}
+              onRequestDefinitions={async () =>
+                new RepositoryLanguageLocationResult({
+                  locations: [first, second],
+                  truncated: false,
+                })
+              }
+            />
+          </FloatingPaneWorkspace>,
+        )
+      })
+    }
+    renderViewer()
 
     const scrollRoot = await vi.waitFor(() => {
       const candidate = container.querySelector<HTMLElement>("[data-code-file-scroll]")
@@ -728,6 +755,16 @@ describe("CodeFileViewer", () => {
           ?.querySelector<HTMLElement>('[data-line-index="1"][data-selected-line]')
           ?.getBoundingClientRect().top,
       ).toBeGreaterThanOrEqual(peekRect?.top ?? 0)
+    })
+
+    const preview = document
+      .querySelector('[role="dialog"][aria-label="Peek Definitions, 2 results"]')
+      ?.querySelector("diffs-container")
+    expect(loadDefinitionSource).toHaveBeenCalledTimes(1)
+    renderViewer()
+    await vi.waitFor(() => {
+      expect(preview?.isConnected).toBe(true)
+      expect(loadDefinitionSource).toHaveBeenCalledTimes(1)
     })
   })
 
@@ -771,17 +808,23 @@ describe("CodeFileViewer", () => {
     })
 
     const token = await definitionToken("greeting")
-    for (let request = 0; request < 2; request += 1) {
-      token.dispatchEvent(
-        new MouseEvent("click", {
-          bubbles: true,
-          composed: true,
-          button: 0,
-          ctrlKey: true,
-          metaKey: true,
-        }),
-      )
-    }
+    token.dispatchEvent(
+      new MouseEvent("click", {
+        altKey: true,
+        bubbles: true,
+        composed: true,
+        button: 0,
+      }),
+    )
+    token.dispatchEvent(
+      new MouseEvent("click", {
+        bubbles: true,
+        composed: true,
+        button: 0,
+        ctrlKey: true,
+        metaKey: true,
+      }),
+    )
 
     await vi.waitFor(() => {
       expect(firstSignal?.aborted).toBe(true)

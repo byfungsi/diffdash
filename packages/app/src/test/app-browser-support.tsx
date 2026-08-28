@@ -1912,7 +1912,9 @@ index 1111111..2222222 100644
     Option.fromNullishOr(
       document.querySelector<HTMLElement>(`[data-diff-card-path=${JSON.stringify(sourcePath)}]`),
     ),
-    (sourceCard) => sourceCard.removeAttribute("data-diff-card-review-key"),
+    (sourceCard) => {
+      sourceCard.dataset.diffCardReviewKey = "stale-review-key"
+    },
   )
   const referenceToken = await findNewToken()
   await new Promise<void>((resolve) => window.setTimeout(resolve, 0))

@@ -1,6 +1,7 @@
 import { CoreApplicationRpcs } from "@diffdash/core-rpc/application-rpc"
 import { CodeWorkspaceError } from "@diffdash/domain/code-workspace"
 import { GitProviderId } from "@diffdash/domain/git-provider"
+import { LanguageOperationError } from "@diffdash/domain/language"
 import {
   ApplicationInstanceId,
   CoreProcessEpoch,
@@ -108,6 +109,27 @@ describe("Core application RPC handlers admission", () => {
       code: "CODE_WORKSPACE_REVISION_UNAVAILABLE",
       retryClass: "userAction",
       safeMessage: "Git could not resolve the repository's current revision.",
+    })
+  })
+
+  it("preserves renderer-safe language operation details", () => {
+    const failure = makeCoreApplicationOperationFailure(
+      CoreMethod.codeWorkspaceDefinitions,
+      request,
+      LanguageOperationError.make({
+        operation: "definitions",
+        reason: "serverFailed",
+        message: "TypeScript language analysis failed.",
+      }),
+    )
+
+    expect(failure).toMatchObject({
+      _tag: "CoreApplicationFailure",
+      ...request,
+      method: "CodeWorkspace.definitions",
+      code: "LANGUAGE_OPERATION_FAILED",
+      retryClass: "userAction",
+      safeMessage: "TypeScript language analysis failed.",
     })
   })
 
