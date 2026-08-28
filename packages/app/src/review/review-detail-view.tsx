@@ -12,7 +12,7 @@ import {
 } from "@diffdash/domain/code-line-change"
 import type { CodeWorkspaceTarget } from "@diffdash/domain/code-workspace"
 import { DiffFileVisibility, type ParsedDiffFile } from "@diffdash/domain/diff"
-import type { LanguageRange } from "@diffdash/domain/language"
+import type { LanguageRange, RepositoryLanguageLocationLink } from "@diffdash/domain/language"
 import type { ReviewSnapshotFileInventory } from "@diffdash/domain/review-context"
 import type { ReviewFileId } from "@diffdash/domain/review-identity"
 import type { ProjectWorkspaceActivityId } from "@diffdash/domain/project-workspace"
@@ -264,6 +264,12 @@ const REVIEW_DIFF_OPTIONS = {
       min-height: 20px !important;
     }
 
+    [data-diffdash-definition-link] {
+      color: var(--link) !important;
+      cursor: pointer;
+      text-decoration: underline;
+    }
+
     [data-indicators="bars"] [data-line-type="change-addition"][data-column-number]::before,
     [data-indicators="bars"] [data-line-type="change-deletion"][data-column-number]::before {
       opacity: 0.55;
@@ -414,7 +420,7 @@ export const ReviewDetailView = ({
   } = ready
   const review = selection.review
   const manifest = review.manifest
-  const reviewWorkspaceTargets = useMemo(() => reviewCodeWorkspaceTargets(review), [review])
+  const reviewWorkspaceTargets = useMemo(() => reviewCodeWorkspaceTargets(manifest), [manifest])
   const reviewWorkspaceResource = useMemo(() => {
     const scope = Scope.makeUnsafe()
     const session = Effect.runSync(
@@ -774,13 +780,40 @@ export const ReviewDetailView = ({
       let host = token.tokenElement
       if ("host" in root && isHTMLElement(root.host)) host = root.host
       return Option.getOrElse(
-        Option.flatMap(
-          Option.fromNullishOr(host.closest<HTMLElement>("[data-diff-card-path]")),
-          (card) => Option.fromNullishOr(card.dataset.diffCardPath),
+        Option.orElse(
+          Option.flatMap(
+            Option.fromNullishOr(host.closest<HTMLElement>("[data-diff-card-review-key]")),
+            (card) => Option.fromNullishOr(card.dataset.diffCardReviewKey),
+          ),
+          () =>
+            Option.flatMap(
+              Option.fromNullishOr(host.closest<HTMLElement>("[data-diff-card-path]")),
+              (card) => Option.fromNullishOr(card.dataset.diffCardPath),
+            ),
         ),
         () => review.identity,
       )
     },
+  })
+  const loadLanguagePeekSource = useStableCallback(
+    (path: RepositoryRelativePath, signal: AbortSignal) =>
+      Option.match(languageNavigation.peek, {
+        onNone: () => Promise.resolve(Option.none<string>()),
+        onSome: (peek) =>
+          runRendererPromise(
+            reviewWorkspaceSession.readSource(
+              Option.getOrElse(peek.origin.side, () => SourceSurfaceSide.make("additions")),
+              path,
+            ),
+            signal,
+          ),
+      }),
+  )
+  const navigateFromLanguagePeek = useStableCallback((location: RepositoryLanguageLocationLink) => {
+    Option.map(languageNavigation.peek, (peek) => {
+      languageNavigation.closePeek()
+      openLanguageDestination({ location, origin: peek.origin })
+    })
   })
   const eagerLoadSettled =
     progressiveInventory.length === 0 ||
@@ -1001,15 +1034,25 @@ export const ReviewDetailView = ({
       side: Schema.decodeUnknownOption(SourceSurfaceSide)(token.side),
     }),
   )
-  const reviewDiffOptions: FileDiffOptions<ReviewDiffAnnotationMetadata> = {
-    ...REVIEW_DIFF_OPTIONS,
-    diffStyle: resolvedDiffViewMode,
-    theme: aiSettings.codeThemes,
-    themeType: colorScheme,
-    onTokenClick: onReviewTokenClick,
-    onTokenEnter: onReviewTokenEnter,
-    onTokenLeave: onReviewTokenLeave,
-  }
+  const reviewDiffOptions = useMemo<FileDiffOptions<ReviewDiffAnnotationMetadata>>(
+    () => ({
+      ...REVIEW_DIFF_OPTIONS,
+      diffStyle: resolvedDiffViewMode,
+      theme: aiSettings.codeThemes,
+      themeType: colorScheme,
+      onTokenClick: onReviewTokenClick,
+      onTokenEnter: onReviewTokenEnter,
+      onTokenLeave: onReviewTokenLeave,
+    }),
+    [
+      aiSettings.codeThemes,
+      colorScheme,
+      onReviewTokenClick,
+      onReviewTokenEnter,
+      onReviewTokenLeave,
+      resolvedDiffViewMode,
+    ],
+  )
   const previousResolvedDiffViewModeRef = useRef(resolvedDiffViewMode)
   useEffect(() => {
     const previousMode = previousResolvedDiffViewModeRef.current
@@ -2214,20 +2257,13 @@ export const ReviewDetailView = ({
         onNone: () => null,
         onSome: (peek) => (
           <CodeDefinitionPeek
+            key={String(peek.id)}
             codeThemes={aiSettings.codeThemes}
             colorScheme={colorScheme}
             state={peek}
             onClose={languageNavigation.closePeek}
-            onLoadSource={(path, signal) =>
-              runRendererPromise(
-                reviewWorkspaceSession.readSource(
-                  Option.getOrElse(peek.origin.side, () => SourceSurfaceSide.make("additions")),
-                  path,
-                ),
-                signal,
-              )
-            }
-            onNavigate={(location) => openLanguageDestination({ location, origin: peek.origin })}
+            onLoadSource={loadLanguagePeekSource}
+            onNavigate={navigateFromLanguagePeek}
           />
         ),
       })}

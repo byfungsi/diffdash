@@ -25,6 +25,7 @@
     "@playwright/test": "catalog:",
     "@types/node": "catalog:",
     "electron": "catalog:",
+    "effect": "catalog:",
     "oxlint": "catalog:",
     "postject": "1.0.0-alpha.6",
     "typescript": "catalog:"

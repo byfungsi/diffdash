@@ -1908,13 +1908,37 @@ index 1111111..2222222 100644
     return event
   }
 
+  Option.map(
+    Option.fromNullishOr(
+      document.querySelector<HTMLElement>(`[data-diff-card-path=${JSON.stringify(sourcePath)}]`),
+    ),
+    (sourceCard) => sourceCard.removeAttribute("data-diff-card-review-key"),
+  )
   const referenceToken = await findNewToken()
   await new Promise<void>((resolve) => window.setTimeout(resolve, 0))
+  referenceToken.dispatchEvent(
+    new PointerEvent("pointermove", {
+      bubbles: true,
+      composed: true,
+      ctrlKey: !isMacPlatform(),
+      metaKey: isMacPlatform(),
+      pointerType: "mouse",
+    }),
+  )
+  await vi.waitFor(() => {
+    expect(referenceToken.hasAttribute("data-diffdash-definition-link")).toBe(true)
+    const style = getComputedStyle(referenceToken)
+    expect(style.cursor).toBe("pointer")
+    expect(style.textDecorationLine).toContain("underline")
+  })
   const referenceClick = clickToken(referenceToken, true)
   expect(referenceClick.defaultPrevented).toBe(true)
   await vi.waitFor(() => {
     expect(calls.codeWorkspaceReferences).toHaveBeenCalledWith(
-      expect.objectContaining({ path: sourcePath }),
+      expect.objectContaining({
+        path: sourcePath,
+        position: expect.objectContaining({ character: 13, line: 60 }),
+      }),
     )
     expect(document.querySelector('[aria-label="Peek References, 2 results"]')).not.toBeNull()
   })

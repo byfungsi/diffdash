@@ -62,13 +62,13 @@ describe("SourceSurfaceRuntime", () => {
 
   it("keeps a durable token anchor scoped to its semantic surface", () => {
     const runtime = new SourceSurfaceRuntime<object>()
-    const first = sourceHost("same", new DOMRect(10, 10, 20, 10))
-    const second = sourceHost("same", new DOMRect(200, 200, 20, 10))
+    const first = sourceHost("same", new DOMRect(10, 10, 20, 10), 41, "3,2")
+    const second = sourceHost("same", new DOMRect(200, 200, 20, 10), 41, "3,2")
     Effect.runSync(runtime.publishRender("first.ts", first.host, {}, "mount"))
     Effect.runSync(runtime.publishRender("second.ts", second.host, {}, "mount"))
     const target: SourceSurfaceTokenTarget = {
       surfaceId: "first.ts",
-      lineNumber: 1,
+      lineNumber: 41,
       lineCharStart: 0,
       lineCharEnd: 4,
       tokenText: "same",
@@ -77,7 +77,7 @@ describe("SourceSurfaceRuntime", () => {
     }
     const anchor = runtime.createTokenAnchor(target)
     first.line.remove()
-    const replacement = appendToken(first.host, "same", new DOMRect(30, 40, 20, 10))
+    const replacement = appendToken(first.host, "same", new DOMRect(30, 40, 20, 10), 41, "3,2")
 
     expect(anchor.getBoundingClientRect()).toEqual(replacement.getBoundingClientRect())
     replacement.remove()
@@ -167,7 +167,7 @@ describe("SourceSurfaceRuntime", () => {
     expect(replayed).toHaveBeenCalledOnce()
   })
 
-  it("rejects malformed Pierre line coordinates before interaction dispatch", () => {
+  it("uses Pierre source lines instead of rendered row indexes for interaction dispatch", () => {
     const runtime = new SourceSurfaceRuntime<object>()
     const { host, line, token } = sourceHost("token", new DOMRect())
     Effect.runSync(runtime.publishRender("source.ts", host, {}, "mount"))
@@ -182,36 +182,44 @@ describe("SourceSurfaceRuntime", () => {
     )
 
     for (const value of ["", "-1", "1.5", String(Number.MAX_SAFE_INTEGER + 1)]) {
-      line.dataset.lineIndex = value
+      line.dataset.line = value
       token.dispatchEvent(new MouseEvent("click", { bubbles: true, composed: true, button: 0 }))
     }
     expect(handle).not.toHaveBeenCalled()
 
-    line.dataset.lineIndex = "0"
+    line.dataset.line = "41"
+    line.dataset.lineIndex = "3,2"
     token.dataset.char = "0"
     token.dispatchEvent(new MouseEvent("click", { bubbles: true, composed: true, button: 0 }))
     const interaction = handle.mock.calls[0]?.[0]
     assert(interaction !== undefined, "Expected a valid source-surface interaction")
-    expect(interaction.lineNumber).toBe(1)
+    expect(interaction.lineNumber).toBe(41)
     expect(Option.map(interaction.token, ({ surfaceId }) => surfaceId)).toEqual(
       Option.some("source.ts"),
     )
   })
 })
 
-const sourceHost = (text: string, rect: DOMRect) => {
+const sourceHost = (text: string, rect: DOMRect, lineNumber = 1, renderLineIndex = "0") => {
   const host = document.createElement("div")
   host.attachShadow({ mode: "open" })
   document.body.append(host)
-  const token = appendToken(host, text, rect)
+  const token = appendToken(host, text, rect, lineNumber, renderLineIndex)
   const line = token.parentElement
   assert(line !== null, "Source test line was not created")
   return { host, line, token }
 }
 
-const appendToken = (host: HTMLElement, text: string, rect: DOMRect) => {
+const appendToken = (
+  host: HTMLElement,
+  text: string,
+  rect: DOMRect,
+  lineNumber: number,
+  renderLineIndex: string,
+) => {
   const line = document.createElement("div")
-  line.dataset.lineIndex = "0"
+  line.dataset.line = String(lineNumber)
+  line.dataset.lineIndex = renderLineIndex
   const token = document.createElement("span")
   token.dataset.char = "0"
   token.textContent = text

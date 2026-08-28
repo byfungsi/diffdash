@@ -108,6 +108,10 @@ const SourceSurfaceLineIndexText = Schema.String.pipe(
   Schema.check(Schema.isPattern(/^(?:0|[1-9][0-9]*)$/u)),
 )
 
+const SourceSurfaceRenderLineIndexText = Schema.String.pipe(
+  Schema.check(Schema.isPattern(/^(?:0|[1-9][0-9]*)(?:,(?:0|[1-9][0-9]*))?$/u)),
+)
+
 /**
  * Governs stable Pierre callbacks while capabilities register semantic interactions and render
  * observers independently.
@@ -199,11 +203,16 @@ export class SourceSurfaceRuntime<Instance> {
   /** Creates a durable virtual anchor that resolves the current token after source rerenders. */
   createTokenAnchor(target: SourceSurfaceTokenTarget): FloatingPaneAnchor {
     let lastRect = target.tokenElement.getBoundingClientRect()
+    const renderLineIndex = Option.flatMap(
+      Option.fromNullishOr(target.tokenElement.closest<HTMLElement>("[data-line-index]")),
+      (line) =>
+        Schema.decodeUnknownOption(SourceSurfaceRenderLineIndexText)(line.dataset.lineIndex),
+    )
     return {
       getBoundingClientRect: () => {
         const token = target.tokenElement.isConnected
           ? Option.some(target.tokenElement)
-          : this.findRenderedToken(target)
+          : this.findRenderedToken(target, renderLineIndex)
         Option.map(token, (element) => {
           lastRect = element.getBoundingClientRect()
         })
@@ -364,14 +373,23 @@ export class SourceSurfaceRuntime<Instance> {
     })
   }
 
-  private findRenderedToken(target: SourceSurfaceTokenTarget): Option.Option<HTMLElement> {
+  private findRenderedToken(
+    target: SourceSurfaceTokenTarget,
+    renderLineIndex: Option.Option<string>,
+  ): Option.Option<HTMLElement> {
     for (const { host, ...rendered } of Ref.getUnsafe(this.renderedSurfaces)) {
       if (rendered.surfaceId !== target.surfaceId) continue
-      const line = host.shadowRoot?.querySelector<HTMLElement>(
-        `[data-line-index="${String(target.lineNumber - 1)}"]`,
+      const line = Option.flatMap(renderLineIndex, (lineIndex) =>
+        Option.fromNullishOr(
+          host.shadowRoot?.querySelector<HTMLElement>(
+            `[data-line-index="${lineIndex}"][data-line]`,
+          ),
+        ),
       )
-      const token = Option.fromNullishOr(
-        line?.querySelector<HTMLElement>(`[data-char="${String(target.lineCharStart)}"]`),
+      const token = Option.flatMap(line, (lineElement) =>
+        Option.fromNullishOr(
+          lineElement.querySelector<HTMLElement>(`[data-char="${String(target.lineCharStart)}"]`),
+        ),
       )
       if (Option.exists(token, (element) => element.textContent === target.tokenText)) {
         return token
@@ -449,15 +467,29 @@ const sourceSurfaceClickInteraction = <Instance>(
     ),
     ({ generation, instance, surfaceId }) => ({ generation, instance, surfaceId }),
   )
-  const lineElement = Option.fromNullishOr(
+  const sourceLineElement = Option.fromNullishOr(
+    path.find(
+      (candidate): candidate is HTMLElement =>
+        isHTMLElement(candidate) && candidate.hasAttribute("data-line"),
+    ),
+  )
+  const renderLineElement = Option.fromNullishOr(
     path.find(
       (candidate): candidate is HTMLElement =>
         isHTMLElement(candidate) && candidate.hasAttribute("data-line-index"),
     ),
   )
-  if (Option.isNone(lineElement)) return Option.none()
-  const lineIndex = decodePierreNonNegativeInteger(lineElement.value.dataset.lineIndex)
-  if (Option.isNone(lineIndex) || Option.isNone(rendered)) return Option.none()
+  const lineNumber = Option.match(sourceLineElement, {
+    onNone: () =>
+      Option.map(
+        Option.flatMap(renderLineElement, (line) =>
+          decodePierreNonNegativeInteger(line.dataset.lineIndex),
+        ),
+        (lineIndex) => lineIndex + 1,
+      ),
+    onSome: (line) => decodePierrePositiveInteger(line.dataset.line),
+  })
+  if (Option.isNone(lineNumber) || Option.isNone(rendered)) return Option.none()
   const tokenElement = Option.fromNullishOr(
     path.find(
       (candidate): candidate is HTMLElement =>
@@ -465,7 +497,7 @@ const sourceSurfaceClickInteraction = <Instance>(
     ),
   )
   if (Option.isNone(tokenElement)) {
-    return Option.some({ event, lineNumber: lineIndex.value + 1, token: Option.none() })
+    return Option.some({ event, lineNumber: lineNumber.value, token: Option.none() })
   }
   const lineCharStart = decodePierreNonNegativeInteger(tokenElement.value.dataset.char)
   if (Option.isNone(lineCharStart)) return Option.none()
@@ -508,10 +540,10 @@ const sourceSurfaceClickInteraction = <Instance>(
   })
   return Option.some({
     event,
-    lineNumber: lineIndex.value + 1,
+    lineNumber: lineNumber.value,
     token: Option.some({
       surfaceId: rendered.value.surfaceId,
-      lineNumber: lineIndex.value + 1,
+      lineNumber: lineNumber.value,
       lineCharStart: lineCharStart.value,
       lineCharEnd: lineCharStart.value + tokenText.length,
       tokenText,

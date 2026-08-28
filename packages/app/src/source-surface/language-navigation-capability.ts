@@ -228,6 +228,7 @@ export const useLanguageNavigationCapability = <Instance>({
         side: token.side,
         surfaceId: token.surfaceId,
       })
+      const anchor = runtime.createTokenAnchor(token)
       const locations = Effect.tryPromise({
         try: () =>
           providerRequest.value(
@@ -269,7 +270,7 @@ export const useLanguageNavigationCapability = <Instance>({
             }
             setPeek(
               Option.some({
-                anchor: runtime.createTokenAnchor(token),
+                anchor,
                 content: LanguageNavigationPeekContent.cases.results.make({
                   kind: request.kind,
                   result,
@@ -297,7 +298,7 @@ export const useLanguageNavigationCapability = <Instance>({
             if (!open) return
             setPeek(
               Option.some({
-                anchor: runtime.createTokenAnchor(token),
+                anchor,
                 content: LanguageNavigationPeekContent.cases.failure.make({
                   kind: request.kind,
                   message: error.message,

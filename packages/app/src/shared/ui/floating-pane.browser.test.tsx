@@ -122,6 +122,20 @@ describe("FloatingPane", () => {
     expect(host.contains(pane)).toBe(true)
     expect(pane.dataset.side).toMatch(/^(top|bottom)$/)
     expect(pane.style.maxHeight).toContain("available-height")
+    await Array.from({ length: 5 }, (_value, frame) => frame).reduce(
+      (previousFrame) =>
+        previousFrame.then(
+          () =>
+            new Promise<void>((resolve) =>
+              window.requestAnimationFrame(() => {
+                expect(pane.style.visibility).not.toBe("hidden")
+                expect(pane.hasAttribute("data-reference-hidden")).toBe(false)
+                resolve()
+              }),
+            ),
+        ),
+      Promise.resolve(),
+    )
 
     const underlying = required(
       document.querySelector<HTMLButtonElement>("[data-outside-action]"),
