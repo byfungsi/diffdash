@@ -1,5 +1,15 @@
 # DiffDash Changelog
 
+## 0.15.1
+
+### Patch Changes
+
+- [#113](https://github.com/byfungsi/diffdash/pull/113) [`63710b2`](https://github.com/byfungsi/diffdash/commit/63710b2f7573d27214a1d09faf6c5604830ae4aa) Thanks [@hanipcode](https://github.com/hanipcode)! - Fix diff expansion and symbol navigation, including stable reference panes when review tokens rerender.
+
+- [#113](https://github.com/byfungsi/diffdash/pull/113) [`63710b2`](https://github.com/byfungsi/diffdash/commit/63710b2f7573d27214a1d09faf6c5604830ae4aa) Thanks [@hanipcode](https://github.com/hanipcode)! - Forward comments using the current OpenCode V2 prompt contract, expand hosted review context from the exact base revision in 20-line increments, keep diff gutter actions stable across review renders, and preserve review language-navigation sessions through Strict Mode lifecycle replay.
+
+- [#113](https://github.com/byfungsi/diffdash/pull/113) [`63710b2`](https://github.com/byfungsi/diffdash/commit/63710b2f7573d27214a1d09faf6c5604830ae4aa) Thanks [@hanipcode](https://github.com/hanipcode)! - Reuse language workspaces across Code and Diff, keep navigation previews stable, and recover hosted reviews and cached resources reliably.
+
 ## 0.15.0
 
 ### Minor Changes
