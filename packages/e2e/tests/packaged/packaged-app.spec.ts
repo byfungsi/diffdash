@@ -336,6 +336,8 @@ test("FUN-141 AC: verifies final packaged composition and provider persistence",
     await expect(window.getByRole("button", { name: "Code", pressed: true })).toBeVisible()
     await window.getByRole("button", { name: "Files", exact: true }).click()
     await expect(fixtureDiffCard).toBeVisible()
+    await window.locator("[data-workbench-ai-connection]").click()
+    await window.getByRole("menuitemradio", { name: "Review", exact: true }).click()
 
     const lineIndex = await addedLine.getAttribute("data-line-index")
     if (lineIndex === null) throw new Error("Fixture addition line has no rendered index")
