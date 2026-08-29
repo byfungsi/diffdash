@@ -399,11 +399,12 @@ test("FUN-141 AC: verifies final packaged composition and provider persistence",
     ) as unknown
     expect(persistedSettings).toEqual(
       expect.objectContaining({
+        commentMode: "review",
         diffViewMode: "auto",
         layout: {
           review: { contextWidth: 304, threadDetailWidth: 432 },
         },
-        version: 8,
+        version: 9,
         themes: { light: "catppuccin-latte", dark: "catppuccin-mocha" },
         codeThemes: { light: "catppuccin-latte", dark: "catppuccin-mocha" },
         selections: {
