@@ -7,6 +7,7 @@ import {
   CommentSubmissionReceipt,
   CommentSubject,
 } from "@diffdash/domain/comment"
+import { CodeWorkspaceLeaseId } from "@diffdash/domain/code-workspace"
 import { HostedReviewTarget, MarkdownBody } from "@diffdash/domain/review-thread"
 import {
   ProjectWorkspaceActivityId,
@@ -55,6 +56,34 @@ const review = HostedReviewLocator.make({
 })
 
 describe("scenario-backed DiffDash API", () => {
+  it.effect("serves Code files from the active review revision", () =>
+    Effect.gen(function* () {
+      const scenario = yield* loadAtomicWebhookReplayScenario
+      const { api, timeline } = createDemoRuntime(scenario)
+      const path = RepositoryRelativePath.make(
+        "services/webhooks/src/replay/__tests__/claim-delivery.test.ts",
+      )
+      const request = { leaseId: CodeWorkspaceLeaseId.make("lease_test"), path }
+
+      const initial = yield* Effect.promise(() => api.codeWorkspace.readFile(request))
+      const initialContent = Match.valueTags(initial, {
+        content: ({ content }) => content,
+        rejected: () => "",
+      })
+      expect(initialContent).toContain("grants an active replay lease to only one worker")
+      expect(initialContent).not.toContain("regional worker clocks disagree")
+
+      yield* Effect.promise(() => timeline.release("revision-updated"))
+      const revised = yield* Effect.promise(() => api.codeWorkspace.readFile(request))
+      const revisedContent = Match.valueTags(revised, {
+        content: ({ content }) => content,
+        rejected: () => "",
+      })
+      expect(revisedContent).toContain("regional worker clocks disagree")
+      expect(revisedContent).toContain("vi.setSystemTime")
+    }),
+  )
+
   it.effect("opens, remembers workspace state, and forgets projects deterministically", () =>
     Effect.gen(function* () {
       const scenario = yield* loadAtomicWebhookReplayScenario

@@ -1,11 +1,13 @@
 import type { DemoStory } from "../framework"
 import { assertDemoSlug } from "../paths"
 import { diffDash043Story } from "./diffdash-0.4.3"
+import { flagshipReviewWorkflowStory } from "./flagship-review-workflow"
 import { projectWorkspaceStory } from "./project-workspace"
 
 /** Registered deterministic release reels. */
 export const stories: Readonly<Record<string, DemoStory>> = {
   [diffDash043Story.id]: diffDash043Story,
+  [flagshipReviewWorkflowStory.id]: flagshipReviewWorkflowStory,
   [projectWorkspaceStory.id]: projectWorkspaceStory,
 }
 

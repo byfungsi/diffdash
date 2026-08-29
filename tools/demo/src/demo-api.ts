@@ -16,18 +16,28 @@ import {
   CommentSubmissionReceipt,
   CommentSubmissionUnsupportedError,
   CommentSubject,
+  OpenCodeSessionId,
+  OpenCodeSessionSummary,
 } from "@diffdash/domain/comment"
 import {
+  CodeWorkspaceEntry,
   CodeWorkspaceDirectoryPage,
   CodeWorkspaceChangesResult,
   CodeWorkspaceLineChangesResult,
+  CodeWorkspaceFileContent,
   CodeWorkspaceFileReadRejected,
   CodeWorkspaceLease,
   CodeWorkspaceLeaseId,
   CodeWorkspaceSearchResult,
   CodeWorkspaceTarget,
 } from "@diffdash/domain/code-workspace"
-import { RepositoryLanguageLocationResult } from "@diffdash/domain/language"
+import {
+  LanguagePosition,
+  LanguageRange,
+  RepositoryLanguageLocation,
+  RepositoryLanguageLocationLink,
+  RepositoryLanguageLocationResult,
+} from "@diffdash/domain/language"
 import {
   GitProviderCapabilities,
   GitProviderDescriptor,
@@ -37,7 +47,12 @@ import {
   HostedRepository,
   HostedRepositorySource,
   HostedReviewCheck,
+  HostedReviewComment,
+  HostedReviewDetail,
+  HostedReviewSummary,
   makeHostedRepositoryLocator,
+  ProviderActor,
+  type ReviewDecision,
   sameHostedRepository,
 } from "@diffdash/domain/git-provider"
 import { localReviewTargetKey, type LocalReviewTarget } from "@diffdash/domain/local-review"
@@ -47,6 +62,7 @@ import {
   type ProjectWorkspaceStateInput,
 } from "@diffdash/domain/project-workspace"
 import { GitCommitSha } from "@diffdash/domain/repository-comparison"
+import { RepositoryRelativePath } from "@diffdash/domain/repository-path"
 import {
   LinkedCheckout,
   RemoteOnly,
@@ -187,6 +203,249 @@ type CompletedWalkthroughOperation = Extract<
   { readonly state: "completed" }
 >
 
+const demoCodeFiles = new Map<RepositoryRelativePath, string>([
+  [
+    RepositoryRelativePath.make("packages/db/src/replay-claims.ts"),
+    `import type { Database } from "./database"
+
+export interface ClaimDeliveryInput {
+  readonly deliveryId: string
+  readonly workerId: string
+  readonly claimedAt: Date
+  readonly leaseSeconds: number
+}
+
+export const claimDelivery = (
+  database: Database,
+  input: ClaimDeliveryInput,
+) =>
+  database.one<{ deliveryId: string }>(
+    \`INSERT INTO replay_claim (delivery_id, worker_id, claimed_at, claimed_until)
+     VALUES ($deliveryId, $workerId, $claimedAt, $claimedUntil)
+     ON CONFLICT (delivery_id)
+     DO UPDATE SET worker_id = excluded.worker_id,
+                   claimed_until = excluded.claimed_until
+     WHERE replay_claim.claimed_until < excluded.claimed_at
+     RETURNING delivery_id AS "deliveryId"\`,
+    {
+      ...input,
+      claimedUntil: new Date(input.claimedAt.getTime() + input.leaseSeconds * 1_000),
+    },
+  )
+`,
+  ],
+  [
+    RepositoryRelativePath.make("services/webhooks/src/replay/claim-delivery.ts"),
+    `import type { Database } from "@dispatch/db"
+import { claimDelivery } from "@dispatch/db/replay-claims"
+import { deliverWebhook } from "../delivery/deliver-webhook"
+
+export const replayDelivery = async (
+  database: Database,
+  deliveryId: string,
+  workerId: string,
+) => {
+  const delivery = await database.webhookDeliveries.getRequired(deliveryId)
+  const claimedAt = await database.one<{ now: Date }>("SELECT transaction_timestamp() AS now")
+  const claim = await claimDelivery(database, {
+    deliveryId,
+    workerId,
+    claimedAt: claimedAt.now,
+    leaseSeconds: 120,
+  })
+  if (claim === null) return { status: "already-claimed" as const }
+
+  await deliverWebhook(delivery)
+  return { status: "replayed" as const }
+}
+
+export const replayBatch = async (
+  database: Database,
+  deliveryIds: readonly string[],
+  workerId: string,
+) => Promise.all(deliveryIds.map((deliveryId) => replayDelivery(database, deliveryId, workerId)))
+`,
+  ],
+  [
+    RepositoryRelativePath.make("services/webhooks/src/replay/__tests__/claim-delivery.test.ts"),
+    `import { describe, expect, it, vi } from "vitest"
+import { createDatabaseFixture } from "../../testing/database-fixture"
+import { replayDelivery } from "../claim-delivery"
+
+describe("replayDelivery", () => {
+  it("uses database time when regional worker clocks disagree", async () => {
+    const database = await createDatabaseFixture()
+    const delivery = await database.webhookDeliveries.insertFailed({
+      destination: "https://merchant.invalid/webhooks",
+      eventType: "order.paid",
+    })
+
+    vi.setSystemTime("2026-07-10T08:00:00-07:00")
+    const east = replayDelivery(database, delivery.id, "worker-us-east-2")
+    vi.setSystemTime("2026-07-10T08:06:00+02:00")
+    const west = replayDelivery(database, delivery.id, "worker-eu-west-1")
+
+    const results = await Promise.all([east, west])
+    expect(results.map(({ status }) => status).sort()).toEqual(["already-claimed", "replayed"])
+  })
+})
+`,
+  ],
+  [
+    RepositoryRelativePath.make("apps/ops/src/routes/webhook-replays.tsx"),
+    `import { StatusBadge } from "../../components/status-badge"
+import { TableCell, TableRow } from "../../components/table"
+import { formatRelativeTime, formatTimestamp } from "../../shared/time"
+import type { WebhookDelivery } from "../../types/webhook-delivery"
+
+export interface WebhookReplayRowProps {
+  readonly delivery: WebhookDelivery
+}
+
+const replayStatusLabel = (delivery: WebhookDelivery) =>
+  delivery.replayClaim === null
+    ? delivery.status
+    : \`Claimed by \${delivery.replayClaim.workerId}\`
+
+export const webhookReplayDescription = (delivery: WebhookDelivery) =>
+  \`\${delivery.destination} · \${replayStatusLabel(delivery)}\`
+
+const ReplayDestination = ({ delivery }: WebhookReplayRowProps) => (
+  <span title={webhookReplayDescription(delivery)}>{delivery.destination}</span>
+)
+
+export const WebhookReplayRow = ({ delivery }: WebhookReplayRowProps) => {
+  return (
+    <TableRow>
+      <TableCell>
+        <ReplayDestination delivery={delivery} />
+      </TableCell>
+      <TableCell>
+        {delivery.replayClaim === null ? (
+          delivery.status
+        ) : (
+          <StatusBadge tone="warning">
+            Claimed by {delivery.replayClaim.workerId} until{" "}
+            {formatRelativeTime(delivery.replayClaim.claimedUntil)}
+          </StatusBadge>
+        )}
+      </TableCell>
+      <TableCell>{formatTimestamp(delivery.updatedAt)}</TableCell>
+    </TableRow>
+  )
+}
+`,
+  ],
+  [
+    RepositoryRelativePath.make("docs/runbooks/webhook-replays.md"),
+    `# Webhook replay recovery
+
+Replay workers acquire a two-minute database lease before sending a failed delivery.
+Only the worker returned by the claim statement may continue with delivery.
+Postgres supplies both claim and expiry time so regional process clocks cannot change the lease.
+`,
+  ],
+])
+
+const demoInitialCodeFiles = new Map<RepositoryRelativePath, string>([
+  ...demoCodeFiles,
+  [
+    RepositoryRelativePath.make("services/webhooks/src/replay/claim-delivery.ts"),
+    `import type { Database } from "@dispatch/db"
+import { claimDelivery } from "@dispatch/db/replay-claims"
+import { deliverWebhook } from "../delivery/deliver-webhook"
+
+export const replayDelivery = async (
+  database: Database,
+  deliveryId: string,
+  workerId: string,
+) => {
+  const delivery = await database.webhookDeliveries.getRequired(deliveryId)
+  const claim = await claimDelivery(database, {
+    deliveryId,
+    workerId,
+    claimedAt: new Date(),
+    leaseSeconds: 120,
+  })
+  if (claim === null) return { status: "already-claimed" as const }
+
+  await deliverWebhook(delivery)
+  return { status: "replayed" as const }
+}
+`,
+  ],
+  [
+    RepositoryRelativePath.make("services/webhooks/src/replay/__tests__/claim-delivery.test.ts"),
+    `import { describe, expect, it } from "vitest"
+import { createDatabaseFixture } from "../../testing/database-fixture"
+import { replayDelivery } from "../claim-delivery"
+
+describe("replayDelivery", () => {
+  it("grants an active replay lease to only one worker", async () => {
+    const database = await createDatabaseFixture()
+    const delivery = await database.webhookDeliveries.insertFailed({
+      destination: "https://merchant.invalid/webhooks",
+      eventType: "order.paid",
+    })
+
+    const [east, west] = await Promise.all([
+      replayDelivery(database, delivery.id, "worker-us-east-2"),
+      replayDelivery(database, delivery.id, "worker-eu-west-1"),
+    ])
+
+    expect([east.status, west.status].sort()).toEqual(["already-claimed", "replayed"])
+  })
+})
+`,
+  ],
+  [
+    RepositoryRelativePath.make("docs/runbooks/webhook-replays.md"),
+    `# Webhook replay recovery
+
+Replay workers acquire a two-minute database lease before sending a failed delivery.
+Only the worker returned by the claim statement may continue with delivery.
+`,
+  ],
+])
+
+const demoCodeFilesForRevision = (revisionId: string) =>
+  revisionId === "01-initial" ? demoInitialCodeFiles : demoCodeFiles
+
+const demoCodeDirectoryEntries = (
+  files: ReadonlyMap<RepositoryRelativePath, string>,
+  path: RepositoryRelativePath | null,
+) => {
+  const prefix = path === null ? "" : `${path}/`
+  const children = new Map<string, CodeWorkspaceEntry>()
+  for (const filePath of files.keys()) {
+    if (!filePath.startsWith(prefix)) continue
+    const remainder = filePath.slice(prefix.length)
+    const separator = remainder.indexOf("/")
+    const childPath = RepositoryRelativePath.make(
+      separator < 0 ? filePath : `${prefix}${remainder.slice(0, separator)}`,
+    )
+    children.set(
+      childPath,
+      CodeWorkspaceEntry.make({ path: childPath, kind: separator < 0 ? "file" : "directory" }),
+    )
+  }
+  return [...children.values()].reduce<CodeWorkspaceEntry[]>((sorted, entry) => {
+    const index = sorted.findIndex((candidate) => candidate.path.localeCompare(entry.path) > 0)
+    sorted.splice(index < 0 ? sorted.length : index, 0, entry)
+    return sorted
+  }, [])
+}
+
+const demoLanguageLink = (path: string, line: number, character: number) => {
+  const position = new LanguagePosition({ line, character })
+  const range = new LanguageRange({ start: position, end: position })
+  return new RepositoryLanguageLocationLink({
+    originSelectionRange: Option.none(),
+    target: new RepositoryLanguageLocation({ path: RepositoryRelativePath.make(path), range }),
+    targetSelectionRange: range,
+  })
+}
+
 /** Creates a fresh, fully in-memory DiffDash runtime for one materialized scenario. */
 export const createDemoRuntime = (scenario: MaterializedDemoScenario): DemoRuntime => {
   const firstRevision = scenario.revisions[0]
@@ -206,7 +465,8 @@ export const createDemoRuntime = (scenario: MaterializedDemoScenario): DemoRunti
   const projectWorkspaceStates = new Map<ReviewProjectId, ProjectWorkspaceState>()
   let repositories: Repo[] = []
   let currentRevision = firstRevision
-  let approved = false
+  let reviewDecision: ReviewDecision = "none"
+  let reviewDecisionBody = ""
   let hostedViewedFiles = new Map<ReviewKey, ReviewFilePatchHash>()
   let localViewedFiles = new Map<string, Map<ReviewKey, ReviewFilePatchHash>>()
   let settings = cloneSettings(DEFAULT_AI_SETTINGS)
@@ -273,7 +533,8 @@ export const createDemoRuntime = (scenario: MaterializedDemoScenario): DemoRunti
     projectWorkspaceStates.clear()
     manifestCache.set(currentRevision.manifest.snapshotId, currentRevision.manifest)
     repositories = [scenario.repository]
-    approved = false
+    reviewDecision = "none"
+    reviewDecisionBody = ""
     settings = cloneSettings(DEFAULT_AI_SETTINGS)
     appState = AppState.make({ onboardingCompleted: true })
     updateState = AppUpdateUnsupported.make({
@@ -466,6 +727,10 @@ export const createDemoRuntime = (scenario: MaterializedDemoScenario): DemoRunti
         }
         return
       }
+      if (checkpointId === "checkout-linked") {
+        linkLocalPath("/Users/demo/emberline-dispatch")
+        return
+      }
       if (checkpointId === "update-available") {
         setUpdateState(
           AppUpdateAvailable.make({
@@ -568,7 +833,7 @@ export const createDemoRuntime = (scenario: MaterializedDemoScenario): DemoRunti
     getState: () => ({
       scenarioId: scenario.manifest.id,
       revisionId: currentRevision.id,
-      approved,
+      approved: reviewDecision === "approved",
       viewedFileKeys: currentRevision.parsedDiff.files
         .filter((file) => hostedViewedFiles.get(file.reviewKey) === file.patchHash)
         .map((file) => file.reviewKey),
@@ -638,8 +903,22 @@ export const createDemoRuntime = (scenario: MaterializedDemoScenario): DemoRunti
         }),
     },
     ai: {
-      listOpenCodeSessions: async () => [],
-      connectOpenCodeSession: async ({ sessionId }) => ({ sessionId, planMode: true }),
+      listOpenCodeSessions: async ({ search }) => {
+        if (!repositories.some((repository) => repository.localPath !== null)) return []
+        const session = OpenCodeSessionSummary.make({
+          id: OpenCodeSessionId.make("ses_atomicReplayReview"),
+          title: "Review atomic replay claims",
+          directory: RepositoryCheckoutPath.make("/Users/demo/emberline-dispatch"),
+          updatedAt: Date.parse("2026-07-10T08:40:00.000Z"),
+        })
+        return search === null || session.title.toLowerCase().includes(search.toLowerCase())
+          ? [session]
+          : []
+      },
+      connectOpenCodeSession: async ({ sessionId }) => {
+        record("ai.connectOpenCodeSession", { sessionId })
+        return { sessionId, planMode: true }
+      },
       submitComment: async ({ destination, submission }) =>
         CommentDestination.match(destination, {
           OpenCode: ({ connection }) =>
@@ -829,13 +1108,50 @@ export const createDemoRuntime = (scenario: MaterializedDemoScenario): DemoRunti
           expiresAtMs: Date.now() + 60 * 60 * 1_000,
         }),
       release: async () => undefined,
-      listDirectory: async () => CodeWorkspaceDirectoryPage.make({ entries: [], nextOffset: null }),
-      search: async () => CodeWorkspaceSearchResult.make({ paths: [], nextOffset: null }),
-      readFile: async ({ path }) => CodeWorkspaceFileReadRejected.make({ path, reason: "missing" }),
-      definitions: async () =>
-        RepositoryLanguageLocationResult.make({ locations: [], truncated: false }),
+      listDirectory: async ({ path, offset, limit }) => {
+        const entries = demoCodeDirectoryEntries(demoCodeFilesForRevision(currentRevision.id), path)
+        const page = entries.slice(offset, offset + limit)
+        const nextOffset = offset + page.length
+        return CodeWorkspaceDirectoryPage.make({
+          entries: page,
+          nextOffset: nextOffset < entries.length ? nextOffset : null,
+        })
+      },
+      search: async ({ query, offset, limit }) => {
+        const normalized = query.trim().toLowerCase()
+        const matches = [...demoCodeFilesForRevision(currentRevision.id).keys()].filter((path) =>
+          path.toLowerCase().includes(normalized),
+        )
+        const paths = matches.slice(offset, offset + limit)
+        const nextOffset = offset + paths.length
+        return CodeWorkspaceSearchResult.make({
+          paths,
+          nextOffset: nextOffset < matches.length ? nextOffset : null,
+        })
+      },
+      readFile: async ({ path }) => {
+        const content = demoCodeFilesForRevision(currentRevision.id).get(path)
+        return content === undefined
+          ? CodeWorkspaceFileReadRejected.make({ path, reason: "missing" })
+          : CodeWorkspaceFileContent.make({ path, content })
+      },
+      definitions: async ({ path }) =>
+        RepositoryLanguageLocationResult.make({
+          locations: [
+            path.endsWith("claim-delivery.test.ts")
+              ? demoLanguageLink("services/webhooks/src/replay/claim-delivery.ts", 4, 13)
+              : demoLanguageLink("packages/db/src/replay-claims.ts", 9, 13),
+          ],
+          truncated: false,
+        }),
       references: async () =>
-        RepositoryLanguageLocationResult.make({ locations: [], truncated: false }),
+        RepositoryLanguageLocationResult.make({
+          locations: [
+            demoLanguageLink("services/webhooks/src/replay/claim-delivery.ts", 10, 22),
+            demoLanguageLink("services/webhooks/src/replay/__tests__/claim-delivery.test.ts", 2, 9),
+          ],
+          truncated: false,
+        }),
       changes: async () => CodeWorkspaceChangesResult.make({ changes: [], truncated: false }),
       lineChanges: async () =>
         CodeWorkspaceLineChangesResult.make({ changes: [], truncated: false }),
@@ -1058,7 +1374,47 @@ export const createDemoRuntime = (scenario: MaterializedDemoScenario): DemoRunti
           request.review.repository.name,
           request.review.number,
         )
-        return currentRevision.detail
+        return HostedReviewDetail.make({
+          ...currentRevision.detail,
+          summary: HostedReviewSummary.make({
+            ...currentRevision.detail.summary,
+            decision: reviewDecision,
+          }),
+          comments: [
+            HostedReviewComment.make({
+              author: ProviderActor.make({
+                id: null,
+                username: "marco-chen",
+                displayName: "Marco Chen",
+                avatarUrl: null,
+              }),
+              body:
+                currentRevision.id === "01-initial"
+                  ? "The atomic claim looks right, but should lease expiry trust clocks from workers in different regions?"
+                  : "Database time and the skewed-clock test address my concern. Ready for another look.",
+              createdAt:
+                currentRevision.id === "01-initial"
+                  ? "2026-07-09T12:02:00.000Z"
+                  : "2026-07-10T08:34:00.000Z",
+              url: null,
+            }),
+            ...(reviewDecisionBody.length === 0
+              ? []
+              : [
+                  HostedReviewComment.make({
+                    author: ProviderActor.make({
+                      id: null,
+                      username: "hanipcode",
+                      displayName: "Hanif Muhammad",
+                      avatarUrl: null,
+                    }),
+                    body: reviewDecisionBody,
+                    createdAt: "2026-07-09T12:12:00.000Z",
+                    url: null,
+                  }),
+                ]),
+          ],
+        })
       },
       getChecks: async (request) => {
         requireReview(
@@ -1084,23 +1440,40 @@ export const createDemoRuntime = (scenario: MaterializedDemoScenario): DemoRunti
           request.repository.name,
           scenario.manifest.pullRequest.number,
         )
-        return [currentRevision.detail.summary]
+        return [
+          HostedReviewSummary.make({
+            ...currentRevision.detail.summary,
+            decision: reviewDecision,
+          }),
+        ]
       },
-      listAssigned: async () => [currentRevision.detail.summary],
+      listAssigned: async () => [
+        HostedReviewSummary.make({
+          ...currentRevision.detail.summary,
+          decision: reviewDecision,
+        }),
+      ],
       getDecision: async (request) => {
         requireReview(
           request.review.repository.namespace,
           request.review.repository.name,
           request.review.number,
         )
-        return approved ? "approved" : "none"
+        return reviewDecision
       },
       submitDecision: async (request) => {
         const { namespace: owner, name } = request.review.repository
         const { number } = request.review
         requireReview(owner, name, number)
-        approved = true
-        record("gitProvider.submitReviewDecision", { owner, name, number })
+        reviewDecision = request.submission.decision
+        reviewDecisionBody = request.submission.body
+        record("gitProvider.submitReviewDecision", {
+          owner,
+          name,
+          number,
+          decision: request.submission.decision,
+          body: request.submission.body,
+        })
       },
       close: async (request) => {
         const { namespace: owner, name } = request.review.repository
