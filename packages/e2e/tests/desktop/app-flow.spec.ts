@@ -2100,9 +2100,7 @@ const exerciseDiffExpansionAndNavigation = async (
   const diffContainer = diffCard.locator("diffs-container")
   const expandButton = diffContainer.locator("[data-expand-button]").first()
   await expect(expandButton).toBeVisible()
-  await expandButton.evaluate((button) => {
-    button.dispatchEvent(new MouseEvent("click", { bubbles: true, composed: true }))
-  })
+  await expandButton.click()
   await expect(diffContainer).toContainText("const before39 = true")
   await expect(diffContainer).not.toContainText("const before0 = true")
 
