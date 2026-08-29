@@ -137,6 +137,11 @@ export const OpenDiffCard = ({
     if (side === undefined) return
     onActivateLine(side, start)
   })
+  const onLineNumberClick = useStableCallback<
+    NonNullable<FileDiffOptions<ReviewDiffCardAnnotation["metadata"]>["onLineNumberClick"]>
+  >(({ annotationSide, lineNumber }) => {
+    onActivateLine(annotationSide, lineNumber)
+  })
   const loadDiffFiles = useStableCallback(onLoadDiffFiles)
   const publishSurfaceRender = useMemo(
     () => surfaceRuntime.createRenderPublisher(file.reviewKey),
@@ -150,15 +155,24 @@ export const OpenDiffCard = ({
             loadDiffFiles,
             tokenizeMaxLength: 0,
             onGutterUtilityClick,
+            onLineNumberClick,
             onPostRender: publishSurfaceRender,
           }
         : {
             ...diffOptions,
             loadDiffFiles,
             onGutterUtilityClick,
+            onLineNumberClick,
             onPostRender: publishSurfaceRender,
           },
-    [diffOptions, loadDiffFiles, onGutterUtilityClick, publishSurfaceRender, renderAsPlainText],
+    [
+      diffOptions,
+      loadDiffFiles,
+      onGutterUtilityClick,
+      onLineNumberClick,
+      publishSurfaceRender,
+      renderAsPlainText,
+    ],
   )
   useLayoutEffect(
     () =>

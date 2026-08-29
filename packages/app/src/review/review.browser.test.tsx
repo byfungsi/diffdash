@@ -147,6 +147,11 @@ describe("App review browser interactions", () => {
     await appBrowserScenario("localReview")()
   })
 
+  it("keeps review note gutter actions available with OpenCode connected", async () => {
+    expect.hasAssertions()
+    await appBrowserScenario("connectedReviewNotesGutter")()
+  })
+
   it("loads the hosted overview before diff and submits provider actions", async () => {
     expect.hasAssertions()
     await appBrowserScenario("hostedReviewOverviewActions")()

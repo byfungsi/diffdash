@@ -174,7 +174,7 @@ describe("Review Comments Code contribution", () => {
     expect(document.body.textContent).not.toContain("src/greeting.ts:1")
   })
 
-  it("opens another composer on a line that already has a note without an agent connection", async () => {
+  it("keeps line actions available after adding a note with an agent connection", async () => {
     let noteSequence = 0
     const notes: CommentNotesOperations = {
       list: () => Effect.succeed([]),
@@ -191,11 +191,11 @@ describe("Review Comments Code contribution", () => {
         }),
       delete: () => Effect.void,
       clear: () => Effect.void,
-      send: () => Effect.die("Note delivery must not run without a connection"),
+      send: () => Effect.die("Note delivery must not run while collecting notes"),
     }
     renderHarness(projectId, vi.fn(), Option.some(gitRevision), revision, {
       commentNotes: notes,
-      connection: Option.none(),
+      connection: Option.some(connection),
       mode: "notes",
       renderActivityPane: false,
     })

@@ -467,12 +467,14 @@ export function ReviewThreadComposer({
   label = "Line comment",
   placeholder = "Write a Markdown comment",
   diffDashSubmitLabel = "Comment",
+  submitLabel,
   onCancel,
   onSubmit,
 }: {
   readonly label?: string
   readonly placeholder?: string
   readonly diffDashSubmitLabel?: string
+  readonly submitLabel?: string | undefined
   readonly onCancel?: () => void
   readonly onSubmit: (bodyMarkdown: string) => Promise<void>
 }) {
@@ -583,10 +585,11 @@ export function ReviewThreadComposer({
         )}
         <Button type="submit" size="xs" disabled={body.trim().length === 0 || submitting}>
           {submitting ? <Loader2 className="animate-spin" /> : null}
-          {CommentDestination.match(destination, {
-            DiffDash: () => diffDashSubmitLabel,
-            OpenCode: () => "Send to OpenCode",
-          })}
+          {submitLabel ??
+            CommentDestination.match(destination, {
+              DiffDash: () => diffDashSubmitLabel,
+              OpenCode: () => "Send to OpenCode",
+            })}
         </Button>
       </div>
     </form>
