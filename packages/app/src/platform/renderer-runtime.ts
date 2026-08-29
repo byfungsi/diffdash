@@ -5,6 +5,7 @@ import { useEffect, useEffectEvent } from "react"
 
 import { DesktopRuntime, desktopRuntimeLayer } from "./desktop-runtime"
 import { CodeWorkspace, codeWorkspaceLayer } from "./code-workspace"
+import { CommentNotes, commentNotesLayer } from "./comment-notes"
 import { preloadClientLive } from "./preload-client"
 import { ProjectWorkspace, projectWorkspaceLayer } from "./project-workspace"
 import { RendererPreferences, rendererPreferencesLayer } from "./preferences"
@@ -19,6 +20,7 @@ export { runRendererPromise } from "./renderer-effect"
 export type RendererServices =
   | DesktopRuntime
   | CodeWorkspace
+  | CommentNotes
   | ProjectWorkspace
   | RendererPreferences
   | Repositories
@@ -30,6 +32,7 @@ export type RendererServices =
 const capabilityLayers = Layer.mergeAll(
   desktopRuntimeLayer,
   codeWorkspaceLayer,
+  commentNotesLayer,
   projectWorkspaceLayer,
   rendererPreferencesLayer,
   repositoriesLayer,
@@ -54,6 +57,9 @@ export const useDesktopRuntime = () => Context.get(useRendererContext(), Desktop
 
 /** Returns managed Code workspace capabilities from the shared renderer runtime. */
 export const useCodeWorkspace = () => Context.get(useRendererContext(), CodeWorkspace)
+
+/** Returns context-scoped collected comment-note capabilities from the shared renderer runtime. */
+export const useCommentNotes = () => Context.get(useRendererContext(), CommentNotes)
 
 /** Returns the project-target capability from the shared renderer runtime. */
 export const useProjectWorkspace = () => Context.get(useRendererContext(), ProjectWorkspace)

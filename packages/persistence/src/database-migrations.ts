@@ -13,7 +13,7 @@ interface DatabaseMigration {
   readonly migrate: (database: Database) => Effect.Effect<void, SqlError | DatabaseError>
 }
 
-const MAX_SUPPORTED_DATABASE_SCHEMA_VERSION = 16
+const MAX_SUPPORTED_DATABASE_SCHEMA_VERSION = 18
 const REPOSITORY_IDENTITY_CAPABILITY = "repository-identity"
 const REPOSITORY_IDENTITY_CAPABILITY_VERSION = 1
 const REVIEW_PROVIDER_FAILURE_CAPABILITY = "review-provider-failure"
@@ -1094,6 +1094,52 @@ const migrations: readonly DatabaseMigration[] = [
 
         DROP TABLE project_workspace_state;
         ALTER TABLE project_workspace_state_utf8_navigation RENAME TO project_workspace_state;
+        `,
+      )
+    }),
+  },
+  {
+    version: 17,
+    migrate: Effect.fn("DatabaseMigration.17")(function* (database) {
+      yield* executeSqlScript(
+        database,
+        `
+        CREATE TABLE IF NOT EXISTS comment_notes (
+          id TEXT PRIMARY KEY CHECK (length(id) BETWEEN 1 AND 128),
+          repo_id TEXT NOT NULL REFERENCES repos(id) ON DELETE CASCADE,
+          subject_json TEXT NOT NULL CHECK (
+            json_valid(subject_json) AND
+            length(CAST(subject_json AS BLOB)) <= 1048576
+          ),
+          body_markdown TEXT NOT NULL CHECK (
+            length(CAST(body_markdown AS BLOB)) <= 1048576
+          ),
+          created_at TEXT NOT NULL
+        );
+
+        CREATE INDEX IF NOT EXISTS comment_notes_project_idx
+          ON comment_notes(repo_id, created_at ASC, id ASC);
+        `,
+      )
+    }),
+  },
+  {
+    version: 18,
+    migrate: Effect.fn("DatabaseMigration.18")(function* (database) {
+      const columns = yield* database.all("PRAGMA table_info(comment_notes)")
+      if (!columns.some((column) => column.name === "context_key")) {
+        yield* database.run(
+          `ALTER TABLE comment_notes
+           ADD COLUMN context_key TEXT NOT NULL DEFAULT 'project'
+           CHECK (length(context_key) BETWEEN 1 AND 4096)`,
+        )
+      }
+      yield* executeSqlScript(
+        database,
+        `
+        DROP INDEX IF EXISTS comment_notes_project_idx;
+        CREATE INDEX IF NOT EXISTS comment_notes_context_idx
+          ON comment_notes(repo_id, context_key, created_at ASC, id ASC);
         `,
       )
     }),

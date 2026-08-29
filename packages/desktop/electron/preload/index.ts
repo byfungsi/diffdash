@@ -49,6 +49,13 @@ const api: DiffDashBridgeApi = {
       transport.invoke(InvokeChannel.aiConnectOpenCodeSession, request),
     submitComment: (request) => transport.invoke(InvokeChannel.aiSubmitComment, request),
   },
+  commentNotes: {
+    list: (request) => transport.invoke(InvokeChannel.listCommentNotes, request),
+    create: (request) => transport.invoke(InvokeChannel.createCommentNote, request),
+    delete: (request) => transport.invoke(InvokeChannel.deleteCommentNote, request),
+    clear: (request) => transport.invoke(InvokeChannel.clearCommentNotes, request),
+    send: (request) => transport.invoke(InvokeChannel.sendCommentNotes, request),
+  },
   installDiffDashCli: () => transport.invoke(InvokeChannel.appInstallDiffDashCli, {}),
   openExternalUrl: (url) => transport.invoke(InvokeChannel.appOpenExternalUrl, { url }),
   openRepositoryFile: (request) => transport.invoke(InvokeChannel.appOpenRepositoryFile, request),

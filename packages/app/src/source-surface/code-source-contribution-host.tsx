@@ -1,6 +1,7 @@
 import { Array as EffectArray, HashMap, Option, Order } from "effect"
 import {
   createContext,
+  Fragment,
   type ReactNode,
   use,
   useCallback,
@@ -44,9 +45,14 @@ const CodeSourceContributionRegistrationContext = createContext<
   CodeSourceContributionRegistration | undefined
 >(undefined)
 
-/** Annotation metadata kept generic by the Code source host. */
-export interface CodeSourceHostAnnotation {
+interface CodeSourceHostAnnotationEntry {
   readonly contributionKey: string
+  readonly annotationIndex: number
+}
+
+/** Grouped annotation metadata kept generic by the Code source host. */
+export interface CodeSourceHostAnnotation {
+  readonly entries: readonly CodeSourceHostAnnotationEntry[]
 }
 
 /** Registers the current extension component's semantic Code source behavior. */
@@ -72,7 +78,7 @@ export const useCodeSourceContributionHost = (
   readonly generation: number
   readonly mounts: ReactNode
   readonly activateLine: (lineNumber: number, lineContent: string) => boolean
-  readonly renderAnnotation: (contributionKey: string) => ReactNode
+  readonly renderAnnotation: (annotation: CodeSourceHostAnnotation) => ReactNode
 } => {
   const [registrations, setRegistrations] = useState<
     HashMap.HashMap<string, RegisteredCodeSourceContribution>
@@ -109,12 +115,18 @@ export const useCodeSourceContributionHost = (
     Array.from(HashMap.values(registrations)),
     registeredCodeSourceContributionOrder,
   )
-  const annotations = orderedRegistrations.flatMap(({ key, output }) =>
-    Option.match(output.annotation, {
-      onNone: () => [],
-      onSome: ({ lineNumber }) => [{ lineNumber, metadata: { contributionKey: key } }],
-    }),
-  )
+  const annotationsByLine = new Map<number, CodeSourceHostAnnotationEntry[]>()
+  for (const { key, output } of orderedRegistrations) {
+    output.annotations.forEach(({ lineNumber }, annotationIndex) => {
+      const entries = annotationsByLine.get(lineNumber) ?? []
+      entries.push({ contributionKey: key, annotationIndex })
+      annotationsByLine.set(lineNumber, entries)
+    })
+  }
+  const annotations = Array.from(annotationsByLine, ([lineNumber, entries]) => ({
+    lineNumber,
+    metadata: { entries },
+  }))
   const activateLine = useCallback(
     (lineNumber: number, lineContent: string): boolean => {
       const target: CodeSourceLineTarget = { ...source, lineNumber, lineContent }
@@ -126,16 +138,15 @@ export const useCodeSourceContributionHost = (
     },
     [source],
   )
-  const renderAnnotation = (contributionKey: string): ReactNode => {
-    return Option.match(HashMap.get(registrations, contributionKey), {
-      onNone: () => null,
-      onSome: ({ output }) =>
-        Option.match(output.annotation, {
+  const renderAnnotation = (annotation: CodeSourceHostAnnotation): ReactNode =>
+    annotation.entries.map(({ contributionKey, annotationIndex }) => (
+      <Fragment key={`${contributionKey}:${String(annotationIndex)}`}>
+        {Option.match(HashMap.get(registrations, contributionKey), {
           onNone: () => null,
-          onSome: ({ render }) => render(),
-        }),
-    })
-  }
+          onSome: ({ output }) => output.annotations.at(annotationIndex)?.render() ?? null,
+        })}
+      </Fragment>
+    ))
   const mounts = contributions.map((contribution) => (
     <CodeSourceContributionScope
       key={`${contribution.ownerExtensionId}:${contribution.id}:${contribution.ownerRegistrationToken.reactKey}`}

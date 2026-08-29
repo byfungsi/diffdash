@@ -8,6 +8,7 @@ import {
 } from "@diffdash/domain/project-workspace"
 import type { ParsedDiffFile } from "@diffdash/domain/diff"
 import type { ReviewProjectId, ReviewRevision } from "@diffdash/domain/review-identity"
+import type { CommentNoteContext } from "@diffdash/domain/comment-note"
 import type { GitCommitSha } from "@diffdash/domain/repository-comparison"
 import type { Repo, RepositoryCheckoutPath } from "@diffdash/domain/repository"
 import type { RepositoryRelativePath } from "@diffdash/domain/repository-path"
@@ -257,10 +258,10 @@ export interface CodeSourceLineTarget extends CodeSourceContext {
 /** Output registered by one mounted trusted Code source contribution. */
 export interface CodeSourceContributionOutput {
   readonly handleLineAction: (target: CodeSourceLineTarget) => boolean
-  readonly annotation: Option.Option<{
+  readonly annotations: readonly {
     readonly lineNumber: number
     readonly render: () => ReactNode
-  }>
+  }[]
 }
 
 /** Project context supplied to one trusted Code source contribution. */
@@ -278,6 +279,7 @@ export interface CodeSourceContribution {
 /** Review context supplied to one trusted review diff contribution. */
 export interface ReviewDiffContributionProps {
   readonly projectId: ReviewProjectId
+  readonly commentNoteContext: CommentNoteContext
   readonly target: ReviewThreadTarget
   readonly baseRevision: ReviewRevision
   readonly headRevision: ReviewRevision

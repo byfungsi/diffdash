@@ -484,6 +484,21 @@ export const coreRpcClientLayer = (options: CoreRpcClientOptions) => {
         submitComment: Effect.fn("CoreRpcClient.submitComment")((request) =>
           authenticated(client("CommentSubmission.submit", request)),
         ),
+        listCommentNotes: Effect.fn("CoreRpcClient.listCommentNotes")((request) =>
+          authenticated(client("CommentNotes.list", request)),
+        ),
+        createCommentNote: Effect.fn("CoreRpcClient.createCommentNote")((request) =>
+          authenticated(client("CommentNotes.create", request)),
+        ),
+        deleteCommentNote: Effect.fn("CoreRpcClient.deleteCommentNote")((request) =>
+          authenticated(client("CommentNotes.delete", request)),
+        ),
+        clearCommentNotes: Effect.fn("CoreRpcClient.clearCommentNotes")((request) =>
+          authenticated(client("CommentNotes.clear", request)),
+        ),
+        sendCommentNotes: Effect.fn("CoreRpcClient.sendCommentNotes")((request) =>
+          authenticated(client("CommentNotes.send", request)),
+        ),
         addReviewThreadUserMessage: Effect.fn("CoreRpcClient.addReviewThreadUserMessage")(
           (request) => authenticated(client("ReviewThreads.addUserMessage", request)),
         ),

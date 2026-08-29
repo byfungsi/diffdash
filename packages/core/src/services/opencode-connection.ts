@@ -6,6 +6,7 @@ import {
   type OpenCodeSessionId,
   OpenCodeSessionSummary,
 } from "@diffdash/domain/comment"
+import { type CommentNote, formatCommentNotes } from "@diffdash/domain/comment-note"
 import type { RepositoryCheckoutPath } from "@diffdash/domain/repository"
 import type { ReviewProjectId } from "@diffdash/domain/review-identity"
 import type {
@@ -22,7 +23,12 @@ import { type ProcessRunner, ProcessService, processRequest } from "@diffdash/pr
 import { findExecutableInPath } from "@diffdash/process/executable"
 import { Context, Effect, Layer, Option, Schema } from "effect"
 
-const OpenCodeOperation = Schema.Literals(["connect", "forwardComment", "listSessions"])
+const OpenCodeOperation = Schema.Literals([
+  "connect",
+  "forwardComment",
+  "forwardNotes",
+  "listSessions",
+])
 /** OpenCode API operation classified by the connection adapter. */
 export type OpenCodeOperation = typeof OpenCodeOperation.Type
 
@@ -65,6 +71,13 @@ export interface ForwardOpenCodeCommentInput {
   readonly body: MarkdownBody
 }
 
+/** Authorized ordered note snapshot accepted by Core-owned OpenCode forwarding. */
+export interface ForwardOpenCodeNotesInput {
+  readonly projectId: ReviewProjectId
+  readonly sessionId: OpenCodeSessionId
+  readonly notes: readonly CommentNote[]
+}
+
 /** Core-owned OpenCode session discovery, connection, and forwarding capability. */
 export interface OpenCodeConnectionOperations {
   readonly listSessions: (
@@ -75,6 +88,9 @@ export interface OpenCodeConnectionOperations {
   ) => Effect.Effect<OpenCodeConnection, OpenCodeConnectionError>
   readonly forwardComment: (
     request: ForwardOpenCodeCommentInput,
+  ) => Effect.Effect<void, OpenCodeConnectionError>
+  readonly forwardNotes: (
+    request: ForwardOpenCodeNotesInput,
   ) => Effect.Effect<void, OpenCodeConnectionError>
 }
 
@@ -269,6 +285,70 @@ export const makeOpenCodeConnectionService = (
     }
     return repository.localPath
   })
+  const forwardPrompt = Effect.fn("OpenCodeConnection.forwardPrompt")(function* (
+    projectId: ReviewProjectId,
+    sessionId: OpenCodeSessionId,
+    operation: "forwardComment" | "forwardNotes",
+    text: string,
+  ) {
+    if (operation === "forwardNotes" && text.length > MAX_PROMPT_CHARACTERS) {
+      return yield* Effect.fail(
+        failure(
+          operation,
+          "The collected notes are too large to send in one OpenCode prompt. Remove or copy some notes, then retry.",
+          new Error("The collected note prompt exceeds the OpenCode prompt limit"),
+        ),
+      )
+    }
+    const connection = connections.get(sessionId)
+    if (connection === undefined || connection.projectId !== projectId) {
+      return yield* Effect.fail(
+        failure(
+          operation,
+          "Reconnect this OpenCode session before forwarding comments.",
+          new Error("The selected OpenCode session is not authorized for this project"),
+        ),
+      )
+    }
+    const directory = yield* resolveCheckout(projectId, operation)
+    if (directory !== connection.directory) {
+      connections.delete(sessionId)
+      return yield* Effect.fail(
+        failure(
+          operation,
+          "Reconnect this OpenCode session after changing the linked checkout.",
+          new Error("The authorized project checkout changed after OpenCode connection"),
+        ),
+      )
+    }
+    const output = yield* command.run(
+      OpenCodeApiRequest.cases.Post.make({
+        operation,
+        path: `/api/session/${sessionId}/prompt`,
+        body: encodePrompt({
+          text: operation === "forwardNotes" ? text : boundText(text, MAX_PROMPT_CHARACTERS),
+        }),
+      }),
+    )
+    const response = yield* decodeResponse(
+      operation,
+      operation === "forwardNotes"
+        ? "OpenCode did not accept these notes."
+        : "OpenCode did not accept this comment.",
+      parsePrompt,
+      output,
+    )
+    if (response.data.sessionID !== sessionId) {
+      return yield* Effect.fail(
+        failure(
+          operation,
+          "OpenCode accepted the comment for an unexpected session.",
+          new Error(`Expected ${sessionId}, received ${response.data.sessionID}`),
+        ),
+      )
+    }
+    return yield* Effect.void
+  })
 
   return {
     listSessions: Effect.fn("OpenCodeConnection.listSessions")(function* (
@@ -385,27 +465,6 @@ export const makeOpenCodeConnectionService = (
     forwardComment: Effect.fn("OpenCodeConnection.forwardComment")(function* (
       request: ForwardOpenCodeCommentInput,
     ) {
-      const connection = connections.get(request.sessionId)
-      if (connection === undefined || connection.projectId !== request.projectId) {
-        return yield* Effect.fail(
-          failure(
-            "forwardComment",
-            "Reconnect this OpenCode session before forwarding comments.",
-            new Error("The selected OpenCode session is not authorized for this project"),
-          ),
-        )
-      }
-      const directory = yield* resolveCheckout(request.projectId, "forwardComment")
-      if (directory !== connection.directory) {
-        connections.delete(request.sessionId)
-        return yield* Effect.fail(
-          failure(
-            "forwardComment",
-            "Reconnect this OpenCode session after changing the linked checkout.",
-            new Error("The authorized project checkout changed after OpenCode connection"),
-          ),
-        )
-      }
       if (
         CommentSubject.guards.CodeLine(request.subject) &&
         request.subject.projectId !== request.projectId
@@ -418,29 +477,22 @@ export const makeOpenCodeConnectionService = (
           ),
         )
       }
-      const output = yield* command.run(
-        OpenCodeApiRequest.cases.Post.make({
-          operation: "forwardComment",
-          path: `/api/session/${request.sessionId}/prompt`,
-          body: encodePrompt({ text: formatCommentForAgent(request.subject, request.body) }),
-        }),
-      )
-      const response = yield* decodeResponse(
+      return yield* forwardPrompt(
+        request.projectId,
+        request.sessionId,
         "forwardComment",
-        "OpenCode did not accept this comment.",
-        parsePrompt,
-        output,
+        formatCommentForAgent(request.subject, request.body),
       )
-      if (response.data.sessionID !== request.sessionId) {
-        return yield* Effect.fail(
-          failure(
-            "forwardComment",
-            "OpenCode accepted the comment for an unexpected session.",
-            new Error(`Expected ${request.sessionId}, received ${response.data.sessionID}`),
-          ),
-        )
-      }
-      return yield* Effect.void
+    }),
+    forwardNotes: Effect.fn("OpenCodeConnection.forwardNotes")(function* (
+      request: ForwardOpenCodeNotesInput,
+    ) {
+      yield* forwardPrompt(
+        request.projectId,
+        request.sessionId,
+        "forwardNotes",
+        formatCommentNotes(request.notes),
+      )
     }),
   }
 }

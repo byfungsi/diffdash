@@ -122,6 +122,11 @@ interface ApplicationCoreRuntime {
     typeof CoreMethod.connectOpenCodeSession
   >
   readonly submitComment: ApplicationCoreOperation<typeof CoreMethod.submitComment>
+  readonly listCommentNotes: ApplicationCoreOperation<typeof CoreMethod.listCommentNotes>
+  readonly createCommentNote: ApplicationCoreOperation<typeof CoreMethod.createCommentNote>
+  readonly deleteCommentNote: ApplicationCoreOperation<typeof CoreMethod.deleteCommentNote>
+  readonly clearCommentNotes: ApplicationCoreOperation<typeof CoreMethod.clearCommentNotes>
+  readonly sendCommentNotes: ApplicationCoreOperation<typeof CoreMethod.sendCommentNotes>
   readonly addReviewThreadUserMessage: ApplicationCoreOperation<
     typeof CoreMethod.addReviewThreadUserMessage
   >

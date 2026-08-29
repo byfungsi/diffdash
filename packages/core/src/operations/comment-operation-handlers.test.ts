@@ -8,6 +8,13 @@ import {
   OpenCodeSessionId,
   OpenCodeSessionSummary,
 } from "@diffdash/domain/comment"
+import {
+  type CommentNoteContext,
+  CommentNote,
+  CommentNoteId,
+  CommentNoteSubject,
+  ProjectCommentNoteContext,
+} from "@diffdash/domain/comment-note"
 import { ApplicationInstanceId, CoreProcessEpoch, HostRequestId } from "@diffdash/core-rpc/identity"
 import type { StartReviewAgentOperationRequest } from "@diffdash/core-rpc/review-agent"
 import { AgentRunId } from "@diffdash/domain/agent-run-id"
@@ -31,21 +38,25 @@ import {
   ReviewThreadDetails,
   ReviewThreadId,
 } from "@diffdash/domain/review-thread"
-import { Effect, Layer } from "effect"
+import { Deferred, Effect, Layer } from "effect"
 import { describe, expect, it, vi } from "vitest"
 import type { AddReviewThreadUserMessageForSubjectInput } from "@diffdash/persistence/review-thread-store"
+import { CommentNoteStore } from "@diffdash/persistence/comment-note-store"
 
 import { CoreMethod } from "../core-contract"
 import {
   makeOpenCodeConnectionService,
   OpenCodeApiRequest,
+  OpenCodeConnectionError,
   OpenCodeConnectionService,
+  type ForwardOpenCodeNotesInput,
   type OpenCodeApiCommand,
 } from "../services/opencode-connection"
 import { makeCommentOperationHandlers } from "./comment-operation-handlers"
 
 const directory = RepositoryCheckoutPath.make("/workspace")
 const projectId = ReviewProjectId.make("project-1")
+const noteContext = ProjectCommentNoteContext.make({})
 const target = workingTreeReviewTarget(directory)
 const baseRevision = ReviewRevision.make("base")
 const headRevision = ReviewRevision.make("head")
@@ -101,10 +112,225 @@ const requestOptions = {
   processEpoch: CoreProcessEpoch.make("epoch-comments"),
   requestId: HostRequestId.make("h:comments"),
 }
+const notesSessionId = OpenCodeSessionId.make("ses_notes")
+const connection = OpenCodeConnectionSelection.make({
+  projectId,
+  session: OpenCodeSessionSummary.make({
+    id: notesSessionId,
+    title: "Notes session",
+    directory,
+    updatedAt: 1,
+  }),
+  planMode: true,
+})
+const collectedNote = CommentNote.make({
+  id: CommentNoteId.make("note-1"),
+  projectId,
+  subject: CommentNoteSubject.cases.CodeLine.make({
+    workspaceRevision: ReviewRevision.make("workspace-1"),
+    gitRevision: null,
+    path: RepositoryRelativePath.make("src/example.ts"),
+    lineNumber: 3,
+    lineContent: "return value",
+  }),
+  body: MarkdownBody.make("Explain this return."),
+  createdAt: "2026-08-29T10:00:00.000Z",
+})
 const resolveReview = () =>
   Effect.succeed({ projectId, reviewKey: details.thread.reviewKey, baseRevision, headRevision })
+const commentNoteStoreLayer = Layer.succeed(
+  CommentNoteStore,
+  CommentNoteStore.of({
+    list: () => Effect.die("Comment notes must not run"),
+    create: () => Effect.die("Comment notes must not run"),
+    delete: () => Effect.die("Comment notes must not run"),
+    deleteMany: () => Effect.die("Comment notes must not run"),
+    clear: () => Effect.die("Comment notes must not run"),
+  }),
+)
 
 describe("comment operation handlers", () => {
+  it("deletes only the delivered note snapshot after OpenCode accepts it", async () => {
+    const deleteMany = vi.fn<
+      (
+        projectId: ReviewProjectId,
+        context: CommentNoteContext,
+        noteIds: readonly CommentNoteId[],
+      ) => Effect.Effect<void>
+    >(() => Effect.void)
+    const forwardNotes = vi.fn<(request: ForwardOpenCodeNotesInput) => Effect.Effect<void>>(
+      () => Effect.void,
+    )
+    const storeLayer = Layer.succeed(
+      CommentNoteStore,
+      CommentNoteStore.of({
+        list: () => Effect.succeed([collectedNote]),
+        create: () => Effect.die("Create must not run"),
+        delete: () => Effect.die("Delete must not run"),
+        deleteMany,
+        clear: () => Effect.die("Clear must not run"),
+      }),
+    )
+    const openCodeLayer = Layer.succeed(
+      OpenCodeConnectionService,
+      OpenCodeConnectionService.of({
+        listSessions: () => Effect.die("List must not run"),
+        connect: () => Effect.die("Connect must not run"),
+        forwardComment: () => Effect.die("Comment must not run"),
+        forwardNotes,
+      }),
+    )
+    const handlers = await Effect.runPromise(
+      makeCommentOperationHandlers(
+        {
+          [CoreMethod.createReviewThread]: () => Effect.die("Thread create must not run"),
+          [CoreMethod.addReviewThreadUserMessage]: () => Effect.die("Thread update must not run"),
+        },
+        () => Effect.die("Agent must not run"),
+        resolveReview,
+        () => Effect.die("Follow-up must not run"),
+      ).pipe(Effect.provide(openCodeLayer), Effect.provide(storeLayer)),
+    )
+
+    const receipt = await Effect.runPromise(
+      handlers[CoreMethod.sendCommentNotes]({ projectId, context: noteContext, connection }, {}),
+    )
+
+    expect(receipt.sentCount).toBe(1)
+    expect(forwardNotes).toHaveBeenCalledWith({
+      projectId,
+      sessionId: notesSessionId,
+      notes: [collectedNote],
+    })
+    expect(deleteMany).toHaveBeenCalledWith(projectId, noteContext, [collectedNote.id])
+  })
+
+  it("retains the note snapshot when OpenCode delivery fails", async () => {
+    const deleteMany = vi.fn<
+      (
+        projectId: ReviewProjectId,
+        context: CommentNoteContext,
+        noteIds: readonly CommentNoteId[],
+      ) => Effect.Effect<void>
+    >(() => Effect.void)
+    const deliveryFailure = OpenCodeConnectionError.make({
+      operation: "forwardNotes",
+      code: "OPENCODE_DELIVERY_FAILED",
+      safeMessage: "OpenCode did not accept these notes.",
+      cause: new Error("Connection refused"),
+    })
+    const handlers = await Effect.runPromise(
+      makeCommentOperationHandlers(
+        {
+          [CoreMethod.createReviewThread]: () => Effect.die("Thread create must not run"),
+          [CoreMethod.addReviewThreadUserMessage]: () => Effect.die("Thread update must not run"),
+        },
+        () => Effect.die("Agent must not run"),
+        resolveReview,
+        () => Effect.die("Follow-up must not run"),
+      ).pipe(
+        Effect.provide(
+          Layer.succeed(
+            OpenCodeConnectionService,
+            OpenCodeConnectionService.of({
+              listSessions: () => Effect.die("List must not run"),
+              connect: () => Effect.die("Connect must not run"),
+              forwardComment: () => Effect.die("Comment must not run"),
+              forwardNotes: () => Effect.fail(deliveryFailure),
+            }),
+          ),
+        ),
+        Effect.provide(
+          Layer.succeed(
+            CommentNoteStore,
+            CommentNoteStore.of({
+              list: () => Effect.succeed([collectedNote]),
+              create: () => Effect.die("Create must not run"),
+              delete: () => Effect.die("Delete must not run"),
+              deleteMany,
+              clear: () => Effect.die("Clear must not run"),
+            }),
+          ),
+        ),
+      ),
+    )
+
+    const failure = await Effect.runPromise(
+      Effect.flip(
+        handlers[CoreMethod.sendCommentNotes]({ projectId, context: noteContext, connection }, {}),
+      ),
+    )
+
+    expect(failure).toBe(deliveryFailure)
+    expect(deleteMany).not.toHaveBeenCalled()
+  })
+
+  it("serializes overlapping sends so a note snapshot is delivered once", async () => {
+    const deliveryStarted = await Effect.runPromise(Deferred.make<void>())
+    const releaseDelivery = await Effect.runPromise(Deferred.make<void>())
+    let storedNotes: readonly CommentNote[] = [collectedNote]
+    let deliveryCount = 0
+    const handlers = await Effect.runPromise(
+      makeCommentOperationHandlers(
+        {
+          [CoreMethod.createReviewThread]: () => Effect.die("Thread create must not run"),
+          [CoreMethod.addReviewThreadUserMessage]: () => Effect.die("Thread update must not run"),
+        },
+        () => Effect.die("Agent must not run"),
+        resolveReview,
+        () => Effect.die("Follow-up must not run"),
+      ).pipe(
+        Effect.provide(
+          Layer.succeed(
+            OpenCodeConnectionService,
+            OpenCodeConnectionService.of({
+              listSessions: () => Effect.die("List must not run"),
+              connect: () => Effect.die("Connect must not run"),
+              forwardComment: () => Effect.die("Comment must not run"),
+              forwardNotes: () => {
+                deliveryCount += 1
+                return deliveryCount === 1
+                  ? Deferred.succeed(deliveryStarted, undefined).pipe(
+                      Effect.andThen(Deferred.await(releaseDelivery)),
+                    )
+                  : Effect.void
+              },
+            }),
+          ),
+        ),
+        Effect.provide(
+          Layer.succeed(
+            CommentNoteStore,
+            CommentNoteStore.of({
+              list: () => Effect.succeed(storedNotes),
+              create: () => Effect.die("Create must not run"),
+              delete: () => Effect.die("Delete must not run"),
+              deleteMany: () => Effect.sync(() => (storedNotes = [])),
+              clear: () => Effect.die("Clear must not run"),
+            }),
+          ),
+        ),
+      ),
+    )
+
+    const firstSend = Effect.runPromise(
+      handlers[CoreMethod.sendCommentNotes]({ projectId, context: noteContext, connection }, {}),
+    )
+    await Effect.runPromise(Deferred.await(deliveryStarted))
+    const secondSend = Effect.runPromise(
+      handlers[CoreMethod.sendCommentNotes]({ projectId, context: noteContext, connection }, {}),
+    )
+    await Promise.resolve()
+    expect(deliveryCount).toBe(1)
+    await Effect.runPromise(Deferred.succeed(releaseDelivery, undefined))
+
+    await expect(Promise.all([firstSend, secondSend])).resolves.toMatchObject([
+      { sentCount: 1 },
+      { sentCount: 0 },
+    ])
+    expect(deliveryCount).toBe(1)
+  })
+
   it("stores locally without invoking OpenCode", async () => {
     const command = vi.fn<OpenCodeApiCommand["run"]>(() => Effect.die("OpenCode was invoked"))
     const create = vi.fn<() => Effect.Effect<ReviewThreadDetails>>(() => Effect.succeed(details))
@@ -129,6 +355,7 @@ describe("comment operation handlers", () => {
             ),
           ),
         ),
+        Effect.provide(commentNoteStoreLayer),
       ),
     )
 
@@ -195,6 +422,7 @@ describe("comment operation handlers", () => {
         Effect.provide(
           Layer.succeed(OpenCodeConnectionService, OpenCodeConnectionService.of(openCode)),
         ),
+        Effect.provide(commentNoteStoreLayer),
       ),
     )
 
@@ -250,6 +478,7 @@ describe("comment operation handlers", () => {
             ),
           ),
         ),
+        Effect.provide(commentNoteStoreLayer),
       ),
     )
 
@@ -319,6 +548,7 @@ describe("comment operation handlers", () => {
             ),
           ),
         ),
+        Effect.provide(commentNoteStoreLayer),
       ),
     )
 
