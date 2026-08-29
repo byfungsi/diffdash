@@ -7,6 +7,7 @@ import {
   AgentProviderStatus,
 } from "@diffdash/domain/agent-provider"
 import { AISettings, DEFAULT_AI_SETTINGS } from "@diffdash/domain/ai-settings"
+import { CommentNote } from "@diffdash/domain/comment-note"
 import { DiagnosticOperation } from "@diffdash/domain/diagnostic-operation"
 import { CodeWorkspaceLease, CodeWorkspaceLeaseId } from "@diffdash/domain/code-workspace"
 import { DiffFileVisibility } from "@diffdash/domain/diff"
@@ -47,6 +48,7 @@ import {
 } from "@diffdash/domain/review-identity"
 import {
   AgentProvidersGetCatalogRpc,
+  CommentNotesListRpc,
   PrerequisitesGetRpc,
   ProjectWorkspaceGetRpc,
   RepositoryComparisonsResolveRpc,
@@ -1119,6 +1121,46 @@ describe("IPC contract", () => {
     expect(envelope.value).toBeInstanceOf(AgentProviderCatalog)
   })
 
+  it("re-encodes Core RPC-decoded comment notes for renderer IPC", async () => {
+    const note = Schema.decodeUnknownSync(CommentNote)({
+      id: "note-1",
+      projectId: "project",
+      subject: {
+        _tag: "CodeLine",
+        workspaceRevision: "workspace-revision",
+        gitRevision: null,
+        path: "source.ts",
+        lineNumber: 1,
+        lineContent: "const value = 1",
+      },
+      body: "Check this value.",
+      createdAt: "2026-08-29T00:00:00.000Z",
+    })
+    const coreCodec = Schema.toCodecJson(CommentNotesListRpc.successSchema)
+    const mainOwnedNotes = Schema.decodeUnknownSync(coreCodec)(Schema.encodeSync(coreCodec)([note]))
+    const host = hostIpc()
+    const registry = new IpcControllerRegistry(testRendererSecurityPolicy(), host.api, [
+      InvokeChannel.listCommentNotes,
+    ])
+    registry.define(InvokeChannel.listCommentNotes, async () => mainOwnedNotes)
+    registry.install()
+
+    const response = await host.handler?.(trustedEvent(), {
+      projectId: "project",
+      context: { _tag: "project" },
+    })
+    const envelope = Schema.decodeUnknownSync(
+      successEnvelope(invokeResponseSchema(InvokeChannel.listCommentNotes)),
+    )(response)
+
+    expect(response).toMatchObject({
+      _tag: "Success",
+      value: [{ id: "note-1", subject: { _tag: "CodeLine", lineNumber: 1 } }],
+    })
+    expect(mainOwnedNotes[0]).toBeInstanceOf(CommentNote)
+    expect(envelope.value[0]).toBeInstanceOf(CommentNote)
+  })
+
   it("re-encodes other Core RPC-decoded domain classes for renderer IPC", async () => {
     const target = LocalReviewTarget.make({
       kind: "local",
@@ -1632,6 +1674,11 @@ const testRuntime = (message: string): ApplicationRuntime => {
       listOpenCodeSessions: reject,
       connectOpenCodeSession: reject,
       submitComment: reject,
+      listCommentNotes: reject,
+      createCommentNote: reject,
+      deleteCommentNote: reject,
+      clearCommentNotes: reject,
+      sendCommentNotes: reject,
       addReviewThreadUserMessage: reject,
       createReviewThread: reject,
       getReviewThread: reject,

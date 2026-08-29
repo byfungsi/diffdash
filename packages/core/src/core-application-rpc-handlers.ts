@@ -573,6 +573,26 @@ export const coreApplicationRpcHandlersLayer = CoreApplicationRpcs.toLayer(
             requestId: request.requestId,
           }),
         ),
+      "CommentNotes.list": (request: ApplicationRpcRequest<"CommentNotes.list">) =>
+        handle("CommentNotes.list", request, (methods) =>
+          methods["CommentNotes.list"](request, {}),
+        ),
+      "CommentNotes.create": (request: ApplicationRpcRequest<"CommentNotes.create">) =>
+        handle("CommentNotes.create", request, (methods) =>
+          methods["CommentNotes.create"](request, {}),
+        ),
+      "CommentNotes.delete": (request: ApplicationRpcRequest<"CommentNotes.delete">) =>
+        handle("CommentNotes.delete", request, (methods) =>
+          methods["CommentNotes.delete"](request, {}),
+        ),
+      "CommentNotes.clear": (request: ApplicationRpcRequest<"CommentNotes.clear">) =>
+        handle("CommentNotes.clear", request, (methods) =>
+          methods["CommentNotes.clear"](request, {}),
+        ),
+      "CommentNotes.send": (request: ApplicationRpcRequest<"CommentNotes.send">) =>
+        handle("CommentNotes.send", request, (methods) =>
+          methods["CommentNotes.send"](request, {}),
+        ),
       "ReviewThreads.addUserMessage": (
         request: ApplicationRpcRequest<"ReviewThreads.addUserMessage">,
       ) =>

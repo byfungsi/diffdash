@@ -1,4 +1,5 @@
 import { LocalReviewTarget, RevisionRangeComparison } from "@diffdash/domain/local-review"
+import { LocalCommentNoteContext } from "@diffdash/domain/comment-note"
 import { RepositoryCheckoutPath } from "@diffdash/domain/repository"
 import { RepositoryComparisonRef } from "@diffdash/domain/repository-comparison"
 import { ReviewProjectId, ReviewRevision } from "@diffdash/domain/review-identity"
@@ -33,19 +34,21 @@ import {
 let root: Root | null = null
 const baseRevision = ReviewRevision.make("1".repeat(40))
 const headRevision = ReviewRevision.make("2".repeat(40))
+const target = LocalReviewTarget.make({
+  kind: "local",
+  rootPath: RepositoryCheckoutPath.make("/workspace/review-contribution-host"),
+  comparison: RevisionRangeComparison.make({
+    baseRef: RepositoryComparisonRef.make("main"),
+    headRef: RepositoryComparisonRef.make("HEAD"),
+    baseSha: baseRevision,
+    headSha: headRevision,
+    mergeBaseSha: baseRevision,
+  }),
+})
 const props = {
   projectId: ReviewProjectId.make("review-contribution-host"),
-  target: LocalReviewTarget.make({
-    kind: "local",
-    rootPath: RepositoryCheckoutPath.make("/workspace/review-contribution-host"),
-    comparison: RevisionRangeComparison.make({
-      baseRef: RepositoryComparisonRef.make("main"),
-      headRef: RepositoryComparisonRef.make("HEAD"),
-      baseSha: baseRevision,
-      headSha: headRevision,
-      mergeBaseSha: baseRevision,
-    }),
-  }),
+  commentNoteContext: LocalCommentNoteContext.make({ target, sourceBranch: null }),
+  target,
   baseRevision,
   headRevision,
 }

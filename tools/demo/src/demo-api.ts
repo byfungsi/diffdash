@@ -19,6 +19,7 @@ import {
   OpenCodeSessionId,
   OpenCodeSessionSummary,
 } from "@diffdash/domain/comment"
+import { CommentNote, CommentNoteId, SendCommentNotesReceipt } from "@diffdash/domain/comment-note"
 import {
   CodeWorkspaceEntry,
   CodeWorkspaceDirectoryPage,
@@ -464,6 +465,7 @@ export const createDemoRuntime = (scenario: MaterializedDemoScenario): DemoRunti
   const manifestCache = new Map<string, ReviewSnapshotManifest>()
   const projectWorkspaceStates = new Map<ReviewProjectId, ProjectWorkspaceState>()
   let repositories: Repo[] = []
+  let commentNotes: CommentNote[] = []
   let currentRevision = firstRevision
   let reviewDecision: ReviewDecision = "none"
   let reviewDecisionBody = ""
@@ -981,6 +983,33 @@ export const createDemoRuntime = (scenario: MaterializedDemoScenario): DemoRunti
                 }),
             }),
         }),
+    },
+    commentNotes: {
+      list: async ({ projectId }) => commentNotes.filter((note) => note.projectId === projectId),
+      create: async ({ projectId, subject, body }) => {
+        const note = CommentNote.make({
+          id: CommentNoteId.make(`demo-note-${String(commentNotes.length + 1)}`),
+          projectId,
+          subject,
+          body,
+          createdAt: new Date().toISOString(),
+        })
+        commentNotes = [...commentNotes, note]
+        return note
+      },
+      delete: async ({ projectId, noteId }) => {
+        commentNotes = commentNotes.filter(
+          (note) => note.projectId !== projectId || note.id !== noteId,
+        )
+      },
+      clear: async ({ projectId }) => {
+        commentNotes = commentNotes.filter((note) => note.projectId !== projectId)
+      },
+      send: async ({ projectId }) => {
+        const sentCount = commentNotes.filter((note) => note.projectId === projectId).length
+        commentNotes = commentNotes.filter((note) => note.projectId !== projectId)
+        return SendCommentNotesReceipt.make({ sentCount })
+      },
     },
     installDiffDashCli: async () => {
       record("app.installDiffDashCli")

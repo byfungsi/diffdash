@@ -1,4 +1,9 @@
 import type { ReviewThreadAnchor, ReviewThreadId } from "@diffdash/domain/review-thread"
+import {
+  commentNoteContextKey,
+  type CommentNoteContext,
+  ProjectCommentNoteContext,
+} from "@diffdash/domain/comment-note"
 import { Option } from "effect"
 import {
   createContext,
@@ -16,6 +21,7 @@ import type { ReviewThreadScopeIdentity } from "./review-thread-scope"
 import type { ReviewThreadsController } from "./review-threads"
 
 interface ReviewCommentsReviewRegistration {
+  readonly commentNoteContext: CommentNoteContext
   readonly scopeKey: ReviewThreadScopeIdentity
   readonly version: string
   readonly controller: ReviewThreadsController
@@ -24,11 +30,13 @@ interface ReviewCommentsReviewRegistration {
 
 /** Review-scoped list/detail coordination owned by the Review Comments extension. */
 export interface ReviewCommentsReviewState {
+  readonly commentNoteContext: CommentNoteContext
   readonly registration: ReviewCommentsReviewRegistration | null
   readonly sidebarState: ReviewThreadSidebarState
   readonly buttonRefs: RefObject<Map<ReviewThreadId, HTMLButtonElement>>
   readonly setSidebarState: (state: ReviewThreadSidebarState) => void
   readonly publish: (
+    commentNoteContext: CommentNoteContext,
     scopeKey: ReviewThreadScopeIdentity,
     version: string,
     controller: ReviewThreadsController,
@@ -49,15 +57,24 @@ export const ReviewCommentsReviewStateProvider = ({
     Option.none,
   )
   const [sidebarState, setSidebarState] = useState<ReviewThreadSidebarState>({ _tag: "collapsed" })
+  const [commentNoteContext, setCommentNoteContext] = useState<CommentNoteContext>(() =>
+    ProjectCommentNoteContext.make({}),
+  )
   const buttonRefs = useRef(new Map<ReviewThreadId, HTMLButtonElement>())
   const activeScopeKeyRef = useRef<Option.Option<ReviewThreadScopeIdentity>>(Option.none())
   const publish = useCallback(
     (
+      nextCommentNoteContext: CommentNoteContext,
       scopeKey: ReviewThreadScopeIdentity,
       version: string,
       controller: ReviewThreadsController,
       revealLine: (anchor: ReviewThreadAnchor) => void,
     ) => {
+      setCommentNoteContext((current) =>
+        commentNoteContextKey(current) === commentNoteContextKey(nextCommentNoteContext)
+          ? current
+          : nextCommentNoteContext,
+      )
       if (!Option.contains(activeScopeKeyRef.current, scopeKey)) {
         activeScopeKeyRef.current = Option.some(scopeKey)
         setSidebarState({ _tag: "collapsed" })
@@ -68,7 +85,13 @@ export const ReviewCommentsReviewStateProvider = ({
           (active) => active.scopeKey === scopeKey && active.version === version,
         )
           ? current
-          : Option.some({ scopeKey, version, controller, revealLine }),
+          : Option.some({
+              commentNoteContext: nextCommentNoteContext,
+              scopeKey,
+              version,
+              controller,
+              revealLine,
+            }),
       )
     },
     [],
@@ -82,13 +105,14 @@ export const ReviewCommentsReviewStateProvider = ({
   const value = useMemo<ReviewCommentsReviewState>(
     () => ({
       registration: Option.getOrNull(registration),
+      commentNoteContext,
       sidebarState,
       buttonRefs,
       setSidebarState,
       publish,
       clear,
     }),
-    [clear, publish, registration, sidebarState],
+    [clear, commentNoteContext, publish, registration, sidebarState],
   )
   return (
     <ReviewCommentsReviewStateContext value={value}>{children}</ReviewCommentsReviewStateContext>

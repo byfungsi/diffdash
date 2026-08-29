@@ -1,4 +1,5 @@
 import { CommentSubject, OpenCodeSessionId } from "@diffdash/domain/comment"
+import { CommentNote, CommentNoteId, CommentNoteSubject } from "@diffdash/domain/comment-note"
 import { LocalRepositorySource } from "@diffdash/domain/git-provider"
 import { workingTreeReviewTarget } from "@diffdash/domain/local-review"
 import { GitCommitSha } from "@diffdash/domain/repository-comparison"
@@ -224,6 +225,50 @@ describe("OpenCodeConnectionService", () => {
         }),
       ),
     ).resolves.toBeUndefined()
+  })
+
+  it("rejects an oversized note batch instead of truncating it", async () => {
+    const run = vi.fn<OpenCodeApiCommand["run"]>((request) =>
+      Effect.succeed(
+        OpenCodeApiRequest.match(request, {
+          Get: ({ path }) => (path.startsWith("/api/session/") ? sessionResponse : unavailablePlan),
+          Post: () => promptResponse,
+        }),
+      ),
+    )
+    const service = makeOpenCodeConnectionService({ run }, repositories)
+    await Effect.runPromise(
+      service.connect(ConnectOpenCodeSessionRequest.make({ sessionId, projectId })),
+    )
+    run.mockClear()
+
+    await expect(
+      Effect.runPromise(
+        service.forwardNotes({
+          projectId,
+          sessionId,
+          notes: [
+            CommentNote.make({
+              id: CommentNoteId.make("oversized-note"),
+              projectId,
+              subject: CommentNoteSubject.cases.CodeLine.make({
+                workspaceRevision: ReviewRevision.make("workspace-1"),
+                gitRevision: null,
+                path: RepositoryRelativePath.make("src/example.ts"),
+                lineNumber: 1,
+                lineContent: "export const example = true",
+              }),
+              body: MarkdownBody.make("x".repeat(70 * 1_024)),
+              createdAt: timestamp,
+            }),
+          ],
+        }),
+      ),
+    ).rejects.toMatchObject({
+      safeMessage:
+        "The collected notes are too large to send in one OpenCode prompt. Remove or copy some notes, then retry.",
+    })
+    expect(run).not.toHaveBeenCalled()
   })
 
   it("rejects successful command output containing an OpenCode error", async () => {

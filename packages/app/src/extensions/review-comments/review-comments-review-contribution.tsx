@@ -1,7 +1,8 @@
 import { CommentSubmissionReceipt } from "@diffdash/domain/comment"
+import { CommentNoteSubject, type CommentNote } from "@diffdash/domain/comment-note"
 import { type ReviewThreadAnchor, type ReviewThreadDetails } from "@diffdash/domain/review-thread"
 import { Match, Option } from "effect"
-import { ChevronDown, ChevronRight, MessageSquare } from "lucide-react"
+import { ChevronDown, ChevronRight, MessageSquare, X } from "lucide-react"
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react"
 
 import type {
@@ -24,6 +25,8 @@ import { useReviewCommentsReviewState } from "./review-comments-review-state"
 import { ReviewThreadComposer, ReviewThreadPanel, useReviewThreads } from "./review-threads"
 import { reviewLineLabel, syncPinnedReviewThreadHistories } from "./review-thread-presentation"
 import { ReviewThreadScope, reviewThreadScopeIdentity } from "./review-thread-scope"
+import { useReviewCommentsState } from "./review-comments-provider"
+import { CommentNoteList } from "./comment-note-list"
 
 /** Review Comments behavior mounted into one active Review diff host. */
 export const ReviewCommentsReviewDiffContribution = (props: ReviewDiffContributionProps) => {
@@ -31,6 +34,10 @@ export const ReviewCommentsReviewDiffContribution = (props: ReviewDiffContributi
   const controller = useReviewThreads(scope)
   const reviewCapability = useReviewSurfaceCapability()
   const reviewComments = useReviewCommentsReviewState()
+  const commentsState = useReviewCommentsState()
+  const commentMode = commentsState.mode
+  const commentsStateRef = useRef(commentsState)
+  commentsStateRef.current = commentsState
   const controllerRef = useRef(controller)
   controllerRef.current = controller
   const [expandedLineAnchor, setExpandedLineAnchor] = useState<Option.Option<ReviewThreadAnchor>>(
@@ -76,6 +83,8 @@ export const ReviewCommentsReviewDiffContribution = (props: ReviewDiffContributi
     setExpandedLineAnchor(Option.some(anchor))
   }, [])
   const scopeKey = reviewThreadScopeIdentity(scope)
+  const scopeRef = useRef(scope)
+  scopeRef.current = scope
   const controllerRenderVersion = JSON.stringify([
     controller.details,
     controller.available,
@@ -88,13 +97,52 @@ export const ReviewCommentsReviewDiffContribution = (props: ReviewDiffContributi
   const publishReview = reviewComments.publish
   const clearReview = reviewComments.clear
   useLayoutEffect(
-    () => publishReview(scopeKey, controllerRenderVersion, controller, revealLine),
-    [controller, controllerRenderVersion, publishReview, revealLine, scopeKey],
+    () =>
+      publishReview(
+        props.commentNoteContext,
+        scopeKey,
+        controllerRenderVersion,
+        controller,
+        revealLine,
+      ),
+    [
+      controller,
+      controllerRenderVersion,
+      props.commentNoteContext,
+      publishReview,
+      revealLine,
+      scopeKey,
+    ],
   )
   useLayoutEffect(() => () => clearReview(scopeKey), [clearReview, scopeKey])
+  const submitLineComment = useCallback(
+    async (anchor: ReviewThreadAnchor, bodyMarkdown: string) => {
+      const activeCommentsState = commentsStateRef.current
+      const activeScope = scopeRef.current
+      if (activeCommentsState.mode === "notes") {
+        await activeCommentsState.createNote(
+          CommentNoteSubject.cases.ReviewLine.make({
+            target: activeScope.target,
+            expectedBaseRevision: Option.getOrThrow(activeScope.baseRevision),
+            expectedHeadRevision: Option.getOrThrow(activeScope.headRevision),
+            anchor,
+          }),
+          bodyMarkdown,
+        )
+        toggleLine(anchor)
+        return
+      }
+      const receipt = await controllerRef.current.createThread(anchor, bodyMarkdown)
+      CommentSubmissionReceipt.match(receipt, {
+        StoredLocally: () => undefined,
+        Forwarded: () => toggleLine(anchor),
+      })
+    },
+    [toggleLine],
+  )
   const annotations = useCallback<ReviewDiffContributionOutput["annotations"]>(
-    (file, navigationAnchor) =>
-      reviewThreadAnnotations(
+    (file, navigationAnchor) => [
+      ...reviewThreadAnnotations(
         file,
         controller.details,
         Option.orElse(navigationAnchor, () => expandedLineAnchor),
@@ -106,11 +154,42 @@ export const ReviewCommentsReviewDiffContribution = (props: ReviewDiffContributi
             annotation={annotation.metadata}
             controller={controllerRef.current}
             onOpenDetail={openDetail}
+            onSubmitLine={submitLineComment}
             onToggleLine={toggleLine}
           />
         ),
       })),
-    [controller.details, expandedLineAnchor, openDetail, toggleLine],
+      ...(commentMode === "notes" ? commentsState.notes : []).flatMap((note) => {
+        if (!CommentNoteSubject.guards.ReviewLine(note.subject)) return []
+        const noteScopeKey = reviewThreadScopeIdentity(
+          ReviewThreadScope.make({
+            target: note.subject.target,
+            baseRevision: Option.some(note.subject.expectedBaseRevision),
+            headRevision: Option.some(note.subject.expectedHeadRevision),
+          }),
+        )
+        if (noteScopeKey !== scopeKey) return []
+        const anchor = note.subject.anchor
+        if (anchor.fileId !== file.fileId) return []
+        return [
+          {
+            lineNumber: anchor.lineNumber,
+            side: anchor.side === "old" ? ("deletions" as const) : ("additions" as const),
+            render: () => <ReviewNoteAnnotation note={note} />,
+          },
+        ]
+      }),
+    ],
+    [
+      commentMode,
+      commentsState.notes,
+      controller.details,
+      expandedLineAnchor,
+      openDetail,
+      scopeKey,
+      submitLineComment,
+      toggleLine,
+    ],
   )
   const output = useMemo<ReviewDiffContributionOutput>(() => {
     void controllerRenderVersion
@@ -141,6 +220,7 @@ export const ReviewCommentsReviewContextPane = ({ paneHost }: ProjectActivityPan
   const reviewComments = useReviewCommentsReviewState()
   const registration = reviewComments.registration
   const setSidebarState = reviewComments.setSidebarState
+  const commentsState = useReviewCommentsState()
   const listClosed = Match.valueTags(reviewComments.sidebarState, {
     collapsed: () => true,
     detail: () => !paneHost.detailOpen,
@@ -151,7 +231,47 @@ export const ReviewCommentsReviewContextPane = ({ paneHost }: ProjectActivityPan
       setSidebarState({ _tag: "list" })
     }
   }, [listClosed, setSidebarState])
-  if (Option.isNone(capability) || registration === null) return null
+  if (Option.isNone(capability)) return null
+  if (commentsState.mode === "notes") {
+    const activeScopeKey = registration?.scopeKey ?? null
+    return (
+      <CommentNoteList
+        isStale={(note) =>
+          CommentNoteSubject.match(note.subject, {
+            CodeLine: () => false,
+            ReviewLine: ({ target, expectedBaseRevision, expectedHeadRevision }) =>
+              reviewThreadScopeIdentity(
+                ReviewThreadScope.make({
+                  target,
+                  baseRevision: Option.some(expectedBaseRevision),
+                  headRevision: Option.some(expectedHeadRevision),
+                }),
+              ) !== activeScopeKey,
+          })
+        }
+        onNavigate={(note) => {
+          if (!CommentNoteSubject.guards.ReviewLine(note.subject)) return
+          const subject = note.subject
+          if (
+            reviewThreadScopeIdentity(
+              ReviewThreadScope.make({
+                target: subject.target,
+                baseRevision: Option.some(subject.expectedBaseRevision),
+                headRevision: Option.some(subject.expectedHeadRevision),
+              }),
+            ) !== activeScopeKey
+          ) {
+            return
+          }
+          const file = capability.value.inventory.find(
+            (candidate) => candidate.fileId === subject.anchor.fileId,
+          )
+          if (file !== undefined) capability.value.navigateToFile(file, "extension")
+        }}
+      />
+    )
+  }
+  if (registration === null) return null
   return (
     <ReviewThreadListPane
       buttonRefs={reviewComments.buttonRefs}
@@ -207,11 +327,13 @@ const ReviewCommentsAnnotation = ({
   annotation,
   controller,
   onOpenDetail,
+  onSubmitLine,
   onToggleLine,
 }: {
   readonly annotation: ReturnType<typeof reviewThreadAnnotations>[number]["metadata"]
   readonly controller: ReturnType<typeof useReviewThreads>
   readonly onOpenDetail: (details: ReviewThreadDetails) => void
+  readonly onSubmitLine: (anchor: ReviewThreadAnchor, bodyMarkdown: string) => Promise<void>
   readonly onToggleLine: (anchor: ReviewThreadAnchor) => void
 }) => {
   const { anchor, details, draftAnchor, expanded } = annotation
@@ -293,13 +415,7 @@ const ReviewCommentsAnnotation = ({
                   <ReviewThreadComposer
                     label="Line comment"
                     onCancel={() => onToggleLine(anchor)}
-                    onSubmit={async (bodyMarkdown) => {
-                      const receipt = await controller.createThread(anchor, bodyMarkdown)
-                      CommentSubmissionReceipt.match(receipt, {
-                        StoredLocally: () => undefined,
-                        Forwarded: () => onToggleLine(anchor),
-                      })
-                    }}
+                    onSubmit={(bodyMarkdown) => onSubmitLine(anchor, bodyMarkdown)}
                   />
                 </div>
               ),
@@ -307,6 +423,26 @@ const ReviewCommentsAnnotation = ({
           </div>
         ) : null}
       </section>
+    </div>
+  )
+}
+
+const ReviewNoteAnnotation = ({ note }: { readonly note: CommentNote }) => {
+  const comments = useReviewCommentsState()
+  return (
+    <div className="bg-diff-canvas px-3 py-1.5">
+      <div className="bg-card flex items-start gap-2 rounded-lg border p-3 text-xs shadow-xs">
+        <p className="min-w-0 flex-1 whitespace-pre-wrap">{note.body}</p>
+        <Button
+          type="button"
+          size="icon-xs"
+          variant="ghost"
+          aria-label="Remove note"
+          onClick={() => void comments.deleteNote(note.id)}
+        >
+          <X />
+        </Button>
+      </div>
     </div>
   )
 }

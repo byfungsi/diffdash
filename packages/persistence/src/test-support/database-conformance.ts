@@ -119,7 +119,7 @@ export const runDatabaseConformance = Effect.fn("DatabaseConformance.run")(funct
   yield* Effect.scoped(Effect.void.pipe(Effect.provide(makeLayer(databasePath))))
   yield* Effect.gen(function* () {
     const database = makeDatabase(yield* SqlClient.SqlClient)
-    assert.equal(Option.getOrThrow(yield* database.get("PRAGMA user_version")).user_version, 16)
+    assert.equal(Option.getOrThrow(yield* database.get("PRAGMA user_version")).user_version, 18)
     assert.equal(Option.getOrThrow(yield* database.get("PRAGMA quick_check")).quick_check, "ok")
     assert.deepEqual(yield* database.all("PRAGMA foreign_key_check"), [])
   }).pipe(Effect.provide(makeLayer(databasePath)))
@@ -136,7 +136,7 @@ export const runDatabaseConformance = Effect.fn("DatabaseConformance.run")(funct
   yield* Effect.scoped(Effect.void.pipe(Effect.provide(makeLayer(restoredPath))))
   yield* Effect.gen(function* () {
     const database = makeDatabase(yield* SqlClient.SqlClient)
-    assert.equal(Option.getOrThrow(yield* database.get("PRAGMA user_version")).user_version, 16)
+    assert.equal(Option.getOrThrow(yield* database.get("PRAGMA user_version")).user_version, 18)
     assert.equal(
       Option.getOrThrow(yield* database.get("SELECT COUNT(*) AS count FROM repos")).count,
       1,
@@ -155,7 +155,7 @@ export const runDatabaseConformance = Effect.fn("DatabaseConformance.run")(funct
     const database = makeDatabase(yield* SqlClient.SqlClient)
     yield* database.run("CREATE TABLE future_marker (value TEXT NOT NULL)")
     yield* database.run("INSERT INTO future_marker VALUES ('preserve-me')")
-    yield* database.run("PRAGMA user_version = 17")
+    yield* database.run("PRAGMA user_version = 19")
   }).pipe(Effect.provide(makeLayer(newerPath)))
   const newer = yield* Effect.result(
     Effect.scoped(Effect.void.pipe(Effect.provide(makeLayer(newerPath)))),

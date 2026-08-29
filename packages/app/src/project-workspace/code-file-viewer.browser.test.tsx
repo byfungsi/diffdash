@@ -1,5 +1,6 @@
 import { DEFAULT_CODE_THEME_PREFERENCES } from "@diffdash/domain/ai-settings"
 import { CodeLineChangeRange } from "@diffdash/domain/code-line-change"
+import { ProjectCommentNoteContext } from "@diffdash/domain/comment-note"
 import {
   LanguagePosition,
   LanguageRange,
@@ -12,7 +13,7 @@ import { ReviewRevision } from "@diffdash/domain/review-identity"
 import { RepositoryRelativePath } from "@diffdash/domain/repository-path"
 import { ReviewProjectId } from "@diffdash/domain/review-identity"
 import { VERY_LARGE_SOURCE_FILE_CHARACTER_THRESHOLD } from "@diffdash/domain/large-diff-policy"
-import { Option } from "effect"
+import { Effect, Option } from "effect"
 import { flushSync } from "react-dom"
 import { createRoot, type Root } from "react-dom/client"
 import { afterEach, assert, describe, expect, it, vi } from "vitest"
@@ -29,7 +30,7 @@ import {
   REVIEW_COMMENTS_EXTENSION_ID,
 } from "@/extensions/review-comments/review-comments-extension"
 import { ReviewCommentsCodeSourceContribution } from "@/extensions/review-comments/code-comments-contribution"
-import { ReviewCommentsStateProvider } from "@/extensions/review-comments/review-comments-provider"
+import { ReviewCommentsStateControllerProvider } from "@/extensions/review-comments/review-comments-provider"
 import { TrustedExtensionRegistrationToken } from "@/extensions/extension-registry"
 import { CodeFileViewer } from "./code-file-viewer"
 
@@ -45,6 +46,13 @@ const CODE_COMMENT_CONTRIBUTIONS = [
     component: ReviewCommentsCodeSourceContribution,
   },
 ]
+const commentNotes = {
+  list: () => Effect.succeed([]),
+  create: () => Effect.die("Note creation must not run in Review mode"),
+  delete: () => Effect.die("Note deletion must not run in Review mode"),
+  clear: () => Effect.die("Note clearing must not run in Review mode"),
+  send: () => Effect.die("Note delivery must not run in Review mode"),
+}
 
 afterEach(() => {
   root?.unmount()
@@ -308,7 +316,14 @@ describe("CodeFileViewer", () => {
     root = createRoot(container)
     flushSync(() => {
       root?.render(
-        <ReviewCommentsStateProvider connection={Option.none()} projectId={projectId}>
+        <ReviewCommentsStateControllerProvider
+          commentNotes={commentNotes}
+          connection={Option.none()}
+          mode="review"
+          noteContext={ProjectCommentNoteContext.make({})}
+          projectId={projectId}
+          onModeChange={() => Promise.resolve()}
+        >
           <CodeFileViewer
             codeThemes={DEFAULT_CODE_THEME_PREFERENCES}
             colorScheme="light"
@@ -318,7 +333,7 @@ describe("CodeFileViewer", () => {
             projectId={projectId}
             revision={revision}
           />
-        </ReviewCommentsStateProvider>,
+        </ReviewCommentsStateControllerProvider>,
       )
     })
 
@@ -346,7 +361,14 @@ describe("CodeFileViewer", () => {
     root = createRoot(container)
     flushSync(() => {
       root?.render(
-        <ReviewCommentsStateProvider connection={Option.none()} projectId={projectId}>
+        <ReviewCommentsStateControllerProvider
+          commentNotes={commentNotes}
+          connection={Option.none()}
+          mode="review"
+          noteContext={ProjectCommentNoteContext.make({})}
+          projectId={projectId}
+          onModeChange={() => Promise.resolve()}
+        >
           <CodeFileViewer
             codeThemes={DEFAULT_CODE_THEME_PREFERENCES}
             colorScheme="light"
@@ -356,7 +378,7 @@ describe("CodeFileViewer", () => {
             projectId={projectId}
             revision={revision}
           />
-        </ReviewCommentsStateProvider>,
+        </ReviewCommentsStateControllerProvider>,
       )
     })
 

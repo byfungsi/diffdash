@@ -17,6 +17,10 @@ import {
 } from "./ai-settings"
 
 describe("AI settings routing", () => {
+  it("defaults source comments to collection mode", () => {
+    expect(DEFAULT_AI_SETTINGS.commentMode).toBe("notes")
+  })
+
   it("requires one tagged selection for each canonical capability", () => {
     const decode = Schema.decodeUnknownResult(AISettings)
 

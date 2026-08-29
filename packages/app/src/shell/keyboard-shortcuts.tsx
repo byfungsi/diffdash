@@ -19,6 +19,7 @@ export const KeyboardShortcutToken = Schema.Literals([
   "g",
   "k",
   "r",
+  "s",
   "v",
 ])
 
@@ -39,6 +40,7 @@ export const KeyboardShortcutCommandId = Schema.Literals([
   "search.previous",
   "search.close",
   "comments.submit",
+  "comments.sendNotes",
   "code.peek.goTo",
   "code.peek.next",
   "code.peek.previous",
@@ -122,7 +124,14 @@ export const KEYBOARD_SHORTCUT_SECTIONS: readonly KeyboardShortcutSection[] = [
   },
   {
     label: "Comments",
-    shortcuts: [{ id: "comments.submit", label: "Submit comment", keys: [["mod", "enter"]] }],
+    shortcuts: [
+      { id: "comments.submit", label: "Submit comment", keys: [["mod", "enter"]] },
+      {
+        id: "comments.sendNotes",
+        label: "Send collected notes",
+        keys: [["mod", "shift", "s"]],
+      },
+    ],
   },
 ]
 
@@ -138,6 +147,7 @@ const TOKEN_LABELS: Readonly<Record<Exclude<KeyboardShortcutToken, "mod">, strin
   g: "G",
   k: "K",
   r: "R",
+  s: "S",
   shift: "Shift",
   slash: "/",
   v: "V",
@@ -279,6 +289,7 @@ export function keyboardShortcutTokenLabel(token: KeyboardShortcutToken): string
     g: () => TOKEN_LABELS.g,
     k: () => TOKEN_LABELS.k,
     r: () => TOKEN_LABELS.r,
+    s: () => TOKEN_LABELS.s,
     v: () => TOKEN_LABELS.v,
   } satisfies Readonly<Record<KeyboardShortcutToken, () => string>>
   return labels[token]()

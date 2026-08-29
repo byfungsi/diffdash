@@ -336,6 +336,8 @@ test("FUN-141 AC: verifies final packaged composition and provider persistence",
     await expect(window.getByRole("button", { name: "Code", pressed: true })).toBeVisible()
     await window.getByRole("button", { name: "Files", exact: true }).click()
     await expect(fixtureDiffCard).toBeVisible()
+    await window.locator("[data-workbench-ai-connection]").click()
+    await window.getByRole("menuitemradio", { name: "Review", exact: true }).click()
 
     const lineIndex = await addedLine.getAttribute("data-line-index")
     if (lineIndex === null) throw new Error("Fixture addition line has no rendered index")
@@ -397,11 +399,12 @@ test("FUN-141 AC: verifies final packaged composition and provider persistence",
     ) as unknown
     expect(persistedSettings).toEqual(
       expect.objectContaining({
+        commentMode: "review",
         diffViewMode: "auto",
         layout: {
           review: { contextWidth: 304, threadDetailWidth: 432 },
         },
-        version: 8,
+        version: 9,
         themes: { light: "catppuccin-latte", dark: "catppuccin-mocha" },
         codeThemes: { light: "catppuccin-latte", dark: "catppuccin-mocha" },
         selections: {

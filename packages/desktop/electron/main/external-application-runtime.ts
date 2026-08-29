@@ -373,6 +373,26 @@ export const createExternalApplicationRuntime = (
       invoke(CoreMethod.submitComment, (client) =>
         client.submitComment({ ...requestContext(), ...input }),
       ),
+    listCommentNotes: (input) =>
+      invoke(CoreMethod.listCommentNotes, (client) =>
+        client.listCommentNotes({ ...requestContext(), ...input }),
+      ),
+    createCommentNote: (input) =>
+      invoke(CoreMethod.createCommentNote, (client) =>
+        client.createCommentNote({ ...requestContext(), ...input }),
+      ),
+    deleteCommentNote: (input) =>
+      invoke(CoreMethod.deleteCommentNote, (client) =>
+        client.deleteCommentNote({ ...requestContext(), ...input }),
+      ),
+    clearCommentNotes: (input) =>
+      invoke(CoreMethod.clearCommentNotes, (client) =>
+        client.clearCommentNotes({ ...requestContext(), ...input }),
+      ),
+    sendCommentNotes: (input) =>
+      invoke(CoreMethod.sendCommentNotes, (client) =>
+        client.sendCommentNotes({ ...requestContext(), ...input }),
+      ),
     addReviewThreadUserMessage: (input) =>
       invoke(CoreMethod.addReviewThreadUserMessage, (client) =>
         client.addReviewThreadUserMessage({ ...requestContext(), ...input }),

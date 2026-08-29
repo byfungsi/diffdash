@@ -18,6 +18,7 @@ import {
   OpenCodeSessionId,
   OpenCodeSessionSummary,
 } from "@diffdash/domain/comment"
+import { CommentNote, CommentNoteId } from "@diffdash/domain/comment-note"
 import {
   CodeWorkspaceDirectoryPage,
   CodeWorkspaceChangesResult,
@@ -192,6 +193,7 @@ import {
   RepairRepositoryIdentitiesCommand,
 } from "@diffdash/protocol/cli-navigation"
 import { InvokeChannel } from "@diffdash/protocol/channels"
+import { SendCommentNotesReceipt } from "@diffdash/protocol/comment-notes"
 import { invokeResponseSchema } from "@diffdash/protocol/ipc"
 import {
   AppPrerequisites,
@@ -2047,7 +2049,7 @@ scenario("workbenchTitlebar", async () => {
   expect(back).toBeNull()
   expect(titlebar?.querySelector('button[aria-label="Review actions"]')).toBeNull()
   expect(titlebar?.querySelector("[data-workbench-ai-connection]")?.textContent).toContain(
-    "Connect AI",
+    "Comment Settings",
   )
   if (
     titlebar === null ||
@@ -2203,7 +2205,7 @@ scenario("reviewCommentsConnectionScope", async () => {
   secondProject?.click()
   await vi.waitFor(() => {
     expect(document.querySelector("[data-workbench-ai-connection]")?.textContent).toContain(
-      "Connect AI",
+      "Comment Settings",
     )
     expect(document.body.textContent).toContain("fungsi/other")
   })
@@ -2222,7 +2224,7 @@ scenario("reviewCommentsConnectionScope", async () => {
   staleConnectionGate.reject?.(new Error("Old project connection failed"))
   await vi.waitFor(() => {
     expect(document.querySelector("[data-workbench-ai-connection]")?.textContent).toContain(
-      "Connect AI",
+      "Comment Settings",
     )
     expect(document.body.textContent).not.toContain("Old project connection failed")
   })
@@ -2395,6 +2397,14 @@ scenario("codeRibbon", async () => {
   const appPath = RepositoryRelativePath.make("src/app.tsx")
   const binaryPath = RepositoryRelativePath.make("assets/logo.png")
   const calls = installDiffDashApi({
+    createCommentNote: async ({ projectId, subject, body }) =>
+      CommentNote.make({
+        id: CommentNoteId.make("browser-code-note"),
+        projectId,
+        subject,
+        body,
+        createdAt: "2026-08-29T12:00:00.000Z",
+      }),
     repositories: [linked],
     listLocalCheckoutFiles: async () =>
       LocalCheckoutFileList.make({ paths: [binaryPath, appPath] }),
@@ -2496,7 +2506,7 @@ scenario("codeRibbon", async () => {
     expect(document.querySelector("diffs-container")?.shadowRoot?.textContent).toContain(
       'export const app = "DiffDash"',
     )
-    expect(document.body.textContent).toContain("Code comments need OpenCode")
+    expect(document.body.textContent).toContain("Select a source line to collect a note")
     expect(
       document.querySelector<HTMLButtonElement>('button[aria-label="Refresh repository files"]'),
     ).toBeNull()
@@ -2507,8 +2517,26 @@ scenario("codeRibbon", async () => {
   expect(firstCodeLine).not.toBeNull()
   firstCodeLine?.click()
   await vi.waitFor(() => {
-    expect(document.body.textContent).toContain("src/app.tsx:1")
-    expect(document.body.textContent).toContain("Code comments in DiffDash are not supported yet")
+    expect(document.body.textContent).toContain("Comment on src/app.tsx line 1")
+    expect(document.body.textContent).toContain("Add note")
+  })
+  const noteInput = document.querySelector<HTMLTextAreaElement>(
+    'textarea[aria-label="Code comment"]',
+  )
+  expect(noteInput).not.toBeNull()
+  if (noteInput !== null) {
+    setTextareaValue(noteInput, "Explain this export.")
+    noteInput.dispatchEvent(new Event("input", { bubbles: true }))
+  }
+  const addNote = [...document.querySelectorAll<HTMLButtonElement>("button")].find(
+    (button) => button.textContent?.trim() === "Add note",
+  )
+  addNote?.click()
+  await vi.waitFor(() => {
+    expect(calls.createCommentNote).toHaveBeenCalledWith(
+      expect.objectContaining({ projectId: linked.id, body: "Explain this export." }),
+    )
+    expect(document.body.textContent).toContain("Explain this export.")
   })
   await waitForAnimationFrames(2)
   expect(calls.openCodeWorkspace).toHaveBeenCalledTimes(reloadedWorkspaceOpenCount)
@@ -4404,7 +4432,11 @@ scenario("longThreadVirtualization", async () => {
     pullRequestDiff: fixture.largeDiff,
     reviewRequests: [fixture.largePullRequest],
     reviewThreadDetails,
-    settings: AISettings.make({ ...DEFAULT_AI_SETTINGS, diffViewMode: "split" }),
+    settings: AISettings.make({
+      ...DEFAULT_AI_SETTINGS,
+      commentMode: "review",
+      diffViewMode: "split",
+    }),
   })
   renderApp({ strictMode: true })
 
@@ -4521,7 +4553,11 @@ scenario("threadNavigationConvergence", async () => {
     pullRequestDiff: fixture.largeDiff,
     reviewRequests: [fixture.largePullRequest],
     reviewThreadDetails: [details],
-    settings: AISettings.make({ ...DEFAULT_AI_SETTINGS, diffViewMode: "unified" }),
+    settings: AISettings.make({
+      ...DEFAULT_AI_SETTINGS,
+      commentMode: "review",
+      diffViewMode: "unified",
+    }),
   })
   renderApp({ strictMode: true })
 
@@ -4693,7 +4729,11 @@ scenario("threadComposerShortcut", async () => {
         conversation: longThread.conversation.slice(0, 2),
       }),
     ],
-    settings: AISettings.make({ ...DEFAULT_AI_SETTINGS, diffViewMode: "split" }),
+    settings: AISettings.make({
+      ...DEFAULT_AI_SETTINGS,
+      commentMode: "review",
+      diffViewMode: "split",
+    }),
   })
   renderApp({ strictMode: true })
 
@@ -4798,6 +4838,7 @@ scenario("reviewThreadSidebar", async () => {
     }),
     pullRequestDiff: HostedReviewDiff.make({ ...diff, diff: summaryDiffText }),
     reviewThreadDetails,
+    settings: AISettings.make({ ...DEFAULT_AI_SETTINGS, commentMode: "review" }),
   })
   renderApp()
 
@@ -7111,6 +7152,7 @@ scenario("homeToReview", async () => {
     end: definitionPosition,
   })
   const calls = installDiffDashApi({
+    settings: AISettings.make({ ...DEFAULT_AI_SETTINGS, commentMode: "review" }),
     selectLocalFolder: "/workspace/diffdash",
     listLocalCheckoutFiles: async () =>
       LocalCheckoutFileList.make({ paths: [appPath, definitionPath] }),
@@ -8819,6 +8861,7 @@ export const installDiffDashApi = (
     readonly codeWorkspaceChanges?: DiffDashApi["codeWorkspace"]["changes"]
     readonly codeWorkspaceLineChanges?: DiffDashApi["codeWorkspace"]["lineChanges"]
     readonly connectOpenCodeSession?: DiffDashApi["ai"]["connectOpenCodeSession"]
+    readonly createCommentNote?: DiffDashApi["commentNotes"]["create"]
     readonly expireFirstSnapshotPage?: boolean
     readonly getAppState?: DiffDashApi["appState"]["get"]
     readonly getDiagnostics?: DiffDashApi["diagnostics"]
@@ -9008,6 +9051,10 @@ export const installDiffDashApi = (
     ),
     connectOpenCodeSession: vi.fn<DiffDashApi["ai"]["connectOpenCodeSession"]>(
       options.connectOpenCodeSession ?? (async ({ sessionId }) => ({ sessionId, planMode: true })),
+    ),
+    createCommentNote: vi.fn<DiffDashApi["commentNotes"]["create"]>(
+      options.createCommentNote ??
+        (async () => Promise.reject(Error("Comment note creation is not used by this fixture"))),
     ),
     getAppState: vi.fn<DiffDashApi["appState"]["get"]>(
       options.getAppState ?? (async () => appState),
@@ -9608,6 +9655,13 @@ export const installDiffDashApi = (
             }),
         }),
     },
+    commentNotes: {
+      list: async () => [],
+      create: calls.createCommentNote,
+      delete: async () => undefined,
+      clear: async () => undefined,
+      send: async () => SendCommentNotesReceipt.make({ sentCount: 0 }),
+    },
     installDiffDashCli: calls.installDiffDashCli,
     openExternalUrl: calls.openExternalUrl,
     openLocalRepositoryFile: calls.openLocalRepositoryFile,
@@ -10054,6 +10108,7 @@ const plainAISettings = (settings: AISettings): AISettings =>
       dark: settings.codeThemes.dark,
     }),
     diffViewMode: settings.diffViewMode,
+    commentMode: settings.commentMode,
     layout: RendererLayoutSettings.make({
       review: ReviewPaneSettings.make({
         contextWidth: settings.layout.review.contextWidth,

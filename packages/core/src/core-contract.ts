@@ -38,6 +38,7 @@ import {
 import type { GitProviderOperationError, UnknownGitProviderError } from "@diffdash/git-provider"
 import type { LocalReviewChangedError, LocalReviewTargetError } from "@diffdash/local-git/local-git"
 import type { ProjectWorkspaceStoreError } from "@diffdash/persistence/project-workspace-store"
+import type { CommentNoteStoreError } from "@diffdash/persistence/comment-note-store"
 import type { ReviewThreadStoreError } from "@diffdash/persistence/review-thread-store"
 import type {
   ReviewTurnRejectedError,
@@ -131,6 +132,11 @@ export const CoreMethod = {
   listOpenCodeSessions: "OpenCode.listSessions",
   connectOpenCodeSession: "OpenCode.connectSession",
   submitComment: "CommentSubmission.submit",
+  listCommentNotes: "CommentNotes.list",
+  createCommentNote: "CommentNotes.create",
+  deleteCommentNote: "CommentNotes.delete",
+  clearCommentNotes: "CommentNotes.clear",
+  sendCommentNotes: "CommentNotes.send",
   addReviewThreadUserMessage: "ReviewThreads.addUserMessage",
   createReviewThread: "ReviewThreads.create",
   getReviewThread: "ReviewThreads.get",
@@ -205,6 +211,11 @@ export const CoreMethodChannel = {
   [CoreMethod.listOpenCodeSessions]: InvokeChannel.aiListOpenCodeSessions,
   [CoreMethod.connectOpenCodeSession]: InvokeChannel.aiConnectOpenCodeSession,
   [CoreMethod.submitComment]: InvokeChannel.aiSubmitComment,
+  [CoreMethod.listCommentNotes]: InvokeChannel.listCommentNotes,
+  [CoreMethod.createCommentNote]: InvokeChannel.createCommentNote,
+  [CoreMethod.deleteCommentNote]: InvokeChannel.deleteCommentNote,
+  [CoreMethod.clearCommentNotes]: InvokeChannel.clearCommentNotes,
+  [CoreMethod.sendCommentNotes]: InvokeChannel.sendCommentNotes,
   [CoreMethod.addReviewThreadUserMessage]: InvokeChannel.addReviewThreadUserMessage,
   [CoreMethod.createReviewThread]: InvokeChannel.createReviewThread,
   [CoreMethod.getReviewThread]: InvokeChannel.getReviewThread,
@@ -399,6 +410,14 @@ export interface CoreOperationFailureMap {
     | ReviewTurnStoreError
     | ReviewThreadStoreError
     | WalkthroughStoreError
+  readonly [CoreMethod.listCommentNotes]: CommentNoteStoreError
+  readonly [CoreMethod.createCommentNote]:
+    | CommentNoteStoreError
+    | CommentSubjectMismatchError
+    | CoreThreadResolutionFailure
+  readonly [CoreMethod.deleteCommentNote]: CommentNoteStoreError
+  readonly [CoreMethod.clearCommentNotes]: CommentNoteStoreError
+  readonly [CoreMethod.sendCommentNotes]: CommentNoteStoreError | OpenCodeConnectionError
   readonly [CoreMethod.addReviewThreadUserMessage]: ReviewThreadStoreError
   readonly [CoreMethod.createReviewThread]:
     | CoreThreadResolutionFailure

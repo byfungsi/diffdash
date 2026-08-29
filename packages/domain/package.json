@@ -12,6 +12,7 @@
     "./code-workspace": "./src/code-workspace.ts",
     "./code-line-change": "./src/code-line-change.ts",
     "./comment": "./src/comment.ts",
+    "./comment-note": "./src/comment-note.ts",
     "./diff": "./src/diff.ts",
     "./diff-hunk-lines": "./src/diff-hunk-lines.ts",
     "./diff-parser": "./src/diff-parser.ts",
