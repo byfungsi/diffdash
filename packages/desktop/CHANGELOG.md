@@ -1,5 +1,11 @@
 # DiffDash Changelog
 
+## 0.16.0
+
+### Minor Changes
+
+- [#116](https://github.com/byfungsi/diffdash/pull/116) [`1f8da41`](https://github.com/byfungsi/diffdash/commit/1f8da4121c70fccc77e79d9f7697bfae2e3ac214) Thanks [@hanipcode](https://github.com/hanipcode)! - Add persistent source-line notes that can be collected across Code and Review, copied together, or sent to an OpenCode session.
+
 ## 0.15.1
 
 ### Patch Changes
