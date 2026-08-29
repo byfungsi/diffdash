@@ -11,6 +11,11 @@ import {
   type CodeLineChangeRange,
 } from "@diffdash/domain/code-line-change"
 import type { CodeWorkspaceTarget } from "@diffdash/domain/code-workspace"
+import {
+  HostedCommentNoteContext,
+  LocalCommentNoteContext,
+  RepositoryComparisonCommentNoteContext,
+} from "@diffdash/domain/comment-note"
 import { DiffFileVisibility, type ParsedDiffFile } from "@diffdash/domain/diff"
 import type { LanguageRange } from "@diffdash/domain/language"
 import type { ReviewSnapshotFileInventory } from "@diffdash/domain/review-context"
@@ -458,8 +463,27 @@ export const ReviewDetailView = ({
       }),
     [review],
   )
+  const commentNoteContext = useMemo(
+    () =>
+      Match.valueTags(review, {
+        hosted: (hostedReview) =>
+          HostedCommentNoteContext.make({
+            review: hostedReview.target,
+            baseRefName: hostedReview.manifest.detail.summary.base.name,
+          }),
+        local: (localReview) =>
+          LocalCommentNoteContext.make({
+            target: localReview.target,
+            sourceBranch: localReview.manifest.detail.branchName,
+          }),
+        repositoryComparison: (comparisonReview) =>
+          RepositoryComparisonCommentNoteContext.make({ target: comparisonReview.target }),
+      }),
+    [review],
+  )
   const reviewContributionHost = useReviewDiffContributionHost(reviewDiffContributions, {
     projectId: manifest.projectId,
+    commentNoteContext,
     target: reviewContributionTarget,
     baseRevision: manifest.baseRevision,
     headRevision: manifest.headRevision,

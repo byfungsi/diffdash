@@ -15,6 +15,7 @@ import { LocalCheckoutFiles } from "@diffdash/local-git/local-checkout-files"
 import { ManagedWorkspaceFiles } from "@diffdash/local-git/managed-workspace-files"
 import { withManagedWorkspaceRepositoryLock } from "@diffdash/local-git/managed-workspace-lock"
 import { AgentRunArtifactStore } from "@diffdash/persistence/agent-run-artifact-store"
+import { CommentNoteStore } from "@diffdash/persistence/comment-note-store"
 import type { DatabaseError } from "@diffdash/persistence/database"
 import { ProjectWorkspaceStore } from "@diffdash/persistence/project-workspace-store"
 import { ResourceCatalog, ResourceRootId } from "@diffdash/persistence/resource-catalog"
@@ -535,6 +536,7 @@ export const createStandaloneCoreLayer = (
     repositoryComparisonSourceLayer,
     repositoryWatcherLayer,
     ProjectWorkspaceStore.layer,
+    CommentNoteStore.layer,
     analyticsLayer,
     reviewAcquisitionLayer,
     reviewTurnStoreLayer,

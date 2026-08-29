@@ -36,3 +36,15 @@ export const isAbortDOMException = <Value>(value: Value): value is Value & DOMEx
   value.name === "AbortError" &&
   "message" in value &&
   Predicate.isString(value.message)
+
+/** Returns whether a keyboard event target accepts direct text or value editing. */
+export const isEditableTarget = (target: EventTarget | null): boolean => {
+  if (!isHTMLElement(target)) return false
+  const tagName = target.tagName.toLowerCase()
+  return (
+    target.isContentEditable ||
+    tagName === "input" ||
+    tagName === "textarea" ||
+    tagName === "select"
+  )
+}

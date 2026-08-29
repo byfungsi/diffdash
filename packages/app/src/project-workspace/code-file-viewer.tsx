@@ -463,9 +463,7 @@ export const CodeFileViewer = ({
           `,
             onPostRender: publishSurfaceRender,
           }}
-          renderAnnotation={(annotation) =>
-            codeSourceHost.renderAnnotation(annotation.metadata.contributionKey)
-          }
+          renderAnnotation={(annotation) => codeSourceHost.renderAnnotation(annotation.metadata)}
         />
         {Option.match(
           Option.product(Option.fromNullishOr(onLoadDefinitionSource), languageNavigation.peek),

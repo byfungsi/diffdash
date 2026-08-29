@@ -2,9 +2,15 @@ import {
   CommentDestination,
   CommentSubmission,
   CommentSubmissionReceipt,
+  CommentSubjectMismatchError,
   CommentSubmissionUnsupportedError,
   CommentSubject,
 } from "@diffdash/domain/comment"
+import {
+  CommentNoteId,
+  CommentNoteSubject,
+  SendCommentNotesReceipt,
+} from "@diffdash/domain/comment-note"
 import { StartReviewAgentOperationRequest } from "@diffdash/core-rpc/review-agent"
 import type { AgentRunId } from "@diffdash/domain/agent-run-id"
 import type { ReviewKey, ReviewProjectId, ReviewRevision } from "@diffdash/domain/review-identity"
@@ -14,9 +20,15 @@ import {
   type ReviewThreadTarget,
 } from "@diffdash/domain/review-thread"
 import type { AddReviewThreadUserMessageForSubjectInput } from "@diffdash/persistence/review-thread-store"
-import { Effect } from "effect"
+import { Effect, Semaphore } from "effect"
+import { CommentNoteStore } from "@diffdash/persistence/comment-note-store"
 
-import { CoreMethod, type CoreOperationFailure, type CoreOperationOptions } from "../core-contract"
+import {
+  CoreMethod,
+  type CoreOperationFailure,
+  type CoreOperationOptions,
+  type CoreThreadResolutionFailure,
+} from "../core-contract"
 import { OpenCodeConnectionService } from "../services/opencode-connection"
 import type { OperationHandlersFor } from "./operation-handlers"
 
@@ -24,6 +36,11 @@ type CommentMethod =
   | typeof CoreMethod.connectOpenCodeSession
   | typeof CoreMethod.listOpenCodeSessions
   | typeof CoreMethod.submitComment
+  | typeof CoreMethod.listCommentNotes
+  | typeof CoreMethod.createCommentNote
+  | typeof CoreMethod.deleteCommentNote
+  | typeof CoreMethod.clearCommentNotes
+  | typeof CoreMethod.sendCommentNotes
 
 type ThreadHandlers = OperationHandlersFor<
   typeof CoreMethod.addReviewThreadUserMessage | typeof CoreMethod.createReviewThread
@@ -47,13 +64,19 @@ export const makeCommentOperationHandlers = (
   ) => Effect.Effect<AgentRunId, CoreOperationFailure<typeof CoreMethod.submitComment>>,
   resolveReview: (
     target: ReviewThreadTarget,
-  ) => Effect.Effect<ResolvedCommentReview, CoreOperationFailure<typeof CoreMethod.submitComment>>,
+  ) => Effect.Effect<ResolvedCommentReview, CoreThreadResolutionFailure>,
   addFollowUp: (
     input: AddReviewThreadUserMessageForSubjectInput,
   ) => Effect.Effect<ReviewThreadDetails, CoreOperationFailure<typeof CoreMethod.submitComment>>,
-): Effect.Effect<OperationHandlersFor<CommentMethod>, never, OpenCodeConnectionService> =>
+): Effect.Effect<
+  OperationHandlersFor<CommentMethod>,
+  never,
+  CommentNoteStore | OpenCodeConnectionService
+> =>
   Effect.gen(function* () {
     const openCode = yield* OpenCodeConnectionService
+    const notes = yield* CommentNoteStore
+    const sendNotesLock = yield* Semaphore.make(1)
 
     const startLocalAgent = Effect.fn("CommentSubmission.startLocalAgent")(function* (
       details: ReviewThreadDetails,
@@ -189,5 +212,46 @@ export const makeCommentOperationHandlers = (
             })
           },
         }),
+      [CoreMethod.listCommentNotes]: (request) => notes.list(request.projectId, request.context),
+      [CoreMethod.createCommentNote]: (request) =>
+        Effect.gen(function* () {
+          if (CommentNoteSubject.guards.ReviewLine(request.subject)) {
+            const resolved = yield* resolveReview(request.subject.target)
+            if (resolved.projectId !== request.projectId) {
+              return yield* CommentSubjectMismatchError.make({
+                reason: "The review note belongs to a different project.",
+              })
+            }
+          }
+          return yield* notes.create({
+            id: CommentNoteId.make(crypto.randomUUID()),
+            projectId: request.projectId,
+            context: request.context,
+            subject: request.subject,
+            body: request.body,
+            createdAt: new Date().toISOString(),
+          })
+        }),
+      [CoreMethod.deleteCommentNote]: (request) =>
+        notes.delete(request.projectId, request.context, request.noteId),
+      [CoreMethod.clearCommentNotes]: (request) => notes.clear(request.projectId, request.context),
+      [CoreMethod.sendCommentNotes]: (request) =>
+        sendNotesLock.withPermits(1)(
+          Effect.gen(function* () {
+            const snapshot = yield* notes.list(request.projectId, request.context)
+            if (snapshot.length === 0) return SendCommentNotesReceipt.make({ sentCount: 0 })
+            yield* openCode.forwardNotes({
+              projectId: request.projectId,
+              sessionId: request.connection.session.id,
+              notes: snapshot,
+            })
+            yield* notes.deleteMany(
+              request.projectId,
+              request.context,
+              snapshot.map((note) => note.id),
+            )
+            return SendCommentNotesReceipt.make({ sentCount: snapshot.length })
+          }),
+        ),
     }
   })

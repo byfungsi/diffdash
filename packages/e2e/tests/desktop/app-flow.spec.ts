@@ -385,6 +385,7 @@ test("covers finished Home to Review flow with fake CLI fixtures", async ({
     await expect(window.getByRole("button", { name: "Back" })).toBeVisible()
     await expect(window.getByRole("button", { name: "Collapse sidebar" })).toBeVisible()
     await expect(window.locator("[data-review-activity-rail]")).toHaveCSS("width", "52px")
+    await selectReviewCommentMode(window)
     await commandCenter.click()
     const fileSearch = window.getByPlaceholder("Search files")
     await expect(fileSearch).toBeVisible()
@@ -1249,6 +1250,7 @@ for (const fixture of [
       const window = await app.firstWindow()
       await dismissOnboardingIfPresent(window)
       await expect(window.locator("[data-review-editor-header]")).toContainText("Local changes")
+      await selectReviewCommentMode(window)
       const diffCard = window.locator('[data-diff-card-path="src/local.ts"]')
       await expect(diffCard).toHaveAttribute("data-diff-render-mode", "highlighted")
       const gutterNumber = diffCard
@@ -1728,6 +1730,11 @@ const openGutterThreadComposer = async (window: Page, gutterNumber: Locator) => 
     .toBe(true)
   await composer.focus()
   return composer
+}
+
+const selectReviewCommentMode = async (window: Page) => {
+  await window.locator("[data-workbench-ai-connection]").click()
+  await window.getByRole("menuitemradio", { name: "Review", exact: true }).click()
 }
 
 interface WalkthroughAcceptanceSummary {

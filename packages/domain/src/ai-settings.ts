@@ -3,9 +3,10 @@ import {
   DEFAULT_RENDERER_LAYOUT_SETTINGS,
   RendererLayoutSettings,
 } from "./renderer-layout-settings"
+import { CommentMode } from "./comment-note"
 
 /** Current persisted settings format. */
-export const AI_SETTINGS_VERSION = 8 as const
+export const AI_SETTINGS_VERSION = 9 as const
 
 /** Application appearance preference. */
 export const Appearance = Schema.Literals(["light", "dark", "system"])
@@ -145,6 +146,7 @@ export class AISettings extends Schema.Class<AISettings>("AISettings")({
   themes: ThemePreferences,
   codeThemes: CodeThemePreferences,
   diffViewMode: DiffViewMode,
+  commentMode: CommentMode,
   layout: RendererLayoutSettings,
   selections: AIAgentSelections,
   telemetryEnabled: Schema.Boolean,
@@ -157,6 +159,7 @@ export const DEFAULT_AI_SETTINGS = AISettings.make({
   themes: DEFAULT_THEME_PREFERENCES,
   codeThemes: DEFAULT_CODE_THEME_PREFERENCES,
   diffViewMode: "auto",
+  commentMode: "notes",
   layout: DEFAULT_RENDERER_LAYOUT_SETTINGS,
   selections: AIAgentSelections.make({
     walkthrough: AIAgentSelection.cases.Automatic.make({ quality: "balanced" }),

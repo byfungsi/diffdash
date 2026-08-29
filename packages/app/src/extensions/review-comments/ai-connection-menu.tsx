@@ -1,4 +1,5 @@
 import { OpenCodeConnectionSelection, OpenCodeSessionSummary } from "@diffdash/domain/comment"
+import type { CommentMode } from "@diffdash/domain/comment-note"
 import type { ReviewProjectId } from "@diffdash/domain/review-identity"
 import type { RepositoryCheckoutPath } from "@diffdash/domain/repository"
 import {
@@ -6,7 +7,7 @@ import {
   ListOpenCodeSessionsRequest,
 } from "@diffdash/protocol/ai-connection"
 import { Option, Schema } from "effect"
-import { Bot, Check, ChevronRight, Loader2, Search } from "lucide-react"
+import { Bot, Check, ChevronRight, Loader2, Search, Settings2 } from "lucide-react"
 import { DropdownMenu } from "radix-ui"
 import { useEffect, useEffectEvent, useRef, useState } from "react"
 
@@ -25,14 +26,18 @@ const SessionLoadState = Schema.TaggedUnion({
 /** Titlebar menu for choosing DiffDash or an OpenCode session as comment owner. */
 export const AIConnectionMenu = ({
   directory,
+  mode,
   projectId,
   selected,
   onChange,
+  onModeChange,
 }: {
   readonly directory: RepositoryCheckoutPath | null
+  readonly mode: CommentMode
   readonly projectId: ReviewProjectId | null
   readonly selected: Option.Option<OpenCodeConnectionSelection>
   readonly onChange: (selection: Option.Option<OpenCodeConnectionSelection>) => void
+  readonly onModeChange: (mode: CommentMode) => void
 }) => {
   const desktop = useDesktopRuntime()
   const [open, setOpen] = useState(false)
@@ -145,8 +150,8 @@ export const AIConnectionMenu = ({
   }
 
   const label = Option.match(selected, {
-    onNone: () => "Connect AI",
-    onSome: ({ session }) => `OpenCode · ${session.title}`,
+    onNone: () => "Comment settings",
+    onSome: ({ session }) => `Comment settings: ${session.title}`,
   })
 
   return (
@@ -161,8 +166,13 @@ export const AIConnectionMenu = ({
           className="text-shell-titlebar-muted hover:bg-shell-titlebar-control-hover hover:text-shell-titlebar-fg max-w-60"
           title={label}
         >
-          <Bot className="size-4" />
-          <span className="hidden max-w-44 truncate lg:inline">{label}</span>
+          <Settings2 className="size-4" />
+          <span className="hidden max-w-44 truncate lg:inline">
+            {Option.match(selected, {
+              onNone: () => "Comment Settings",
+              onSome: ({ session }) => session.title,
+            })}
+          </span>
         </Button>
       </DropdownMenu.Trigger>
       <DropdownMenu.Portal>
@@ -171,6 +181,36 @@ export const AIConnectionMenu = ({
           sideOffset={6}
           className="bg-popover text-popover-foreground z-50 min-w-64 rounded-xl border p-1 shadow-xl"
         >
+          <DropdownMenu.Label className="text-muted-foreground px-2.5 py-1.5 text-caption font-semibold uppercase">
+            Comment mode
+          </DropdownMenu.Label>
+          <DropdownMenu.RadioGroup
+            value={mode}
+            onValueChange={(value) => onModeChange(value === "review" ? "review" : "notes")}
+          >
+            <DropdownMenu.RadioItem
+              value="notes"
+              className="data-[highlighted]:bg-accent flex items-center gap-2 rounded-lg px-2.5 py-2 text-xs outline-none"
+            >
+              <span className="flex size-4 items-center justify-center">
+                {mode === "notes" ? <Check className="size-3.5" /> : null}
+              </span>
+              Notes
+            </DropdownMenu.RadioItem>
+            <DropdownMenu.RadioItem
+              value="review"
+              className="data-[highlighted]:bg-accent flex items-center gap-2 rounded-lg px-2.5 py-2 text-xs outline-none"
+            >
+              <span className="flex size-4 items-center justify-center">
+                {mode === "review" ? <Check className="size-3.5" /> : null}
+              </span>
+              Review
+            </DropdownMenu.RadioItem>
+          </DropdownMenu.RadioGroup>
+          <DropdownMenu.Separator className="bg-border my-1 h-px" />
+          <DropdownMenu.Label className="text-muted-foreground px-2.5 py-1.5 text-caption font-semibold uppercase">
+            Agent connection
+          </DropdownMenu.Label>
           <DropdownMenu.Item
             className="data-[highlighted]:bg-accent flex cursor-default items-center gap-2 rounded-lg px-2.5 py-2 text-xs outline-none"
             onSelect={() => {

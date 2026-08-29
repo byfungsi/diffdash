@@ -108,11 +108,12 @@ describe("AppSettings", () => {
       }).pipe(Effect.provide(makeLayer(directory)))
 
       expect(settings).toEqual({
-        version: 8,
+        version: 9,
         appearance: "dark",
         themes: { light: "diffdash", dark: "diffdash" },
         codeThemes: { light: "rose-pine-dawn", dark: "diffdash-dark" },
         diffViewMode: "auto",
+        commentMode: "notes",
         layout: {
           review: { contextWidth: 304, threadDetailWidth: 432 },
         },
@@ -165,7 +166,7 @@ describe("AppSettings", () => {
         layout: {
           review: { contextWidth: 304, threadDetailWidth: 432 },
         },
-        version: 8,
+        version: 9,
         selections: {
           walkthrough: { _tag: "Pinned", providerId: "claude", modelId: "claude-opus-4-8" },
           "review-thread": {
@@ -221,11 +222,12 @@ describe("AppSettings", () => {
       }).pipe(Effect.provide(makeLayer(directory)))
 
       expect(settings).toEqual({
-        version: 8,
+        version: 9,
         appearance: "dark",
         themes: { light: "diffdash", dark: "diffdash" },
         codeThemes: { light: "rose-pine-dawn", dark: "diffdash-dark" },
         diffViewMode: "auto",
+        commentMode: "notes",
         layout: {
           review: { contextWidth: 304, threadDetailWidth: 432 },
         },
@@ -240,7 +242,7 @@ describe("AppSettings", () => {
         telemetryEnabled: false,
       })
       expect(JSON.parse(readFileSync(settingsPath, "utf8"))).toMatchObject({
-        version: 8,
+        version: 9,
         diffViewMode: "auto",
         layout: {
           review: { contextWidth: 304, threadDetailWidth: 432 },
@@ -284,7 +286,7 @@ describe("AppSettings", () => {
         "review-thread": { _tag: "Automatic", quality: "best" },
       })
       expect(JSON.parse(readFileSync(settingsPath, "utf8"))).toMatchObject({
-        version: 8,
+        version: 9,
         selections: {
           walkthrough: { _tag: "Pinned", providerId: "codex", modelId: null },
           "review-thread": { _tag: "Automatic", quality: "best" },
@@ -303,6 +305,7 @@ describe("AppSettings", () => {
         settingsPath,
         JSON.stringify({
           ...DEFAULT_AI_SETTINGS,
+          version: 8,
           appearance: "dark",
           selections: {
             walkthrough: pinned("codex", "gpt-5"),
@@ -402,7 +405,7 @@ describe("AppSettings", () => {
         dark: "github-dark-default",
       })
       expect(JSON.parse(readFileSync(settingsPath, "utf8"))).toMatchObject({
-        version: 8,
+        version: 9,
         codeThemes: {
           light: "catppuccin-latte",
           dark: "github-dark-default",
@@ -436,13 +439,13 @@ describe("AppSettings", () => {
         return yield* appSettings.get
       }).pipe(Effect.provide(makeLayer(directory)))
 
-      expect(settings.version).toBe(8)
+      expect(settings.version).toBe(9)
       expect(settings.codeThemes).toEqual({
         light: "github-light-default",
         dark: "diffdash-dark",
       })
       expect(JSON.parse(readFileSync(settingsPath, "utf8"))).toMatchObject({
-        version: 8,
+        version: 9,
         codeThemes: {
           light: "github-light-default",
           dark: "diffdash-dark",

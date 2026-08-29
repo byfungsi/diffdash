@@ -71,7 +71,8 @@ Trusted built-ins mount React adapters in-process. Those adapters are applicatio
 details, not public extension contracts. Their source contributions exchange semantic values:
 
 - Code supplies project, workspace revision, Git revision, repository path, line number, and line
-  content. The source host orders line actions and renders registered annotations.
+  content. The source host orders line actions and renders each contribution's ordered annotation
+  list, including multiple annotations targeting the same line.
 - Review supplies project, review target, exact base/head revisions, parsed files, and semantic
   thread navigation. The Review host composes annotations and line actions while retaining
   responsive pane layout and viewport navigation.
@@ -84,8 +85,8 @@ The current built-in adoption is:
 | --- | --- | --- |
 | `diffdash.builtin.scm-line-changes` | Code workspace line-change provider | Protected SCM gutter decoration |
 | `diffdash.builtin.language-navigation` | Definition and reference providers | Modified-token interaction and Peek |
-| `diffdash.builtin.review-comments.code-source` | Review Comments extension | Code line action and draft annotation |
-| `diffdash.builtin.review-comments.review-diff` | Review Comments extension | Review line actions and thread annotations |
+| `diffdash.builtin.review-comments.code-source` | Review Comments extension | Code line action, draft annotation, and collected note annotations |
+| `diffdash.builtin.review-comments.review-diff` | Review Comments extension | Review line actions, thread annotations, and collected note annotations |
 | `diffdash.builtin.code-search` | In-file search | Owner-scoped selection and text highlight |
 | `diffdash.builtin.review-virtualization` | Rendered review diff | Virtualizer registration and settlement |
 | `diffdash.builtin.review-search` | Review search manager | Search highlight reconciliation |

@@ -36,7 +36,7 @@ const source = {
 }
 const output: CodeSourceContributionOutput = {
   handleLineAction: () => false,
-  annotation: Option.none(),
+  annotations: [],
 }
 
 let root: Root | null = null

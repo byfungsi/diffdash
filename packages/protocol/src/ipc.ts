@@ -47,6 +47,16 @@ import {
   SubmitCommentRequest,
 } from "./ai-connection"
 import { AnalyticsEvent } from "./analytics"
+import {
+  ClearCommentNotesRequest,
+  CommentNoteList,
+  CreateCommentNoteRequest,
+  DeleteCommentNoteRequest,
+  ListCommentNotesRequest,
+  SendCommentNotesReceipt,
+  SendCommentNotesRequest,
+} from "./comment-notes"
+import { CommentNote } from "@diffdash/domain/comment-note"
 import { AppUpdateState } from "./app-update"
 import { EventChannel, InvokeChannel } from "./channels"
 import { CODE_WORKSPACE_FILE_STREAM_MAX_BYTES } from "./code-workspace-stream"
@@ -258,6 +268,34 @@ export const InvokeContract = {
     SubmitCommentRequest,
     SubmitCommentReceipt,
     { maxRequestBytes: 64 * KIB, maxResponseBytes: 4 * KIB },
+  ),
+  [InvokeChannel.listCommentNotes]: defineInvoke(
+    InvokeChannel.listCommentNotes,
+    ListCommentNotesRequest,
+    CommentNoteList,
+    { maxRequestBytes: 4 * KIB, maxResponseBytes: 2_048 * KIB },
+  ),
+  [InvokeChannel.createCommentNote]: defineInvoke(
+    InvokeChannel.createCommentNote,
+    CreateCommentNoteRequest,
+    CommentNote,
+    { maxRequestBytes: 2_048 * KIB, maxResponseBytes: 2_048 * KIB },
+  ),
+  [InvokeChannel.deleteCommentNote]: defineInvoke(
+    InvokeChannel.deleteCommentNote,
+    DeleteCommentNoteRequest,
+    EmptyResponse,
+  ),
+  [InvokeChannel.clearCommentNotes]: defineInvoke(
+    InvokeChannel.clearCommentNotes,
+    ClearCommentNotesRequest,
+    EmptyResponse,
+  ),
+  [InvokeChannel.sendCommentNotes]: defineInvoke(
+    InvokeChannel.sendCommentNotes,
+    SendCommentNotesRequest,
+    SendCommentNotesReceipt,
+    { maxRequestBytes: 8 * KIB, maxResponseBytes: 4 * KIB },
   ),
   [InvokeChannel.appDiagnostics]: defineInvoke(
     InvokeChannel.appDiagnostics,

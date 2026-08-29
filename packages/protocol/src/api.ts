@@ -1,5 +1,6 @@
 import type { AISettings } from "@diffdash/domain/ai-settings"
 import type { AppState } from "@diffdash/domain/app-state"
+import type { CommentNote } from "@diffdash/domain/comment-note"
 import type {
   GitProviderDescriptor,
   HostedRepository,
@@ -49,6 +50,14 @@ import type {
 } from "./ai-connection"
 import type { AnalyticsEvent } from "./analytics"
 import type { AppUpdateState } from "./app-update"
+import type {
+  ClearCommentNotesRequest,
+  CreateCommentNoteRequest,
+  DeleteCommentNoteRequest,
+  ListCommentNotesRequest,
+  SendCommentNotesReceipt,
+  SendCommentNotesRequest,
+} from "./comment-notes"
 import type { CodeWorkspaceFileStreamCancellationRegistrar } from "./code-workspace-stream"
 import type { CliNavigationCommand } from "./cli-navigation"
 import type {
@@ -152,6 +161,13 @@ export interface DiffDashApi {
     readonly submitComment: (
       request: SubmitCommentRequest,
     ) => Promise<typeof SubmitCommentReceipt.Type>
+  }
+  readonly commentNotes: {
+    readonly list: (request: ListCommentNotesRequest) => Promise<readonly CommentNote[]>
+    readonly create: (request: CreateCommentNoteRequest) => Promise<CommentNote>
+    readonly delete: (request: DeleteCommentNoteRequest) => Promise<void>
+    readonly clear: (request: ClearCommentNotesRequest) => Promise<void>
+    readonly send: (request: SendCommentNotesRequest) => Promise<SendCommentNotesReceipt>
   }
   readonly installDiffDashCli: () => Promise<DiffDashCliInstallResult>
   readonly openExternalUrl: (url: WebUrl) => Promise<void>

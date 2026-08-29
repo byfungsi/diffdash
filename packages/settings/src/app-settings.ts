@@ -19,6 +19,7 @@ import {
   LightTheme,
   ThemePreferences,
 } from "@diffdash/domain/ai-settings"
+import { CommentMode } from "@diffdash/domain/comment-note"
 import {
   DEFAULT_RENDERER_LAYOUT_SETTINGS,
   RendererLayoutSettings,
@@ -190,6 +191,11 @@ const decodeSettings = (
     parsedObject.diffViewMode,
     DEFAULT_AI_SETTINGS.diffViewMode,
   )
+  const commentMode = decodeOrDefault(
+    CommentMode,
+    parsedObject.commentMode,
+    DEFAULT_AI_SETTINGS.commentMode,
+  )
   const sourceVersion =
     Schema.is(Schema.Number)(parsedObject.version) && Number.isInteger(parsedObject.version)
       ? parsedObject.version
@@ -229,6 +235,7 @@ const decodeSettings = (
       themes,
       codeThemes,
       diffViewMode,
+      commentMode,
       layout,
       telemetryEnabled,
       ...agentSettings,

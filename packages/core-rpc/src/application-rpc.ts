@@ -16,9 +16,17 @@ import {
   CommentSubmission,
   CommentSubmissionReceipt,
   OpenCodeConnection,
+  OpenCodeConnectionSelection,
   OpenCodeSessionId,
   OpenCodeSessionSummary,
 } from "@diffdash/domain/comment"
+import {
+  CommentNote,
+  CommentNoteContext,
+  CommentNoteId,
+  CommentNoteSubject,
+  SendCommentNotesReceipt,
+} from "@diffdash/domain/comment-note"
 import {
   GitFileRevision,
   GitProviderDescriptor,
@@ -698,6 +706,73 @@ export const CommentSubmissionSubmitRpc = applicationRpc(
     restart: "failOnRestart",
   }),
 )
+export const CommentNotesListRpc = applicationRpc(
+  "CommentNotes.list",
+  withContext({ projectId: ReviewProjectId, context: CommentNoteContext }),
+  Schema.Array(CommentNote).pipe(Schema.check(Schema.isMaxLength(1_000))),
+  policy({ deadlineMs: 10_000, maxResponseBytes: 2 * MIB, scope: "project" }),
+)
+export const CommentNotesCreateRpc = applicationRpc(
+  "CommentNotes.create",
+  withContext({
+    projectId: ReviewProjectId,
+    context: CommentNoteContext,
+    subject: CommentNoteSubject,
+    body: MarkdownBody,
+  }),
+  CommentNote,
+  policy({
+    deadlineMs: 10_000,
+    maxRequestBytes: 2 * MIB,
+    maxResponseBytes: 2 * MIB,
+    mutation: "uncertainMutation",
+    idempotency: "nonIdempotent",
+    scope: "project",
+  }),
+)
+export const CommentNotesDeleteRpc = applicationRpc(
+  "CommentNotes.delete",
+  withContext({ projectId: ReviewProjectId, context: CommentNoteContext, noteId: CommentNoteId }),
+  Schema.Void,
+  policy({
+    deadlineMs: 10_000,
+    mutation: "idempotentMutation",
+    idempotency: "idempotent",
+    restart: "retryInNewEpoch",
+    scope: "project",
+  }),
+)
+export const CommentNotesClearRpc = applicationRpc(
+  "CommentNotes.clear",
+  withContext({ projectId: ReviewProjectId, context: CommentNoteContext }),
+  Schema.Void,
+  policy({
+    deadlineMs: 10_000,
+    mutation: "idempotentMutation",
+    idempotency: "idempotent",
+    restart: "retryInNewEpoch",
+    scope: "project",
+  }),
+)
+export const CommentNotesSendRpc = applicationRpc(
+  "CommentNotes.send",
+  withContext({
+    projectId: ReviewProjectId,
+    context: CommentNoteContext,
+    connection: OpenCodeConnectionSelection,
+  }),
+  SendCommentNotesReceipt,
+  policy({
+    deadlineMs: 30_000,
+    maxRequestBytes: 8 * KIB,
+    maxResponseBytes: 4 * KIB,
+    mutation: "uncertainMutation",
+    idempotency: "nonIdempotent",
+    cancellation: "uninterruptible",
+    restart: "failOnRestart",
+    scope: "project",
+  }),
+)
 export const ReviewThreadsAddUserMessageRpc = applicationRpc(
   "ReviewThreads.addUserMessage",
   withContext({ threadId: ReviewThreadId, bodyMarkdown: MarkdownBody }),
@@ -864,6 +939,11 @@ export const CoreApplicationRpcs = RpcGroup.make(
   OpenCodeListSessionsRpc,
   OpenCodeConnectSessionRpc,
   CommentSubmissionSubmitRpc,
+  CommentNotesListRpc,
+  CommentNotesCreateRpc,
+  CommentNotesDeleteRpc,
+  CommentNotesClearRpc,
+  CommentNotesSendRpc,
   ReviewThreadsAddUserMessageRpc,
   ReviewThreadsCreateRpc,
   ReviewThreadsGetRpc,

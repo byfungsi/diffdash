@@ -7,17 +7,23 @@ import {
   OpenCodeSessionSummary,
 } from "@diffdash/domain/comment"
 import { DEFAULT_CODE_THEME_PREFERENCES } from "@diffdash/domain/ai-settings"
+import {
+  CommentNote,
+  CommentNoteId,
+  ProjectCommentNoteContext,
+} from "@diffdash/domain/comment-note"
 import { RepositoryCheckoutPath } from "@diffdash/domain/repository"
 import { GitCommitSha } from "@diffdash/domain/repository-comparison"
 import { RepositoryRelativePath } from "@diffdash/domain/repository-path"
 import { ReviewProjectId, ReviewRevision } from "@diffdash/domain/review-identity"
-import { Option } from "effect"
+import { Effect, Option } from "effect"
 import { flushSync } from "react-dom"
 import { createRoot, type Root } from "react-dom/client"
 import { afterEach, assert, describe, expect, it, vi } from "vitest"
 
 import "@/styles.css"
 import { CodeFileViewer } from "@/project-workspace/code-file-viewer"
+import type { CommentNotesOperations } from "@/platform/comment-notes"
 import { CommentSubmissionContext } from "./comment-submission-context"
 import {
   ReviewCommentsActivityPane,
@@ -27,7 +33,7 @@ import {
   REVIEW_COMMENTS_CODE_SOURCE_ID,
   REVIEW_COMMENTS_EXTENSION_ID,
 } from "./review-comments-extension"
-import { ReviewCommentsStateProvider } from "./review-comments-provider"
+import { ReviewCommentsStateControllerProvider } from "./review-comments-provider"
 import { TrustedExtensionRegistrationToken } from "../extension-registry"
 import { CodeSurfaceCapabilityProvider } from "../code/code-surface-capability"
 
@@ -57,6 +63,13 @@ const contributions = [
     component: ReviewCommentsCodeSourceContribution,
   },
 ]
+const commentNotes = {
+  list: () => Effect.succeed([]),
+  create: () => Effect.die("Note creation must not run in Review mode"),
+  delete: () => Effect.die("Note deletion must not run in Review mode"),
+  clear: () => Effect.die("Note clearing must not run in Review mode"),
+  send: () => Effect.die("Note delivery must not run in Review mode"),
+}
 
 afterEach(() => {
   root?.unmount()
@@ -160,6 +173,74 @@ describe("Review Comments Code contribution", () => {
     expect(document.body.textContent).toContain("Select a source line to start a comment.")
     expect(document.body.textContent).not.toContain("src/greeting.ts:1")
   })
+
+  it("opens another composer on a line that already has a note without an agent connection", async () => {
+    let noteSequence = 0
+    const notes: CommentNotesOperations = {
+      list: () => Effect.succeed([]),
+      create: ({ projectId: noteProjectId, subject, body }) =>
+        Effect.sync(() => {
+          noteSequence += 1
+          return CommentNote.make({
+            id: CommentNoteId.make(`note-${String(noteSequence)}`),
+            projectId: noteProjectId,
+            subject,
+            body,
+            createdAt: "2026-08-29T12:00:00.000Z",
+          })
+        }),
+      delete: () => Effect.void,
+      clear: () => Effect.void,
+      send: () => Effect.die("Note delivery must not run without a connection"),
+    }
+    renderHarness(projectId, vi.fn(), Option.some(gitRevision), revision, {
+      commentNotes: notes,
+      connection: Option.none(),
+      mode: "notes",
+      renderActivityPane: false,
+    })
+
+    const line = await codeLine(0)
+    line.click()
+    const firstComposer = await vi.waitFor(() => {
+      const textarea = document.querySelector<HTMLTextAreaElement>(
+        'textarea[aria-label="Code comment"]',
+      )
+      expect(textarea).not.toBeNull()
+      return textarea!
+    })
+    setTextareaValue(firstComposer, "First note")
+    const addNote = [...document.querySelectorAll<HTMLButtonElement>("button")].find(
+      (button) => button.textContent?.trim() === "Add note",
+    )
+    assert(addNote !== undefined)
+    addNote.click()
+    await vi.waitFor(() => {
+      expect(document.body.textContent).toContain("First note")
+      expect(document.querySelector('textarea[aria-label="Code comment"]')).toBeNull()
+    })
+
+    const annotatedLine = await codeLine(0)
+    annotatedLine.click()
+    const secondComposer = await vi.waitFor(() => {
+      const textarea = document.querySelector<HTMLTextAreaElement>(
+        'textarea[aria-label="Code comment"]',
+      )
+      expect(textarea).not.toBeNull()
+      return textarea!
+    })
+    setTextareaValue(secondComposer, "Second note")
+    const addSecondNote = [...document.querySelectorAll<HTMLButtonElement>("button")].find(
+      (button) => button.textContent?.trim() === "Add note",
+    )
+    assert(addSecondNote !== undefined)
+    addSecondNote.click()
+    await vi.waitFor(() => {
+      expect(document.body.textContent).toContain("First note")
+      expect(document.body.textContent).toContain("Second note")
+      expect(document.querySelector('textarea[aria-label="Code comment"]')).toBeNull()
+    })
+  })
 })
 
 const renderHarness = (
@@ -167,6 +248,12 @@ const renderHarness = (
   submit: (submission: CommentSubmission) => Promise<CommentSubmissionReceipt>,
   activeGitRevision: Option.Option<GitCommitSha>,
   workspaceRevision: ReviewRevision = revision,
+  options: {
+    readonly commentNotes?: CommentNotesOperations
+    readonly connection?: Option.Option<OpenCodeConnectionSelection>
+    readonly mode?: "notes" | "review"
+    readonly renderActivityPane?: boolean
+  } = {},
 ) => {
   const container = document.body.firstElementChild ?? document.createElement("div")
   if (!container.isConnected) {
@@ -180,9 +267,13 @@ const renderHarness = (
   })
   flushSync(() => {
     root?.render(
-      <ReviewCommentsStateProvider
-        connection={Option.some(activeConnection)}
+      <ReviewCommentsStateControllerProvider
+        commentNotes={options.commentNotes ?? commentNotes}
+        connection={options.connection ?? Option.some(activeConnection)}
+        mode={options.mode ?? "review"}
+        noteContext={ProjectCommentNoteContext.make({})}
         projectId={activeProjectId}
+        onModeChange={() => Promise.resolve()}
       >
         <CommentSubmissionContext
           value={{
@@ -201,26 +292,28 @@ const renderHarness = (
               projectId={activeProjectId}
               revision={workspaceRevision}
             />
-            <CodeSurfaceCapabilityProvider
-              capability={{ workspaceRevision, selectedPath: path, selectPath: () => undefined }}
-            >
-              <ReviewCommentsActivityPane
-                location={{ surface: "code", projectId: activeProjectId }}
-                paneHost={{
-                  contextOpen: true,
-                  detailOpen: false,
-                  contextActions: null,
-                  openContext: () => undefined,
-                  openDetail: () => undefined,
-                  closeContext: () => undefined,
-                  closeDetail: () => undefined,
-                  showMain: () => undefined,
-                }}
-              />
-            </CodeSurfaceCapabilityProvider>
+            {options.renderActivityPane === false ? null : (
+              <CodeSurfaceCapabilityProvider
+                capability={{ workspaceRevision, selectedPath: path, selectPath: () => undefined }}
+              >
+                <ReviewCommentsActivityPane
+                  location={{ surface: "code", projectId: activeProjectId }}
+                  paneHost={{
+                    contextOpen: true,
+                    detailOpen: false,
+                    contextActions: null,
+                    openContext: () => undefined,
+                    openDetail: () => undefined,
+                    closeContext: () => undefined,
+                    closeDetail: () => undefined,
+                    showMain: () => undefined,
+                  }}
+                />
+              </CodeSurfaceCapabilityProvider>
+            )}
           </div>
         </CommentSubmissionContext>
-      </ReviewCommentsStateProvider>,
+      </ReviewCommentsStateControllerProvider>,
     )
   })
 }
