@@ -206,7 +206,7 @@ type CompletedWalkthroughOperation = Extract<
 const demoCodeFiles = new Map<RepositoryRelativePath, string>([
   [
     RepositoryRelativePath.make("packages/db/src/replay-claims.ts"),
-    `import type { Database } from "./database"
+    `import type { Database } from "@dispatch/db/database"
 
 export interface ClaimDeliveryInput {
   readonly deliveryId: string
@@ -238,7 +238,7 @@ export const claimDelivery = (
     RepositoryRelativePath.make("services/webhooks/src/replay/claim-delivery.ts"),
     `import type { Database } from "@dispatch/db"
 import { claimDelivery } from "@dispatch/db/replay-claims"
-import { deliverWebhook } from "../delivery/deliver-webhook"
+import { deliverWebhook } from "@dispatch/webhooks/delivery/deliver-webhook"
 
 export const replayDelivery = async (
   database: Database,
@@ -268,9 +268,9 @@ export const replayBatch = async (
   ],
   [
     RepositoryRelativePath.make("services/webhooks/src/replay/__tests__/claim-delivery.test.ts"),
-    `import { describe, expect, it, vi } from "vitest"
-import { createDatabaseFixture } from "../../testing/database-fixture"
-import { replayDelivery } from "../claim-delivery"
+    `import { createDatabaseFixture } from "@dispatch/webhooks/testing/database-fixture"
+import { replayDelivery } from "@dispatch/webhooks/replay/claim-delivery"
+import { describe, expect, it, vi } from "vitest"
 
 describe("replayDelivery", () => {
   it("uses database time when regional worker clocks disagree", async () => {
@@ -293,10 +293,10 @@ describe("replayDelivery", () => {
   ],
   [
     RepositoryRelativePath.make("apps/ops/src/routes/webhook-replays.tsx"),
-    `import { StatusBadge } from "../../components/status-badge"
-import { TableCell, TableRow } from "../../components/table"
-import { formatRelativeTime, formatTimestamp } from "../../shared/time"
-import type { WebhookDelivery } from "../../types/webhook-delivery"
+    `import { StatusBadge } from "@dispatch/ops/components/status-badge"
+import { TableCell, TableRow } from "@dispatch/ops/components/table"
+import { formatRelativeTime, formatTimestamp } from "@dispatch/ops/shared/time"
+import type { WebhookDelivery } from "@dispatch/ops/types/webhook-delivery"
 
 export interface WebhookReplayRowProps {
   readonly delivery: WebhookDelivery
@@ -353,7 +353,7 @@ const demoInitialCodeFiles = new Map<RepositoryRelativePath, string>([
     RepositoryRelativePath.make("services/webhooks/src/replay/claim-delivery.ts"),
     `import type { Database } from "@dispatch/db"
 import { claimDelivery } from "@dispatch/db/replay-claims"
-import { deliverWebhook } from "../delivery/deliver-webhook"
+import { deliverWebhook } from "@dispatch/webhooks/delivery/deliver-webhook"
 
 export const replayDelivery = async (
   database: Database,
@@ -376,9 +376,9 @@ export const replayDelivery = async (
   ],
   [
     RepositoryRelativePath.make("services/webhooks/src/replay/__tests__/claim-delivery.test.ts"),
-    `import { describe, expect, it } from "vitest"
-import { createDatabaseFixture } from "../../testing/database-fixture"
-import { replayDelivery } from "../claim-delivery"
+    `import { createDatabaseFixture } from "@dispatch/webhooks/testing/database-fixture"
+import { replayDelivery } from "@dispatch/webhooks/replay/claim-delivery"
+import { describe, expect, it } from "vitest"
 
 describe("replayDelivery", () => {
   it("grants an active replay lease to only one worker", async () => {
