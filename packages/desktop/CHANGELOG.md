@@ -1,5 +1,11 @@
 # DiffDash Changelog
 
+## 0.16.2
+
+### Patch Changes
+
+- [#120](https://github.com/byfungsi/diffdash/pull/120) [`9f0b491`](https://github.com/byfungsi/diffdash/commit/9f0b49146fdb9f58dd9502b894723f8edb868347) Thanks [@hanipcode](https://github.com/hanipcode)! - Restore anonymous analytics events from packaged desktop releases.
+
 ## 0.16.1
 
 ### Patch Changes
