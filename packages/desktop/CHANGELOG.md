@@ -1,5 +1,11 @@
 # DiffDash Changelog
 
+## 0.16.1
+
+### Patch Changes
+
+- [#118](https://github.com/byfungsi/diffdash/pull/118) [`9b650b5`](https://github.com/byfungsi/diffdash/commit/9b650b50431f0a1230aa230ecb8e74b89f0a6bc5) Thanks [@hanipcode](https://github.com/hanipcode)! - Keep Review note creation available from diff gutters when an OpenCode session is connected.
+
 ## 0.16.0
 
 ### Minor Changes
