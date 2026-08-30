@@ -336,6 +336,7 @@ const ReviewCommentsAnnotation = ({
   readonly onSubmitLine: (anchor: ReviewThreadAnchor, bodyMarkdown: string) => Promise<void>
   readonly onToggleLine: (anchor: ReviewThreadAnchor) => void
 }) => {
+  const commentMode = useReviewCommentsState().mode
   const { anchor, details, draftAnchor, expanded } = annotation
   const contentId = reviewThreadAnnotationContentId(anchor)
   const singleThreadDetails = details.length === 1 ? (details.at(0) ?? null) : null
@@ -414,6 +415,7 @@ const ReviewCommentsAnnotation = ({
                 <div className="p-3">
                   <ReviewThreadComposer
                     label="Line comment"
+                    submitLabel={commentMode === "notes" ? "Add note" : undefined}
                     onCancel={() => onToggleLine(anchor)}
                     onSubmit={(bodyMarkdown) => onSubmitLine(anchor, bodyMarkdown)}
                   />

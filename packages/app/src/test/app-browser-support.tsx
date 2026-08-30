@@ -1129,6 +1129,7 @@ type AppBrowserScenarioId =
   | "codeRibbonLink"
   | "codeRibbonRelink"
   | "codeRibbonShortcuts"
+  | "connectedReviewNotesGutter"
   | "diffLineContextMenu"
   | "diffLanguageNavigation"
   | "diffSearchSubstrings"
@@ -2146,44 +2147,8 @@ scenario("reviewCommentsConnectionScope", async () => {
   })
   renderApp()
 
-  const chooseOpenCodeSession = async () => {
-    const connectionButton = await vi.waitFor(() => {
-      const button = document.querySelector<HTMLButtonElement>("[data-workbench-ai-connection]")
-      expect(button).not.toBeNull()
-      expect(button?.disabled).toBe(false)
-      return button
-    })
-    connectionButton?.dispatchEvent(
-      new PointerEvent("pointerdown", {
-        bubbles: true,
-        button: 0,
-        composed: true,
-        pointerId: 1,
-        pointerType: "mouse",
-      }),
-    )
-    const openCodeItem = await vi.waitFor(() => {
-      const item = [...document.querySelectorAll<HTMLElement>('[role="menuitem"]')].find(
-        (candidate) => candidate.textContent?.includes("OpenCode") ?? false,
-      )
-      expect(item).not.toBeUndefined()
-      return item
-    })
-    openCodeItem?.dispatchEvent(
-      new PointerEvent("pointermove", { bubbles: true, pointerType: "mouse" }),
-    )
-    const sessionItem = await vi.waitFor(() => {
-      const item = [...document.querySelectorAll<HTMLElement>('[role="menuitem"]')].find(
-        (candidate) => candidate.textContent?.includes(session.title) ?? false,
-      )
-      expect(item).not.toBeUndefined()
-      return item
-    })
-    sessionItem?.click()
-  }
-
   await openDefaultProject()
-  await chooseOpenCodeSession()
+  await connectOpenCodeSessionFromTitlebar(session)
   await vi.waitFor(() => {
     expect(calls.connectOpenCodeSession).toHaveBeenCalledWith({
       sessionId: session.id,
@@ -2210,7 +2175,7 @@ scenario("reviewCommentsConnectionScope", async () => {
     expect(document.body.textContent).toContain("fungsi/other")
   })
 
-  await chooseOpenCodeSession()
+  await connectOpenCodeSessionFromTitlebar(session)
   await vi.waitFor(() => expect(calls.connectOpenCodeSession).toHaveBeenCalledTimes(2))
   document.querySelector<HTMLButtonElement>('button[aria-label="Back"]')?.click()
   const firstProject = await vi.waitFor(() => {
@@ -7941,6 +7906,105 @@ scenario("localReview", async () => {
   })
 })
 
+scenario("connectedReviewNotesGutter", async () => {
+  const fixture = makeLargeDiffFixture(500, 91)
+  const session = OpenCodeSessionSummary.make({
+    id: OpenCodeSessionId.make("ses_reviewNotesGutter"),
+    title: "Review notes session",
+    directory: RepositoryCheckoutPath.make("/workspace/diffdash"),
+    updatedAt: Date.now(),
+  })
+  const calls = installDiffDashApi({
+    connectOpenCodeSession: async ({ sessionId }) => ({ sessionId, planMode: true }),
+    createCommentNote: async ({ projectId, subject, body }) =>
+      CommentNote.make({
+        id: CommentNoteId.make("review-note-1"),
+        projectId,
+        subject,
+        body,
+        createdAt: "2026-08-30T12:00:00.000Z",
+      }),
+    openCodeSessions: [session],
+    pullRequestDetail: fixture.largeDetail,
+    pullRequestDiff: fixture.largeDiff,
+    repositories: [linkedRepo(repo, "/workspace/diffdash")],
+    reviewRequests: [fixture.largePullRequest],
+    settings: AISettings.make({ ...DEFAULT_AI_SETTINGS, commentMode: "notes" }),
+  })
+  renderApp()
+  await openHostedReview(91)
+
+  await vi.waitFor(() => {
+    expect(document.body.textContent).toContain("Large diff virtualization")
+    expect(getDiffCardPaths()).toContain(fixture.largePath)
+    expect(getMountedDiffLineCount()).toBeGreaterThan(0)
+  })
+  await connectOpenCodeSessionFromTitlebar(session)
+  await vi.waitFor(() => {
+    expect(calls.connectOpenCodeSession).toHaveBeenCalledWith({
+      sessionId: session.id,
+      projectId: repo.id,
+    })
+  })
+
+  const diffShadow = getDiffShadowRoot(fixture.largePath)
+  expect(diffShadow).not.toBeNull()
+  if (diffShadow === null) throw new Error("Missing connected review notes diff")
+  const addedLine = getDiffLine(diffShadow, 'const value1 = "before"')
+  expect(addedLine).toBeDefined()
+  if (addedLine === undefined) throw new Error("Missing first connected review notes line")
+  const lineNumber = addedLine?.getAttribute("data-line")
+  const lineIndex = addedLine?.getAttribute("data-line-index")
+  const firstGutterUtility = await revealGutterUtility(diffShadow, lineNumber, lineIndex)
+  clickGutterUtility(firstGutterUtility)
+
+  const noteInput = await vi.waitFor(() => {
+    const textarea = document.querySelector<HTMLTextAreaElement>(
+      'textarea[aria-label="Thread message"]',
+    )
+    expect(textarea).not.toBeNull()
+    if (textarea === null) throw new Error("Missing connected review note composer")
+    return textarea
+  })
+  setTextareaValue(noteInput, "Keep this review note.")
+  noteInput.dispatchEvent(new InputEvent("input", { bubbles: true, inputType: "insertText" }))
+  const addNote = await vi.waitFor(() => {
+    const button = noteInput
+      .closest("form")
+      ?.querySelector<HTMLButtonElement>('button[type="submit"]')
+    expect(button).not.toBeNull()
+    expect(button?.disabled).toBe(false)
+    expect(button?.textContent?.trim()).toBe("Add note")
+    if (button === null || button === undefined) {
+      throw new Error("Missing connected review note submit button")
+    }
+    return button
+  })
+  addNote.closest("form")?.requestSubmit()
+  await vi.waitFor(() => {
+    expect(calls.createCommentNote).toHaveBeenCalledOnce()
+    expect(document.body.textContent).toContain("Keep this review note.")
+    expect(document.querySelector('textarea[aria-label="Thread message"]')).toBeNull()
+  })
+
+  const nextLine = getDiffLine(diffShadow, 'const value2 = "before"')
+  expect(nextLine).toBeDefined()
+  if (nextLine === undefined) throw new Error("Missing second connected review notes line")
+  await revealGutterUtility(
+    diffShadow,
+    nextLine.getAttribute("data-line"),
+    nextLine.getAttribute("data-line-index"),
+  )
+  clickDiffGutterNumber(
+    diffShadow,
+    nextLine.getAttribute("data-line"),
+    nextLine.getAttribute("data-line-index"),
+  )
+  await vi.waitFor(() => {
+    expect(document.querySelector('textarea[aria-label="Thread message"]')).not.toBeNull()
+  })
+})
+
 scenario("hostedReviewOverviewActions", async () => {
   const overviewSummary = HostedReviewSummary.make({
     ...pullRequest,
@@ -8662,6 +8726,20 @@ const revealGutterUtility = async (
   )
 }
 
+const clickDiffGutterNumber = (
+  shadowRoot: ShadowRoot,
+  lineNumber: string | null | undefined,
+  lineIndex: string | null | undefined,
+) => {
+  const gutterNumber = [...shadowRoot.querySelectorAll<HTMLElement>("[data-column-number]")].find(
+    (candidate) =>
+      candidate.getAttribute("data-column-number") === lineNumber &&
+      candidate.getAttribute("data-line-index") === lineIndex,
+  )
+  expect(gutterNumber).toBeDefined()
+  gutterNumber?.dispatchEvent(new MouseEvent("click", { bubbles: true, button: 0, composed: true }))
+}
+
 const getHighlightTexts = (name: string) =>
   [...(CSS.highlights.get(name) ?? [])].map((highlightRange) => {
     const range = document.createRange()
@@ -8681,6 +8759,42 @@ const clickGutterUtility = (button: HTMLButtonElement) => {
   const init = { bubbles: true, button: 0, composed: true, pointerId: 1, pointerType: "mouse" }
   button.dispatchEvent(new PointerEvent("pointerdown", init))
   button.dispatchEvent(new PointerEvent("pointerup", init))
+}
+
+const connectOpenCodeSessionFromTitlebar = async (session: OpenCodeSessionSummary) => {
+  const connectionButton = await vi.waitFor(() => {
+    const button = document.querySelector<HTMLButtonElement>("[data-workbench-ai-connection]")
+    expect(button).not.toBeNull()
+    expect(button?.disabled).toBe(false)
+    return button
+  })
+  connectionButton?.dispatchEvent(
+    new PointerEvent("pointerdown", {
+      bubbles: true,
+      button: 0,
+      composed: true,
+      pointerId: 1,
+      pointerType: "mouse",
+    }),
+  )
+  const openCodeItem = await vi.waitFor(() => {
+    const item = [...document.querySelectorAll<HTMLElement>('[role="menuitem"]')].find(
+      (candidate) => candidate.textContent?.includes("OpenCode") ?? false,
+    )
+    expect(item).not.toBeUndefined()
+    return item
+  })
+  openCodeItem?.dispatchEvent(
+    new PointerEvent("pointermove", { bubbles: true, pointerType: "mouse" }),
+  )
+  const sessionItem = await vi.waitFor(() => {
+    const item = [...document.querySelectorAll<HTMLElement>('[role="menuitem"]')].find(
+      (candidate) => candidate.textContent?.includes(session.title) ?? false,
+    )
+    expect(item).not.toBeUndefined()
+    return item
+  })
+  sessionItem?.click()
 }
 
 const dispatchKeyboardShortcut = (
