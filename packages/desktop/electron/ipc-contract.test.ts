@@ -1585,6 +1585,7 @@ const testHostConfiguration = () =>
         architecture: process.arch,
         platform: process.platform,
         packaged: false,
+        analytics: { host: undefined, projectKey: undefined },
         resourcesPath: "/app/resources",
         temporaryDirectory: "/tmp",
         userDataDirectory: "/tmp/diffdash-user-data",

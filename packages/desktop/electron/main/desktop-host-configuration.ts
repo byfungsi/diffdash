@@ -133,6 +133,10 @@ export interface DesktopHostConfigurationSource {
   readonly architecture: NodeJS.Architecture
   readonly platform: NodeJS.Platform
   readonly packaged: boolean
+  readonly analytics: {
+    readonly host: string | undefined
+    readonly projectKey: string | undefined
+  }
   readonly resourcesPath: string
   readonly temporaryDirectory: string
   readonly userDataDirectory: string
@@ -178,8 +182,8 @@ export const makeDesktopHostConfiguration = (
       appImage: optionalEnvironmentValue(source.environment.APPIMAGE),
     },
     analytics: {
-      host: optionalEnvironmentValue(source.environment.VITE_POSTHOG_HOST),
-      projectKey: optionalEnvironmentValue(source.environment.VITE_POSTHOG_KEY),
+      host: optionalEnvironmentValue(source.analytics.host),
+      projectKey: optionalEnvironmentValue(source.analytics.projectKey),
     },
     environment: {
       executableSearchPath: source.environment.PATH ?? "",
@@ -241,6 +245,10 @@ export const resolveDesktopHostConfiguration = (
       architecture: process.arch,
       platform: process.platform,
       packaged: app.isPackaged,
+      analytics: {
+        host: process.env.VITE_POSTHOG_HOST,
+        projectKey: process.env.VITE_POSTHOG_KEY,
+      },
       resourcesPath: process.resourcesPath,
       temporaryDirectory: app.getPath("temp"),
       userDataDirectory: app.getPath("userData"),
