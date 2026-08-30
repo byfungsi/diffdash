@@ -22,6 +22,10 @@ const source = {
   resourcesPath: "/opt/diffdash/resources",
   temporaryDirectory: "/var/tmp",
   userDataDirectory: "/var/app-data/DiffDash Development",
+  analytics: {
+    host: "https://analytics.example.com",
+    projectKey: "project-key",
+  },
   environment: {
     APPIMAGE: "/opt/DiffDash.AppImage",
     DEBUG_ONBOARD: "1",
@@ -38,8 +42,6 @@ const source = {
     ELECTRON_RENDERER_URL: "http://localhost:5173",
     HOME: "/home/test",
     PATH: "/usr/local/bin:/usr/bin",
-    VITE_POSTHOG_HOST: "https://analytics.example.com",
-    VITE_POSTHOG_KEY: "project-key",
     XDG_CONFIG_HOME: "/var/config",
   },
   homeDirectory: "/home/test",
@@ -197,6 +199,24 @@ describe("desktop host configuration", () => {
         url: "file:///workspace/packages/desktop/out/renderer/index.html",
       })
       expect(configuration.policies.debugOnboarding).toBe(false)
+    }),
+  )
+
+  it.effect("keeps embedded analytics when the packaged runtime environment is empty", () =>
+    Effect.gen(function* () {
+      const configuration = yield* makeDesktopHostConfiguration(
+        {
+          ...source,
+          packaged: true,
+          environment: {},
+        },
+        productionDesktopStartupConfiguration,
+      )
+
+      expect(Schema.encodeSync(CoreConfiguration)(configuration.core).analytics).toEqual({
+        host: "https://analytics.example.com",
+        projectKey: "project-key",
+      })
     }),
   )
 
