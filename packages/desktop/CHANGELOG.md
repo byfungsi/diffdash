@@ -1,5 +1,15 @@
 # DiffDash Changelog
 
+## 0.16.3
+
+### Patch Changes
+
+- [#122](https://github.com/byfungsi/diffdash/pull/122) [`38035da`](https://github.com/byfungsi/diffdash/commit/38035da5da10dc3c0150f8585d3b62aca35f59a1) Thanks [@hanipcode](https://github.com/hanipcode)! - Keep sticky filenames visible below the review toolbar after switching between Code and Review, including when search changes the toolbar height. Improve keyboard focus when switching project activities, retain definition-navigation highlights, and clear Code and Review search state when search closes.
+
+  Improve compact review layouts and file navigation, and show actionable errors for invalid local review targets and repository-link failures.
+
+  Keep navigation and keyboard shortcuts available at the minimum desktop window width, and resume saved hosted diff views when reopening a project.
+
 ## 0.16.2
 
 ### Patch Changes
