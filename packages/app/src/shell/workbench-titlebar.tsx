@@ -53,7 +53,7 @@ export const WorkbenchTitlebar = ({
     >
       <div
         className={cn(
-          "workbench-titlebar-interactive hidden items-center gap-0.5 sm:flex",
+          "workbench-titlebar-interactive hidden items-center gap-0.5 workbench:flex",
           isMac ? "pl-18" : "pl-2",
         )}
       >
@@ -81,9 +81,9 @@ export const WorkbenchTitlebar = ({
         ) : null}
       </div>
 
-      <div className="workbench-titlebar-interactive flex min-w-0 flex-1 items-center gap-1 px-2 sm:absolute sm:left-1/2 sm:block sm:translate-x-[-50%] sm:px-0">
+      <div className="workbench-titlebar-interactive flex min-w-0 flex-1 items-center gap-1 px-2 workbench:absolute workbench:left-1/2 workbench:block workbench:translate-x-[-50%] workbench:px-0">
         {canNavigateBack || canNavigateForward ? (
-          <div className="absolute top-0 right-full mr-1 hidden gap-0.5 sm:flex">
+          <div className="absolute top-0 right-full mr-1 hidden gap-0.5 workbench:flex">
             {canNavigateBack ? (
               <Button
                 type="button"
@@ -120,14 +120,16 @@ export const WorkbenchTitlebar = ({
           aria-haspopup="dialog"
           disabled={commandNavigationDisabled}
           className={cn(
-            "workbench-titlebar-interactive border-shell-titlebar-border bg-shell-titlebar-control text-shell-titlebar-muted hover:bg-shell-titlebar-control-hover hover:text-shell-titlebar-fg flex h-10 min-w-0 flex-1 items-center gap-2 rounded-md border px-2.5 text-xs transition-colors outline-none sm:h-7 sm:w-[36rem] sm:max-w-[42vw] sm:min-w-64",
+            "workbench-titlebar-interactive border-shell-titlebar-border bg-shell-titlebar-control text-shell-titlebar-muted hover:bg-shell-titlebar-control-hover hover:text-shell-titlebar-fg flex h-10 min-w-0 flex-1 items-center gap-2 rounded-md border px-2.5 text-xs transition-colors outline-none workbench:h-7 workbench:w-[36rem] workbench:max-w-[42vw] workbench:min-w-64",
             "focus-visible:border-ring focus-visible:ring-2 focus-visible:ring-ring/40",
             "disabled:pointer-events-none disabled:opacity-60",
           )}
           onClick={onOpenQuickNavigation}
         >
           <Search className="size-3.5 shrink-0" />
-          <span className="min-w-0 flex-1 truncate text-left sm:text-center">{commandLabel}</span>
+          <span className="min-w-0 flex-1 truncate text-left workbench:text-center">
+            {commandLabel}
+          </span>
           <kbd className="border-shell-titlebar-border bg-shell-titlebar/55 hidden shrink-0 rounded border px-1.5 py-0.5 font-sans text-[10px] md:inline">
             {isMac ? "⌘K" : "Ctrl K"}
           </kbd>
@@ -135,7 +137,7 @@ export const WorkbenchTitlebar = ({
         <div
           ref={onContextActionsHostChange}
           data-workbench-context-actions
-          className="workbench-titlebar-interactive contents sm:absolute sm:top-0 sm:left-full sm:ml-1 sm:flex sm:h-7 sm:items-center"
+          className="workbench-titlebar-interactive contents workbench:absolute workbench:top-0 workbench:left-full workbench:ml-1 workbench:flex workbench:h-7 workbench:items-center"
         />
       </div>
 
@@ -148,7 +150,7 @@ export const WorkbenchTitlebar = ({
           data-workbench-keyboard-shortcuts
           aria-label={shortcutTitle}
           title={shortcutTitle}
-          className="text-shell-titlebar-muted hover:bg-shell-titlebar-control-hover hover:text-shell-titlebar-fg hidden sm:inline-flex"
+          className="text-shell-titlebar-muted hover:bg-shell-titlebar-control-hover hover:text-shell-titlebar-fg hidden workbench:inline-flex"
           onClick={onOpenKeyboardShortcuts}
         >
           <Keyboard className="size-4" />

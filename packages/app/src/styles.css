@@ -153,6 +153,8 @@
 }
 
 @theme inline {
+  /* The native shell's minimum width still needs desktop titlebar controls. */
+  --breakpoint-workbench: 45rem;
   --color-background: var(--background);
   --color-foreground: var(--foreground);
   --color-card: var(--card);
