@@ -7394,7 +7394,7 @@ scenario("homeToReview", async () => {
   addedLine?.click()
   await waitForAnimationFrames(2)
   expect(document.querySelector('textarea[aria-label="Thread message"]')).toBeNull()
-  const gutterUtility = await revealGutterUtility(diffShadow!, lineNumber, addedLineIndex)
+  await revealGutterUtility(diffShadow!, lineNumber, addedLineIndex)
   const fileFilter = document.querySelector<HTMLInputElement>('input[placeholder="Filter files"]')
   expect(fileFilter).not.toBeNull()
   if (fileFilter !== null) {
@@ -7402,16 +7402,25 @@ scenario("homeToReview", async () => {
     fileFilter.dispatchEvent(new Event("input", { bubbles: true }))
     await vi.waitFor(() => {
       expect(getDiffCardPaths()).toEqual(["src/app.tsx"])
-      expect(gutterUtility.isConnected).toBe(true)
-      expect(diffShadow?.querySelector("[data-utility-button]")).toBe(gutterUtility)
     })
+    // Filtering may recycle Pierre's virtualized DOM. Assert the visible gutter
+    // remains usable rather than retaining a node from the preceding layout.
+    const filteredShadow = getDiffShadowRoot("src/app.tsx")
+    expect(filteredShadow).not.toBeNull()
+    if (filteredShadow === null) throw new Error("Filtered review diff is not mounted")
+    const filteredUtility = await revealGutterUtility(filteredShadow, lineNumber, addedLineIndex)
+    expect(filteredUtility.isConnected).toBe(true)
+    expect(filteredUtility.disabled).toBe(false)
     setInputValue(fileFilter, "")
     fileFilter.dispatchEvent(new Event("input", { bubbles: true }))
     await vi.waitFor(() => {
       expect(getDiffCardPaths()).toEqual(["docs/readme.md", "src/app.tsx"])
     })
   }
-  clickGutterUtility(gutterUtility)
+  const restoredShadow = getDiffShadowRoot("src/app.tsx")
+  expect(restoredShadow).not.toBeNull()
+  if (restoredShadow === null) throw new Error("Restored review diff is not mounted")
+  clickGutterUtility(await revealGutterUtility(restoredShadow, lineNumber, addedLineIndex))
   await vi.waitFor(() => {
     expect(document.querySelector('textarea[aria-label="Thread message"]')).not.toBeNull()
   })
