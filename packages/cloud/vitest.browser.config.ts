@@ -13,6 +13,9 @@ export default defineConfig((environment) =>
       worker: { format: "es" },
       test: {
         fileParallelism: false,
+        // Cold module workers on CI can take longer than Vitest's one-second
+        // polling default. Rendering budgets remain explicit in their tests.
+        expect: { poll: { timeout: 5_000 } },
         browser: {
           enabled: true,
           headless: true,
