@@ -1,0 +1,27 @@
+@import "@diffdash/app/styles.css";
+
+html,
+body,
+#root {
+  min-height: 100%;
+}
+
+body {
+  margin: 0;
+  min-width: 320px;
+}
+
+.cloud-auth-grid {
+  background-image:
+    linear-gradient(
+      to right,
+      color-mix(in srgb, var(--border) 48%, transparent) 1px,
+      transparent 1px
+    ),
+    linear-gradient(
+      to bottom,
+      color-mix(in srgb, var(--border) 48%, transparent) 1px,
+      transparent 1px
+    );
+  background-size: 32px 32px;
+}

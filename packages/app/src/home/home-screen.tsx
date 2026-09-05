@@ -31,6 +31,7 @@ interface HomeScreenProps {
   readonly hasQuery: boolean
   readonly isLoadingDiagnostics: boolean
   readonly isSearching: boolean
+  readonly localProjectsEnabled: boolean
   readonly localResults: readonly Repo[]
   readonly projects: readonly Repo[]
   readonly projectsStatus: string | null
@@ -64,6 +65,7 @@ export const HomeScreen = ({
   hasQuery,
   isLoadingDiagnostics,
   isSearching,
+  localProjectsEnabled,
   localResults,
   projects,
   projectsStatus,
@@ -118,21 +120,25 @@ export const HomeScreen = ({
               DiffDash
             </h1>
             <p className="text-muted-foreground max-w-3xl text-sm leading-6">
-              Open a project, choose local changes or a hosted{" "}
-              {selectedProvider?.terminology.reviewSingular ?? "review"}, and keep each workspace
-              where you left it.
+              {localProjectsEnabled
+                ? `Open a project, choose local changes or a hosted ${selectedProvider?.terminology.reviewSingular ?? "review"}, and keep each workspace where you left it.`
+                : `Find a GitHub repository, open a ${selectedProvider?.terminology.reviewSingular ?? "review"}, and keep each workspace where you left it.`}
             </p>
           </div>
         </div>
-        <div className="flex w-full shrink-0 gap-2 sm:w-auto">
-          <Button className="flex-1 sm:flex-none" onClick={onOpenProject}>
-            <FolderOpen className="size-4" />
-            Open project
-          </Button>
-        </div>
+        {localProjectsEnabled ? (
+          <div className="flex w-full shrink-0 gap-2 sm:w-auto">
+            <Button className="flex-1 sm:flex-none" onClick={onOpenProject}>
+              <FolderOpen className="size-4" />
+              Open project
+            </Button>
+          </div>
+        ) : null}
       </header>
 
-      {!isLoadingDiagnostics && missingPrerequisiteRows(diagnostics).length > 0 ? (
+      {localProjectsEnabled &&
+      !isLoadingDiagnostics &&
+      missingPrerequisiteRows(diagnostics).length > 0 ? (
         <SetupBanner
           diagnostics={diagnostics}
           status={setupStatus}
@@ -154,7 +160,11 @@ export const HomeScreen = ({
               <Input
                 value={query}
                 className="h-10 border-0 bg-transparent pr-9 pl-9 text-sm shadow-none focus-visible:border-0 focus-visible:bg-transparent focus-visible:ring-0"
-                placeholder="Search local and hosted projects"
+                placeholder={
+                  localProjectsEnabled
+                    ? "Search local and hosted projects"
+                    : "Search GitHub repositories"
+                }
                 onChange={(event) => onQueryChange(event.target.value)}
               />
               {isSearching ? (
@@ -202,7 +212,11 @@ export const HomeScreen = ({
         <ProjectSection
           dataSection="pinned"
           description="Pinned projects stay at the top of Home."
-          empty="Pin a project or open a local checkout to get started."
+          empty={
+            localProjectsEnabled
+              ? "Pin a project or open a local checkout to get started."
+              : "Search for a GitHub repository and pin it to get started."
+          }
           projects={pinnedProjects}
           status={projectsStatus}
           title="Pinned projects"

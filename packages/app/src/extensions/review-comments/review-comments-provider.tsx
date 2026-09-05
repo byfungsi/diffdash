@@ -112,12 +112,14 @@ export const ReviewCommentsProvider = ({
   directory,
   projectId,
   registrationToken: _registrationToken,
+  fixedMode,
 }: {
   readonly active: boolean
   readonly children: ReactNode
   readonly directory: RepositoryCheckoutPath | null
   readonly projectId: ReviewProjectId | null
   readonly registrationToken: TrustedExtensionRegistrationToken
+  readonly fixedMode?: CommentMode
 }) => {
   const [connection, setConnection] = useState(Option.none<OpenCodeConnectionSelection>())
   const activeConnection = Option.filter(
@@ -139,6 +141,7 @@ export const ReviewCommentsProvider = ({
       <ReviewCommentsStateProvider
         connection={activeConnection}
         projectId={active ? projectId : null}
+        fixedMode={fixedMode}
       >
         <ReviewCommentsConnectionContext value={activeConnection}>
           <ReviewCommentsDirectoryContext value={directory}>
@@ -159,10 +162,12 @@ export const ReviewCommentsStateProvider = ({
   children,
   connection,
   projectId,
+  fixedMode,
 }: {
   readonly children: ReactNode
   readonly connection: Option.Option<OpenCodeConnectionSelection>
   readonly projectId: ReviewProjectId | null
+  readonly fixedMode?: CommentMode | undefined
 }) => {
   const commentNotes = useCommentNotes()
   const reviewState = useReviewCommentsReviewState()
@@ -171,13 +176,15 @@ export const ReviewCommentsStateProvider = ({
     <ReviewCommentsStateControllerProvider
       commentNotes={commentNotes}
       connection={connection}
-      mode={settingsMutation.settings.commentMode}
+      mode={fixedMode ?? settingsMutation.settings.commentMode}
       noteContext={reviewState.commentNoteContext}
       projectId={projectId}
       onModeChange={(nextMode) =>
-        settingsMutation
-          .update((current) => AISettings.make({ ...current, commentMode: nextMode }))
-          .then(() => undefined)
+        fixedMode !== undefined
+          ? Promise.resolve()
+          : settingsMutation
+              .update((current) => AISettings.make({ ...current, commentMode: nextMode }))
+              .then(() => undefined)
       }
     >
       {children}

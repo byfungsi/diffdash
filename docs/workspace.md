@@ -25,6 +25,10 @@ verification, and local playback, and `@diffdash/repository-scale` for ignored l
 fixtures and process-tree memory plateau measurements. Generated recordings, fixtures, reports, and
 tool caches remain ignored.
 
+`@diffdash/cloud-infrastructure` owns Cloud's Alchemy 2 stack and local Worker/asset build. Its separate
+`cloud-infrastructure` catalog pins Alchemy and Effect to the versions used by Fungsi without changing
+the shared application Effect runtime. Cloud and its tooling use that catalog's Vite 8 toolchain.
+
 `@diffdash/e2e` owns full-product Playwright projects and deterministic Electron fixtures. Browser
 component tests remain with `@diffdash/app`; full-product development and packaged flows run through
 uncached, ABI-safe Turbo tasks.

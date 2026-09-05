@@ -6,7 +6,7 @@ import {
   type HostedReviewSummary,
 } from "@diffdash/domain/git-provider"
 import { Array as EffectArray, Cause, HashMap, HashSet, Match, Option, Order } from "effect"
-import { type ReactNode, useEffect, useEffectEvent, useRef, useState } from "react"
+import { type ReactNode, useEffect, useEffectEvent, useRef } from "react"
 import { useAtomRefresh, useAtomValue } from "@effect/atom-react"
 import { AsyncResult } from "effect/unstable/reactivity"
 
@@ -86,8 +86,10 @@ export const ReviewExtensionSurface = () => {
         ) ?? null)
   const hostedChecksSourceKey =
     selectedReviewProvider?.capabilities.reviewChecks === true ? sourceKeys.hosted : ""
-  const [openedHostedSourceKey, setOpenedHostedSourceKey] = useState("")
-  const hostedDiffOpen = sourceKeys.hosted.length > 0 && openedHostedSourceKey === sourceKeys.hosted
+  const hostedDiffOpen =
+    sourceKeys.hosted.length > 0 &&
+    selectedReviewTarget?.kind === "hosted" &&
+    selectedReviewTarget.view === "files"
   const selection = useReviewSelection(selectedReviewTarget, providers, hostedDiffOpen)
   const sourceOperations = useReviewSourceOperations(selection)
   const hostedReviewDetailResult = useAtomValue(hostedReviewDetailAtom(sourceKeys.hosted))
@@ -181,7 +183,6 @@ export const ReviewExtensionSurface = () => {
   )
   if (reviewContribution === undefined || reviewSurfaceContribution === undefined) return null
   const selectReview = (next: NonNullable<typeof selectedReviewTarget>) => {
-    setOpenedHostedSourceKey("")
     const activity = host.activities.find(
       (candidate) => candidate.id === PROJECT_WORKSPACE_FILES_ACTIVITY_ID,
     )
@@ -391,7 +392,19 @@ export const ReviewExtensionSurface = () => {
           surfaceContribution={reviewSurfaceContribution}
           workspaceNotice={host.workspaceNotice}
           onActiveActivityChange={host.selectActivity}
-          onOpenHostedDiff={() => setOpenedHostedSourceKey(sourceKeys.hosted)}
+          onOpenHostedDiff={() => {
+            if (selectedReviewTarget?.kind !== "hosted") return
+            const activity = host.activities.find(
+              ({ id }) => id === PROJECT_WORKSPACE_FILES_ACTIVITY_ID,
+            )
+            if (activity === undefined) return
+            const state = navigation.encodeReviewSelection(
+              Option.some({ ...selectedReviewTarget, view: "files" }),
+            )
+            if (host.navigate(reviewContribution, activity.id, state)) {
+              void host.persistLocation(reviewContribution, activity, state)
+            }
+          }}
           onHostedActionCompleted={() => {
             refreshHostedReviewDetail()
             refreshPullRequests()

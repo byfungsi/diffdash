@@ -48,6 +48,12 @@ graph TD
 `@diffdash/web` is an independent web product. `tools/*` consumes browser-safe product exports for
 demo and promotional output but is never shipped in the desktop application.
 
+`@diffdash/cloud` hosts the shared app/domain/protocol packages in the browser and owns its Cloudflare
+Worker entrypoint. `@diffdash/cloud-infrastructure` owns the Alchemy stack and local Worker/asset build
+in a separate tooling process. Its Alchemy 2-compatible Effect version never enters the application
+runtime: the boundary consists of source paths and emitted build artifacts, with no cross-version
+Effect values or product-service imports. Deployment credentials remain in the local Alchemy profile.
+
 ## Allowed Directions
 
 - `@diffdash/domain` is the lowest product model layer and imports no platform or provider package.

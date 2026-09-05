@@ -1,6 +1,6 @@
 import type { ReviewSnapshotFileInventory } from "@diffdash/domain/review-context"
 import { Predicate } from "effect"
-import { useEffect, useRef } from "react"
+import { useEffect, useMemo, useRef } from "react"
 import { buildReviewFileTreeInput } from "./file-tree-adapter"
 import { PierreFileTree, prepareFileTreeInput, useFileTree } from "./pierre"
 
@@ -107,10 +107,11 @@ export const ReviewFileTree = ({
   const appliedSelectedPathRef = useRef<string | null>(selectedPath)
   const availablePathsRef = useRef<ReadonlySet<string>>(new Set())
   const onSelectPathRef = useRef(onSelectPath)
-  const treeInput = buildReviewFileTreeInput(files, true)
-  availablePathsRef.current = new Set(treeInput.paths)
+  const treeInput = useMemo(() => buildReviewFileTreeInput(files, true), [files])
+  const availablePaths = useMemo(() => new Set(treeInput.paths), [treeInput])
+  availablePathsRef.current = availablePaths
   onSelectPathRef.current = onSelectPath
-  const preparedInput = prepareFileTreeInput(treeInput.paths)
+  const preparedInput = useMemo(() => prepareFileTreeInput(treeInput.paths), [treeInput])
   const treeInputKey = `${treeInput.paths.join("\u0000")}\u0001${treeInput.gitStatus
     .map((entry) => `${entry.path}\u0000${entry.status}`)
     .join("\u0000")}`
@@ -148,6 +149,7 @@ export const ReviewFileTree = ({
   useEffect(() => {
     const nextSelectedPath =
       selectedPath !== null && availablePathsRef.current.has(selectedPath) ? selectedPath : null
+    const selectionChanged = appliedSelectedPathRef.current !== nextSelectedPath
     appliedSelectedPathRef.current = nextSelectedPath
     for (const path of model.getSelectedPaths()) {
       if (path !== nextSelectedPath) model.getItem(path)?.deselect()
@@ -155,7 +157,7 @@ export const ReviewFileTree = ({
     if (nextSelectedPath !== null && !model.getSelectedPaths().includes(nextSelectedPath)) {
       model.getItem(nextSelectedPath)?.select()
     }
-    if (nextSelectedPath !== null) {
+    if (selectionChanged && nextSelectedPath !== null) {
       model.scrollToPath(nextSelectedPath, { focus: false, offset: "nearest" })
     }
   }, [model, selectedPath, treeInputKey])

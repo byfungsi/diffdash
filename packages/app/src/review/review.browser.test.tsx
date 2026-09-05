@@ -72,6 +72,11 @@ describe("App review browser interactions", () => {
     await appBrowserScenario("stickyDiffCardHeaders")()
   }, 30_000)
 
+  it("keeps local review sticky filenames visible below dynamic review chrome while scrolling", async () => {
+    expect.hasAssertions()
+    await appBrowserScenario("stickyLocalDiffCardHeaders")()
+  }, 30_000)
+
   it("wraps search backward across eagerly retained files", async () => {
     expect.hasAssertions()
     await appBrowserScenario("multiFileSearchWrap")()

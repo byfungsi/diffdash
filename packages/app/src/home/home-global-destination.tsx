@@ -26,6 +26,7 @@ import {
 import { useRepositoryMutations } from "@/repositories/use-repository-mutations"
 import { useCaptureAnalytics } from "@/shared/analytics"
 import { formatError } from "@/shared/errors"
+import { useApplicationCapabilities } from "@/platform/application-capabilities"
 import { HomeScreen, hostedRepositoryLabel } from "./home-screen"
 
 const EMPTY_PROVIDER_DESCRIPTORS: readonly GitProviderDescriptor[] = []
@@ -35,6 +36,7 @@ const EMPTY_HOSTED_REPOSITORIES: readonly HostedRepository[] = []
 
 /** Required host-owned Home destination, including its search, repository, and setup policy. */
 export const HomeGlobalDestination = ({ host }: GlobalNavigationDestinationProps) => {
+  const capabilities = useApplicationCapabilities()
   const captureAnalytics = useCaptureAnalytics()
   const desktop = useDesktopRuntime()
   const repositories = useRepositories()
@@ -247,6 +249,7 @@ export const HomeGlobalDestination = ({ host }: GlobalNavigationDestinationProps
         hasQuery={hasQuery}
         isLoadingDiagnostics={isLoadingDiagnostics}
         isSearching={isSearching}
+        localProjectsEnabled={capabilities.localProjects}
         localResults={localResults}
         projects={projects}
         projectsStatus={projectsStatus}

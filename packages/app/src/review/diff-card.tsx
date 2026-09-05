@@ -5,7 +5,7 @@ import type {
 } from "@/extensions/extension-registry"
 import { isVeryLargeDiffFile } from "@diffdash/domain/large-diff-policy"
 import { makeReviewDiffIdentity } from "@diffdash/domain/review-identity"
-import { Check, ChevronDown, ChevronRight, Copy } from "lucide-react"
+import { Check, ChevronDown, ChevronRight, Copy, ExternalLink } from "lucide-react"
 import { ContextMenu } from "radix-ui"
 import { Effect, Option } from "effect"
 import { type RefObject, useId, useLayoutEffect, useMemo, useRef, useState } from "react"
@@ -222,7 +222,7 @@ export const OpenDiffCard = ({
         data-diff-card-review-key={file.reviewKey}
         data-diff-file-status={file.status}
         data-diff-selected={selected ? "" : undefined}
-        className="bg-card scroll-mt-14 overflow-clip rounded-2xl border"
+        className="bg-card scroll-mt-14 overflow-clip border-b md:rounded-2xl md:border"
       >
         <DiffCardHeader
           expanded={isExpanded}
@@ -257,7 +257,7 @@ export const OpenDiffCard = ({
       data-diff-file-status={file.status}
       data-diff-selected={selected ? "" : undefined}
       data-diff-render-mode={renderAsPlainText ? "plain" : "highlighted"}
-      className="bg-card scroll-mt-14 overflow-clip rounded-2xl border"
+      className="bg-card scroll-mt-14 overflow-clip border-b md:rounded-2xl md:border"
     >
       <DiffCardHeader
         expanded={isExpanded}
@@ -365,7 +365,8 @@ export const OpenDiffCard = ({
   )
 }
 
-const diffLineNumberFromEventPath = (path: readonly EventTarget[]) =>
+/** Resolves a line number from a composed pointer path through Pierre shadow roots. */
+export const diffLineNumberFromEventPath = (path: readonly EventTarget[]) =>
   Option.firstSomeOf(
     path.map((target) =>
       Option.flatMap(Option.liftPredicate(target, isHTMLElement), (element) =>
@@ -392,7 +393,8 @@ const DiffLoadingSkeleton = () => (
   </div>
 )
 
-const DiffCardHeader = ({
+/** Shared file controls used by the single-file and whole-review Pierre adapters. */
+export const DiffCardHeader = ({
   expanded,
   file,
   focusRef,
@@ -415,9 +417,9 @@ const DiffCardHeader = ({
   return (
     <div
       data-diff-card-header
-      className="border-review-sidebar-divider flex items-center justify-between gap-3 border-b px-3 py-2"
+      className="border-review-sidebar-divider flex items-center justify-between gap-1 border-b px-2 py-1 md:gap-3 md:px-3 md:py-2"
     >
-      <div className="flex min-w-0 flex-1 items-center gap-2 overflow-hidden">
+      <div className="flex min-w-0 flex-1 items-center gap-1 overflow-hidden md:gap-2">
         <Button
           size="icon-xs"
           variant="ghost"
@@ -450,7 +452,7 @@ const DiffCardHeader = ({
           </div>
         </button>
       </div>
-      <div className="flex shrink-0 items-center gap-2">
+      <div className="ml-auto flex shrink-0 items-center gap-1 md:gap-2">
         <Badge variant="secondary" className="text-caption gap-1">
           <span className="text-review-success-text">+{file.additions}</span>
           <span className="text-review-danger-text">-{file.deletions}</span>
@@ -458,15 +460,23 @@ const DiffCardHeader = ({
         <Badge
           variant="secondary"
           data-diff-status-badge={file.status}
-          className="text-caption capitalize"
+          className="text-caption hidden capitalize md:inline-flex"
         >
           {file.status}
         </Badge>
-        <Button variant="outline" onClick={onOpenFile}>
-          Open
+        <Button
+          variant="outline"
+          className="size-6 p-0 md:h-8 md:w-auto md:px-3 md:has-[>svg]:px-3"
+          aria-label={`Open ${file.path}`}
+          title="Open file"
+          onClick={onOpenFile}
+        >
+          <ExternalLink className="size-3 md:hidden" />
+          <span className="hidden md:inline">Open</span>
         </Button>
         <label
-          className={`relative flex h-8 cursor-pointer items-center gap-2 rounded-md border px-3 text-xs font-medium transition-colors ${viewed ? "border-review-success/20 bg-review-success/[0.06] text-review-success-text hover:bg-review-success/10" : "hover:bg-accent"}`}
+          title="Viewed"
+          className={`relative flex size-6 cursor-pointer items-center justify-center gap-2 rounded-md border p-0 text-xs font-medium transition-colors focus-within:ring-2 focus-within:ring-ring md:h-8 md:w-auto md:px-3 ${viewed ? "border-review-success/20 bg-review-success/[0.06] text-review-success-text hover:bg-review-success/10" : "hover:bg-accent"}`}
         >
           <input
             type="checkbox"
@@ -480,7 +490,7 @@ const DiffCardHeader = ({
           >
             {viewed ? <Check className="size-3" strokeWidth={3} /> : null}
           </span>
-          Viewed
+          <span className="sr-only md:not-sr-only">Viewed</span>
         </label>
       </div>
     </div>

@@ -10,6 +10,7 @@ import { Predicate } from "effect"
 registerDiffDashSyntax()
 
 export {
+  type CodeViewDiffItem,
   type DiffLineAnnotation,
   type FileDiffMetadata,
   type FileDiffLoadedFiles,

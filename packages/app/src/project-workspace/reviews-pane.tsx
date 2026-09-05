@@ -15,6 +15,7 @@ import { formatError } from "@/shared/errors"
 import { Badge } from "@/shared/ui/badge"
 import { Button } from "@/shared/ui/button"
 import { ProjectWorkspaceStatePanel } from "@/shared/ui/project-workspace-state-panel"
+import { useApplicationCapabilities } from "@/platform/application-capabilities"
 
 import {
   projectReviewsLifecycle,
@@ -40,10 +41,12 @@ export const ReviewsPane = ({
   readonly onLinkRepository: () => void
   readonly onSelect: (target: SelectedReviewTarget) => void
 }) => {
+  const capabilities = useApplicationCapabilities()
   const lifecycle = projectReviewsLifecycle(local, hosted)
   const sources = (
     <ReviewsSources
       hosted={hosted}
+      localProjectsEnabled={capabilities.localProjects}
       local={local}
       repo={repo}
       onLinkRepository={onLinkRepository}
@@ -144,6 +147,7 @@ export const ReviewsPane = ({
 
 const ReviewsSources = ({
   hosted,
+  localProjectsEnabled,
   local,
   repo,
   onLinkRepository,
@@ -151,6 +155,7 @@ const ReviewsSources = ({
   onSelect,
 }: {
   readonly hosted: HostedReviewsLifecycle
+  readonly localProjectsEnabled: boolean
   readonly local: LocalReviewsLifecycle
   readonly repo: Repo
   readonly onLinkRepository: () => void
@@ -158,9 +163,11 @@ const ReviewsSources = ({
   readonly onSelect: (target: SelectedReviewTarget) => void
 }) => (
   <>
-    <ReviewSourceSection title="Local changes">
-      {renderLocalLifecycle(repo, local, onRefreshLocal, onLinkRepository, onSelect)}
-    </ReviewSourceSection>
+    {localProjectsEnabled ? (
+      <ReviewSourceSection title="Local changes">
+        {renderLocalLifecycle(repo, local, onRefreshLocal, onLinkRepository, onSelect)}
+      </ReviewSourceSection>
+    ) : null}
     <ReviewSourceSection title="Open pull requests">
       {renderHostedLifecycle(hosted, onSelect)}
     </ReviewSourceSection>

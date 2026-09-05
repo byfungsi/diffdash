@@ -1,0 +1,39 @@
+{
+  "name": "@diffdash/cloud",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "exports": {},
+  "scripts": {
+    "build": "pnpm typecheck && pnpm --dir ../../tools/cloud-infrastructure build:cloud",
+    "deploy": "pnpm --dir ../../tools/cloud-infrastructure run deploy",
+    "deploy:dry-run": "pnpm --dir ../../tools/cloud-infrastructure deploy:dry-run",
+    "dev": "pnpm --dir ../../tools/cloud-infrastructure dev",
+    "lint": "oxlint src worker vite.config.ts --no-error-on-unmatched-pattern",
+    "test": "vitest run",
+    "test:browser": "vitest run --config vitest.browser.config.ts",
+    "typecheck": "tsc --noEmit && tsc --noEmit -p tsconfig.worker.json"
+  },
+  "dependencies": {
+    "@diffdash/app": "workspace:*",
+    "@diffdash/domain": "workspace:*",
+    "@diffdash/protocol": "workspace:*",
+    "effect": "catalog:",
+    "lucide-react": "^1.23.0",
+    "react": "catalog:",
+    "react-dom": "catalog:"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^4.20260317.1",
+    "@tailwindcss/vite": "catalog:",
+    "@types/node": "catalog:",
+    "@types/react": "catalog:",
+    "@types/react-dom": "catalog:",
+    "@vitejs/plugin-react": "catalog:cloud-infrastructure",
+    "@vitest/browser-playwright": "4.1.10",
+    "oxlint": "catalog:",
+    "typescript": "catalog:",
+    "vite": "catalog:cloud-infrastructure",
+    "vitest": "catalog:"
+  }
+}

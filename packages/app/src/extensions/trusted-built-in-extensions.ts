@@ -9,6 +9,7 @@ import { codeExtension } from "./code/code-extension"
 import { reviewExtension } from "./review/review-extension"
 import { reviewCommentsExtension } from "./review-comments/review-comments-extension"
 import { walkthroughExtension } from "./walkthrough/walkthrough-extension"
+import { webNotesExtension } from "./review-comments/web-notes-extension"
 
 /** Trusted renderer extensions synchronously composed at the application root. */
 export const trustedBuiltInExtensions: readonly TrustedBuiltInExtension[] = [
@@ -16,6 +17,15 @@ export const trustedBuiltInExtensions: readonly TrustedBuiltInExtension[] = [
   codeExtension,
   walkthroughExtension,
   reviewCommentsExtension,
+]
+
+/** Trusted renderer extensions available in a hosted read-only review workspace. */
+export const trustedReviewOnlyExtensions: readonly TrustedBuiltInExtension[] = [reviewExtension]
+
+/** Web review workspace with browser-local collected notes and no agent integration. */
+export const trustedWebReviewExtensions: readonly TrustedBuiltInExtension[] = [
+  reviewExtension,
+  webNotesExtension,
 ]
 
 /** Built-in navigation provider slots retained even when their owner is omitted at cold start. */
