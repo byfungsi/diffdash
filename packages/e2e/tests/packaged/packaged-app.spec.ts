@@ -475,10 +475,7 @@ test("FUN-141 AC: verifies final packaged composition and provider persistence",
     })
     await expect(reopenedProject).toBeVisible()
     await reopenedProject.click()
-    await expect(restartedWindow.locator("[data-hosted-review-detail]")).toContainText(
-      "Fixture merge request flow",
-    )
-    await restartedWindow.getByRole("button", { name: "Open diff" }).click()
+    // Reopening restores the persisted files view, including its review threads.
     await expect(restartedWindow.locator("[data-review-editor-header]")).toContainText(
       "Fixture merge request flow",
     )
