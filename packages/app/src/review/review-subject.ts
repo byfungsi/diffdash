@@ -26,7 +26,11 @@ import { Match, Schema } from "effect"
 
 /** Schema-backed renderer navigation target for a hosted, local, or comparison review. */
 export const SelectedReviewTarget = Schema.Union([
-  Schema.Struct({ kind: Schema.Literal("hosted"), review: HostedReviewLocator }),
+  Schema.Struct({
+    kind: Schema.Literal("hosted"),
+    review: HostedReviewLocator,
+    view: Schema.optional(Schema.Literal("files")),
+  }),
   Schema.Struct({ kind: Schema.Literal("localDiff"), target: LocalReviewTarget }),
   Schema.Struct({
     kind: Schema.Literal("repositoryComparison"),

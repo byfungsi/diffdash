@@ -71,6 +71,7 @@ import {
   useDesktopRuntime,
   useReviewContent,
 } from "@/platform/renderer-runtime"
+import { useApplicationCapabilities } from "@/platform/application-capabilities"
 import type { ColorScheme } from "@/settings/theme"
 import { useCaptureAnalytics } from "@/shared/analytics"
 import { isHTMLElement } from "@/shared/dom"
@@ -80,6 +81,8 @@ import { EmptyState } from "@/shared/ui/empty-state"
 import { Input } from "@/shared/ui/input"
 import { CommandPaletteDialog, type CommandPaletteItem } from "@/shell/command-palette"
 import { WorkbenchContextActions } from "@/shell/workbench-context-actions"
+import { ReviewMobileFileTreeButton } from "@/extensions/review/review-mobile-file-tree-button"
+import { useMobileDiffOverflow } from "./use-mobile-diff-overflow"
 import { LanguageNavigationActivity } from "@/source-surface/language-navigation-activity"
 import { ProjectActivityNavigation } from "@/project-workspace/project-activity-navigation"
 import {
@@ -95,7 +98,8 @@ import {
   useLanguageNavigationCapability,
 } from "@/source-surface/language-navigation-capability"
 import { CodeDefinitionPeek } from "@/project-workspace/code-definition-peek"
-import { OpenDiffCard } from "./diff-card"
+import { ReviewCodeView } from "./review-code-view"
+import type { CodeViewHandle } from "./pierre"
 import type { ReviewDiffAnnotationMetadata } from "./review-diff-annotation"
 import { useReviewDiffContributionHost } from "@/extensions/review-diff-contribution-host"
 import {
@@ -386,6 +390,7 @@ export const ReviewDetailView = ({
   readonly surfaceContribution: OwnedExtensionContribution<ProjectSurfaceContribution>
   readonly onActiveActivityChange: (activityId: ProjectWorkspaceActivityId) => void
 }) => {
+  const capabilities = useApplicationCapabilities()
   const activeActivityContribution = activities.find((activity) => activity.id === activeActivity)
   const ActivityContextPane = activeActivityContribution?.slots?.contextPane?.component
   const ActivityDetailPane = activeActivityContribution?.slots?.detailPane?.component
@@ -529,6 +534,12 @@ export const ReviewDetailView = ({
     useSourceSurfaceRuntime<PierreFileDiff<ReviewDiffAnnotationMetadata>>()
   useSourceSurfaceHost(reviewSurfaceRuntime, diffScrollContainerRef)
   const [diffVirtualizer] = useState(() => new DiffVirtualizer(REVIEW_DIFF_VIRTUALIZER_CONFIG))
+  const useCodeView = useApplicationCapabilities().reviewViewport === "code-view"
+  const codeViewRef = useRef<CodeViewHandle<ReviewDiffAnnotationMetadata>>(null)
+  const codeViewChromeRef = useRef<HTMLDivElement>(null)
+  const [codeViewTarget, setCodeViewTarget] =
+    useState<Parameters<typeof ReviewCodeView>[0]["target"]>(null)
+  const [scrollPastEndHeight, setScrollPastEndHeight] = useState(0)
   const [reviewNavigationAnchors] = useState(() => new ReviewNavigationAnchorRegistry())
   const [reviewNavigator] = useState(() => new ReviewNavigatorController(atomRegistry))
   const [reviewSearchController] = useState(() => new ReviewSearchController(atomRegistry))
@@ -556,7 +567,6 @@ export const ReviewDetailView = ({
   const [repositoryBannerDismissed, setRepositoryBannerDismissed] = useState(false)
   const [repositoryLinking, setRepositoryLinking] = useState(false)
   const [repositoryLinkError, setRepositoryLinkError] = useState<Option.Option<string>>(Option.none)
-  const [scrollPastEndHeight, setScrollPastEndHeight] = useState(0)
   const previousFileFilterRef = useRef(fileFilter)
   const selectReviewFileRef = useRef<(file: ReviewSnapshotFileInventory) => void>(() => undefined)
   const reviewSearchOpen = reviewSearchToolbar.open
@@ -636,9 +646,13 @@ export const ReviewDetailView = ({
       }
 
       diffScrollContainerRef.current = node
+      node.dataset.reviewDiffScrollContainer = ""
       node.scrollTop = retainedDiffScrollTopRef.current
-      const content = node.firstElementChild
-      diffVirtualizer.setup(node, isHTMLElement(content) ? content : undefined)
+      // CodeView owns its scroll layout and virtualized heights.
+      if (!useCodeView) {
+        const content = node.firstElementChild
+        diffVirtualizer.setup(node, isHTMLElement(content) ? content : undefined)
+      }
     },
   )
   useLayoutEffect(() => {
@@ -655,6 +669,7 @@ export const ReviewDetailView = ({
         diffResizeFrameRef.current = null
         const reviewKeys = [...resizedDiffKeys]
         resizedDiffKeys.clear()
+        if (useCodeView) return
         diffVirtualizer.markDOMDirty()
         for (const reviewKey of reviewKeys) {
           const registration = registrations.get(reviewKey)
@@ -678,7 +693,7 @@ export const ReviewDetailView = ({
       registrations.clear()
       reviewDiffKeyByHostRef.current = new WeakMap()
     }
-  }, [diffVirtualizer])
+  }, [diffVirtualizer, useCodeView])
   useLayoutEffect(() => {
     if (aiSettings.diffViewMode !== "auto") return
     const content = reviewDiffContentRef.current
@@ -852,10 +867,14 @@ export const ReviewDetailView = ({
         : visibleBaseFiles.filter((file) => matchesReviewFileFilter(file, normalizedFileFilter)),
     [normalizedFileFilter, visibleBaseFiles],
   )
+  const orderedFilteredFiles = useMemo(
+    () => orderReviewFilesAsTree(filteredChangedFiles),
+    [filteredChangedFiles],
+  )
   const activityBehaviors = useReviewActivityBehaviors(activeActivity, {
     activityId: activeActivity,
     restrictsInventory: false,
-    visibleInventory: orderReviewFilesAsTree(filteredChangedFiles),
+    visibleInventory: orderedFilteredFiles,
     collapsedFileKeys: HashSet.fromIterable(
       changedFiles
         .filter((file) => !expandedFileKeys.has(file.reviewKey))
@@ -961,6 +980,9 @@ export const ReviewDetailView = ({
   ])
   const lastRenderedFileId = renderedChangedFiles.at(-1)?.fileId ?? null
   useLayoutEffect(() => {
+    // Inactive reviews retain state but unmount their viewport. Reconnect measurement
+    // to the new DOM when returning, even when the inventory has not changed.
+    if (!active || useCodeView) return undefined
     const container = diffScrollContainerRef.current
     const stickyChrome = stickyReviewChromeRef.current
     const content = reviewDiffContentRef.current
@@ -1005,7 +1027,7 @@ export const ReviewDetailView = ({
       observer.disconnect()
       container.style.removeProperty("--review-sticky-chrome-height")
     }
-  }, [diffVirtualizer, lastRenderedFileId])
+  }, [active, diffVirtualizer, lastRenderedFileId, useCodeView])
   const resolvedDiffViewMode =
     aiSettings.diffViewMode === "auto" ? autoDiffViewMode : aiSettings.diffViewMode
   const onReviewTokenClick = useStableCallback<
@@ -1032,9 +1054,12 @@ export const ReviewDetailView = ({
       side: Schema.decodeUnknownOption(SourceSurfaceSide)(token.side),
     }),
   )
+  const diffOverflow = useMobileDiffOverflow()
   const reviewDiffOptions = useMemo<FileDiffOptions<ReviewDiffAnnotationMetadata>>(
     () => ({
       ...REVIEW_DIFF_OPTIONS,
+      overflow: diffOverflow,
+      enableGutterUtility: diffOverflow !== "scroll",
       diffStyle: resolvedDiffViewMode,
       theme: aiSettings.codeThemes,
       themeType: colorScheme,
@@ -1049,14 +1074,14 @@ export const ReviewDetailView = ({
       onReviewTokenEnter,
       onReviewTokenLeave,
       resolvedDiffViewMode,
+      diffOverflow,
     ],
   )
   const previousResolvedDiffViewModeRef = useRef(resolvedDiffViewMode)
   useEffect(() => {
     const previousMode = previousResolvedDiffViewModeRef.current
     previousResolvedDiffViewModeRef.current = resolvedDiffViewMode
-    if (previousMode === resolvedDiffViewMode) return
-
+    if (useCodeView || previousMode === resolvedDiffViewMode) return undefined
     const frame = window.requestAnimationFrame(() => {
       diffVirtualizer.markDOMDirty()
       for (const registration of reviewDiffRegistrationsRef.current.values()) {
@@ -1066,7 +1091,7 @@ export const ReviewDetailView = ({
       }
     })
     return () => window.cancelAnimationFrame(frame)
-  }, [diffVirtualizer, resolvedDiffViewMode])
+  }, [diffVirtualizer, resolvedDiffViewMode, useCodeView])
   const navigableThreadIdValues = reviewThreadDetails.flatMap((details) => {
     const anchor = details.thread.activeAnchor
     if (
@@ -1095,7 +1120,7 @@ export const ReviewDetailView = ({
     expandedFileKeys,
     onSetViewed,
     scopeKey: `${reviewIdentity}\u0000${reviewBaseSha ?? ""}\u0000${reviewHeadSha ?? ""}`,
-    stickyChromeRef: stickyReviewChromeRef,
+    stickyChromeRef: useCodeView ? codeViewChromeRef : stickyReviewChromeRef,
     viewedFileKeys: viewportViewedFileKeys,
     visibleFiles: visibleChangedFiles,
   })
@@ -1270,9 +1295,11 @@ export const ReviewDetailView = ({
       return null
     }
 
-    registration.instance.syncVirtualizedTop()
-    diffVirtualizer.markDOMDirty()
-    diffVirtualizer.requestHeightReconcile(registration.instance)
+    if (!useCodeView) {
+      registration.instance.syncVirtualizedTop()
+      diffVirtualizer.markDOMDirty()
+      diffVirtualizer.requestHeightReconcile(registration.instance)
+    }
     registration.instance.rerender()
     return registration.generation
   })
@@ -1389,12 +1416,35 @@ export const ReviewDetailView = ({
       if (input.behavior.selection === "update")
         setNavigationSelectedFileId(Option.some(file.fileId))
       setActivePane("diff")
+      if (useCodeView) setCodeViewTarget({ reviewKey: file.reviewKey })
       if (input.origin === "thread-detail") {
         onShowFilesActivity()
         onSidebarExpandedChange(true)
       }
     },
   )
+  useLayoutEffect(() => {
+    if (!useCodeView) return
+    const container = diffScrollContainerRef.current
+    if (container === null) return
+    container.dataset.reviewNavigationPhase = Match.valueTags(navigationStatus, {
+      active: (state) => state.phase,
+      idle: () => "idle",
+    })
+    container.dataset.reviewNavigationOutcome =
+      navigationLastOutcome === null
+        ? ""
+        : Match.valueTags(navigationLastOutcome, {
+            cancelled: (outcome) => `cancelled:${outcome.reason}:`,
+            completed: () => "completed::",
+            failed: (outcome) => `failed:${outcome.reason}:${outcome.phase}`,
+            superseded: () => "superseded::",
+            unavailable: (outcome) => `unavailable:${outcome.reason}:`,
+          })
+    container.toggleAttribute("data-review-navigation-locked", navigationLocked)
+    container.ariaBusy = String(navigationLocked)
+    container.style.overflowY = navigationLocked ? "hidden" : "auto"
+  }, [useCodeView, navigationStatus, navigationLastOutcome, navigationLocked])
   reviewViewportBridge.update({
     review: {
       projectId: manifest.projectId,
@@ -1404,7 +1454,7 @@ export const ReviewDetailView = ({
     },
     inventory: progressiveInventory,
     containerRef: diffScrollContainerRef,
-    stickyChromeRef: stickyReviewChromeRef,
+    stickyChromeRef: useCodeView ? codeViewChromeRef : stickyReviewChromeRef,
     pages: snapshotPageReader,
     diffRegistrations: reviewDiffRegistrationsRef.current,
     diffVirtualizer,
@@ -1811,6 +1861,7 @@ export const ReviewDetailView = ({
     }
   }
   const showRepositoryLinkBanner =
+    capabilities.localProjects &&
     Match.valueTags(review, {
       hosted: () => true,
       local: () => false,
@@ -1939,8 +1990,8 @@ export const ReviewDetailView = ({
         }
         diff={
           <div
-            ref={setDiffScrollContainer}
-            data-review-diff-scroll-container
+            ref={useCodeView ? undefined : setDiffScrollContainer}
+            data-review-diff-scroll-container={useCodeView ? undefined : ""}
             data-review-navigation-outcome={
               navigationLastOutcome === null
                 ? undefined
@@ -1964,9 +2015,12 @@ export const ReviewDetailView = ({
             style={{
               overflowAnchor: "none",
               overflowY: navigationLocked ? "hidden" : "auto",
-              scrollbarGutter: "stable",
             }}
-            className="bg-workspace-canvas h-full min-h-0 min-w-0 flex-1 overflow-x-hidden overflow-y-auto overscroll-contain"
+            className={
+              useCodeView
+                ? "bg-workspace-canvas h-full min-h-0 min-w-0 flex-1 overflow-hidden"
+                : "bg-workspace-canvas h-full min-h-0 min-w-0 flex-1 overflow-x-hidden overflow-y-auto overscroll-contain md:[scrollbar-gutter:stable]"
+            }
             onPointerMove={(event) => {
               lastPointerPositionRef.current = { clientX: event.clientX, clientY: event.clientY }
             }}
@@ -1974,7 +2028,7 @@ export const ReviewDetailView = ({
               lastPointerPositionRef.current = null
             }}
           >
-            <div className="min-h-full">
+            <div className={useCodeView ? "flex h-full min-h-0 flex-col" : "min-h-full"}>
               <div
                 ref={stickyReviewChromeRef}
                 data-review-sticky-chrome
@@ -2109,7 +2163,11 @@ export const ReviewDetailView = ({
               <main
                 ref={reviewDiffContentRef}
                 data-review-diff-content
-                className="mx-auto max-w-review-diff space-y-4 px-5 py-4"
+                className={
+                  useCodeView
+                    ? "flex min-h-0 w-full flex-1 flex-col"
+                    : "mx-auto max-w-review-diff md:space-y-4 md:px-5 md:py-4"
+                }
               >
                 {resolveProjectActivityMainPane({
                   activeActivityId: activeActivity,
@@ -2146,8 +2204,20 @@ export const ReviewDetailView = ({
                       ) : null}
                       {progressiveIdentity !== null &&
                       renderedChangedFiles.length > 0 &&
-                      !eagerLoadSettled ? (
-                        <EmptyState>Loading review files...</EmptyState>
+                      (inventoryLoading || !eagerLoadSettled) ? (
+                        <EmptyState>
+                          Loading review files… {progressiveInventory.length} discovered
+                        </EmptyState>
+                      ) : null}
+                      {inventoryError !== null && renderedChangedFiles.length > 0 ? (
+                        <EmptyState>
+                          <p role="alert">
+                            Review loading stopped. The files below are incomplete. {inventoryError}
+                          </p>
+                          <Button variant="outline" onClick={onReload}>
+                            Reload review
+                          </Button>
+                        </EmptyState>
                       ) : null}
                       {progressiveIdentity === null && snapshotRefreshing ? (
                         <EmptyState>Refreshing review files...</EmptyState>
@@ -2162,74 +2232,69 @@ export const ReviewDetailView = ({
                           </div>
                         </EmptyState>
                       ) : null}
-                      {progressiveIdentity === null || !eagerLoadSettled
-                        ? null
-                        : renderedChangedFiles.map((file) => {
-                            const parsedFile = HashMap.get(loadedFilesById, file.fileId)
-                            return Option.isNone(parsedFile) ? (
-                              <ReviewPagePlaceholder
-                                key={file.reviewKey}
-                                error={fileErrors.get(file.fileId) ?? "Could not load this diff"}
-                                file={file}
-                                onFileAnchorChange={(element, focusElement) =>
-                                  registerFileNavigationAnchor(file.fileId, element, focusElement)
-                                }
-                                onRetry={() => void loadSnapshotFiles([file.fileId])}
-                              />
-                            ) : (
-                              <OpenDiffCard
-                                key={file.reviewKey}
-                                annotationProvider={reviewContributionHost.semantic.annotations}
-                                navigationAnchor={navigationThreadAnchor}
-                                diffOptions={reviewDiffOptions}
-                                expanded={
-                                  !HashSet.has(activityBehavior.collapsedFileKeys, file.reviewKey)
-                                }
-                                file={parsedFile.value}
-                                forceExpanded={HashSet.has(forceExpandedFileKeys, file.reviewKey)}
-                                selected={
-                                  Option.contains(activeSearchReviewKey, file.reviewKey) ||
-                                  Option.contains(selectedVisiblePath, file.path)
-                                }
-                                surfaceRuntime={reviewSurfaceRuntime}
-                                viewed={HashSet.has(viewedFileKeys, file.reviewKey)}
-                                onFileAnchorChange={(element, focusElement) =>
-                                  registerFileNavigationAnchor(file.fileId, element, focusElement)
-                                }
-                                onLoadDiffFiles={() =>
-                                  runRendererPromise(
-                                    reviewWorkspaceSession.loadDiffFiles(parsedFile.value),
-                                  )
-                                }
-                                onOpenFile={() => openRepositoryFile(file.path)}
-                                onActivateLine={(side, lineNumber) =>
-                                  reviewContributionHost.semantic.activateLine(
-                                    parsedFile.value,
-                                    side,
-                                    lineNumber,
-                                  )
-                                }
-                                onAnnotationsRendered={
-                                  reviewContributionHost.semantic.annotationsRendered
-                                }
-                                onSelect={() => selectPathAndScroll(file.path)}
-                                onSetViewed={(viewed) =>
-                                  setViewedPreservingViewport(file.reviewKey, viewed)
-                                }
-                                onToggleExpanded={() => toggleVisibleDiffCard(file.reviewKey)}
-                              />
-                            )
-                          })}
+                      {renderedChangedFiles
+                        .filter((file) => fileErrors.has(file.fileId))
+                        .map((file) => (
+                          <ReviewPagePlaceholder
+                            key={file.reviewKey}
+                            error={fileErrors.get(file.fileId) ?? "Could not load this diff"}
+                            file={file}
+                            onFileAnchorChange={(element, focusElement) =>
+                              registerFileNavigationAnchor(file.fileId, element, focusElement)
+                            }
+                            onRetry={() => void loadSnapshotFiles([file.fileId])}
+                          />
+                        ))}
+                      <ReviewCodeView
+                        target={codeViewTarget}
+                        viewport={useCodeView ? "code-view" : "cards"}
+                        ref={codeViewRef}
+                        containerRef={setDiffScrollContainer}
+                        files={renderedChangedFiles.flatMap((file) =>
+                          Option.toArray(HashMap.get(loadedFilesById, file.fileId)),
+                        )}
+                        getCardProps={(file) => ({
+                          annotationProvider: reviewContributionHost.semantic.annotations,
+                          navigationAnchor: navigationThreadAnchor,
+                          diffOptions: reviewDiffOptions,
+                          expanded: !HashSet.has(
+                            activityBehavior.collapsedFileKeys,
+                            file.reviewKey,
+                          ),
+                          file,
+                          forceExpanded: HashSet.has(forceExpandedFileKeys, file.reviewKey),
+                          selected:
+                            Option.contains(activeSearchReviewKey, file.reviewKey) ||
+                            Option.contains(selectedVisiblePath, file.path),
+                          surfaceRuntime: reviewSurfaceRuntime,
+                          viewed: HashSet.has(viewedFileKeys, file.reviewKey),
+                          onFileAnchorChange: (element, focusElement) =>
+                            registerFileNavigationAnchor(file.fileId, element, focusElement),
+                          onLoadDiffFiles: () =>
+                            runRendererPromise(reviewWorkspaceSession.loadDiffFiles(file)),
+                          onOpenFile: () => openRepositoryFile(file.path),
+                          onActivateLine: (side, lineNumber) =>
+                            reviewContributionHost.semantic.activateLine(file, side, lineNumber),
+                          onAnnotationsRendered:
+                            reviewContributionHost.semantic.annotationsRendered,
+                          onSelect: () => selectPathAndScroll(file.path),
+                          onSetViewed: (viewed) =>
+                            setViewedPreservingViewport(file.reviewKey, viewed),
+                          onToggleExpanded: () => toggleVisibleDiffCard(file.reviewKey),
+                        })}
+                      />
                     </>
                   ),
                   surface: surfaceContribution,
                 })}
               </main>
-              <div
-                data-review-scroll-past-end
-                aria-hidden="true"
-                style={{ height: scrollPastEndHeight }}
-              />
+              {useCodeView ? null : (
+                <div
+                  data-review-scroll-past-end
+                  aria-hidden="true"
+                  style={{ height: scrollPastEndHeight }}
+                />
+              )}
             </div>
           </div>
         }
@@ -2249,7 +2314,19 @@ export const ReviewDetailView = ({
         onOpenChange={setActionPaletteOpen}
       />
       <WorkbenchContextActions>
-        {active ? <ReviewActionsMenu items={reviewActionItems} /> : null}
+        {active ? (
+          <>
+            <ReviewMobileFileTreeButton
+              activeActivity={activeActivity}
+              contextOpen={activePane === "context"}
+              showContext={showActivityContext}
+              showMain={showMainPane}
+            />
+            <div className="order-last shrink-0">
+              <ReviewActionsMenu items={reviewActionItems} />
+            </div>
+          </>
+        ) : null}
       </WorkbenchContextActions>
       {active ? <LanguageNavigationActivity pending={languageNavigation.operationPending} /> : null}
       {Option.match(languageNavigation.peek, {

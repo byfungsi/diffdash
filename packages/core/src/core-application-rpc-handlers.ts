@@ -11,6 +11,7 @@ import {
   type CodeWorkspaceFailureReason,
 } from "@diffdash/domain/code-workspace"
 import { LanguageOperationError } from "@diffdash/domain/language"
+import { LocalReviewTargetError } from "@diffdash/local-git/local-git"
 import { getCoreRpcMethodPolicy, type CoreRpcMethodPolicy } from "@diffdash/core-rpc/method-policy"
 import { Cause, Effect, Fiber, FiberSet, Option, Predicate, Schema } from "effect"
 import * as RpcSerialization from "effect/unstable/rpc/RpcSerialization"
@@ -27,6 +28,7 @@ import { CoreRuntimeServices } from "./core-runtime-services"
 import type { OperationHandlers } from "./operations/operation-handlers"
 import { ReviewContextError, type ReviewContextFailureCategory } from "./services/git-provider"
 import { OpenCodeConnectionError } from "./services/opencode-connection"
+import { RepositoryLinkError } from "./services/repository-linker"
 
 type ApplicationRpcRequest<Method extends CoreMethodType> = HostRequestContext &
   CoreMethodInput<Method>
@@ -180,6 +182,30 @@ export const makeCoreApplicationOperationFailure = <Method extends CoreMethodTyp
       code: CoreApplicationFailureCode.make("LANGUAGE_OPERATION_FAILED"),
       retryClass: "userAction",
       safeMessage: error.message,
+    }
+  }
+  if (Schema.is(LocalReviewTargetError)(error)) {
+    return {
+      _tag: "CoreApplicationFailure",
+      applicationInstanceId: request.applicationInstanceId,
+      processEpoch: request.processEpoch,
+      requestId: request.requestId,
+      method,
+      code: CoreApplicationFailureCode.make("LOCAL_REVIEW_TARGET_INVALID"),
+      retryClass: "userAction",
+      safeMessage: error.reason,
+    }
+  }
+  if (Schema.is(RepositoryLinkError)(error)) {
+    return {
+      _tag: "CoreApplicationFailure",
+      applicationInstanceId: request.applicationInstanceId,
+      processEpoch: request.processEpoch,
+      requestId: request.requestId,
+      method,
+      code: CoreApplicationFailureCode.make("REPOSITORY_LINK_FAILED"),
+      retryClass: "userAction",
+      safeMessage: error.reason,
     }
   }
   if (Schema.is(ReviewContextError)(error)) {

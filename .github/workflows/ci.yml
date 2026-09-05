@@ -74,6 +74,9 @@ jobs:
       - name: Run download worker checks
         run: pnpm --filter @diffdash/download-worker check && pnpm --filter @diffdash/download-worker test
 
+      - name: Run Cloud browser tests
+        run: pnpm --filter @diffdash/cloud test:browser
+
       - name: Run Electron E2E tests
         env:
           DEBUG: pw:browser

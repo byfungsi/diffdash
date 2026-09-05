@@ -302,6 +302,17 @@
     clip-path: inset(0 round var(--shell-frame-radius));
   }
 
+  @media (width < 48rem) {
+    .workbench-viewport:has([data-review-diff-content]) {
+      padding-inline: 0;
+    }
+
+    .workbench-frame:has([data-review-diff-content]) {
+      border-radius: 0;
+      clip-path: none;
+    }
+  }
+
   [data-diff-file-status] {
     border-color: var(--review-sidebar-border);
   }

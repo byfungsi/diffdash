@@ -1,7 +1,15 @@
 import { CommentNoteSubject, type CommentNote } from "@diffdash/domain/comment-note"
 import { LanguagePosition, LanguageRange } from "@diffdash/domain/language"
 import { Option } from "effect"
-import { Trash2, X } from "lucide-react"
+import { Check, Copy, Trash2, X } from "lucide-react"
+import { useState } from "react"
+import {
+  Dialog,
+  DialogContent,
+  DialogTitle,
+  DialogDescription,
+  DialogClose,
+} from "@/shared/ui/dialog"
 
 import { Button } from "@/shared/ui/button"
 import { EmptyState } from "@/shared/ui/empty-state"
@@ -21,6 +29,8 @@ export const CommentNoteList = ({
   readonly onNavigate: (note: CommentNote) => void
 }) => {
   const comments = useReviewCommentsState()
+  const [clearOpen, setClearOpen] = useState(false)
+  const [copied, setCopied] = useState(false)
   const host = useProjectSurfaceRuntime()
   const { projectNavigation } = useTrustedExtensionRegistry()
   const navigate = (note: CommentNote) => {
@@ -68,15 +78,55 @@ export const CommentNoteList = ({
           type="button"
           size="icon-xs"
           variant="ghost"
+          aria-label="Copy all notes"
+          title={copied ? "Copied" : "Copy all notes"}
+          disabled={comments.notesLoading || comments.notes.length === 0}
+          onClick={() => {
+            setCopied(false)
+            void comments.copyNotes().then(
+              () => setCopied(true),
+              () => undefined,
+            )
+          }}
+        >
+          {copied ? <Check /> : <Copy />}
+        </Button>
+        <output className="sr-only">{copied ? "Notes copied to clipboard" : ""}</output>
+        <Button
+          type="button"
+          size="icon-xs"
+          variant="ghost"
           aria-label="Clear all notes"
           disabled={comments.notes.length === 0}
           onClick={() => {
-            if (window.confirm("Clear all collected notes?")) void comments.clearNotes()
+            setClearOpen(true)
           }}
         >
           <Trash2 />
         </Button>
       </header>
+      <Dialog open={clearOpen} onOpenChange={setClearOpen}>
+        <DialogContent>
+          <DialogTitle>Clear collected notes?</DialogTitle>
+          <DialogDescription>
+            This removes notes in the current collection from this device. Copy them first if you
+            want to keep them.
+          </DialogDescription>
+          <div className="flex justify-end gap-2">
+            <DialogClose asChild>
+              <Button variant="outline">Cancel</Button>
+            </DialogClose>
+            <Button
+              variant="destructive"
+              onClick={() => {
+                void comments.clearNotes().then(() => setClearOpen(false))
+              }}
+            >
+              Clear notes
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
       {comments.notesError === null ? null : (
         <p
           role="alert"

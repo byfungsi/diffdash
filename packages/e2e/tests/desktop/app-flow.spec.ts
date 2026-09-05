@@ -507,6 +507,10 @@ test("covers finished Home to Review flow with fake CLI fixtures", async ({
     await expect(window.locator("[data-review-editor-header]")).toContainText("Request review flow")
 
     await window.getByRole("button", { name: "Back" }).click()
+    await expect(window.locator("[data-hosted-review-detail]")).toContainText("Request review flow")
+    await expect(window.getByRole("button", { name: "Open diff" })).toBeVisible()
+
+    await window.getByRole("button", { name: "Back" }).click()
     await expect(window.getByRole("button", { name: "Reviews" })).toHaveAttribute(
       "aria-pressed",
       "true",
@@ -581,10 +585,8 @@ test("covers finished Home to Review flow with fake CLI fixtures", async ({
       }),
     ).toEqual({ appearance: "dark", provider: "codex", telemetryEnabled: false })
     await restartedWindow.getByRole("button", { name: "Open project byfungsi/diffdash" }).click()
-    await expect(restartedWindow.locator("[data-hosted-review-detail]")).toContainText(
-      "Request review flow",
-    )
-    await restartedWindow.getByRole("button", { name: "Open diff" }).click()
+    // The persisted hosted target now owns its files/overview view, so reopening
+    // resumes the diff directly instead of resetting to the PR overview.
     await expect(restartedWindow.locator("[data-review-editor-header]")).toContainText(
       "Request review flow",
     )

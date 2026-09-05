@@ -14,6 +14,7 @@ import { RepositoryCheckoutPath, type Repo } from "@diffdash/domain/repository"
 import { WebUrl } from "@diffdash/domain/web-url"
 import type { AppUpdateState } from "@diffdash/protocol/app-update"
 import type { CliNavigationCommand } from "@diffdash/protocol/cli-navigation"
+import type { ApplicationLocation, ApplicationNavigation } from "@/platform/application-navigation"
 import { EMPTY_APP_PREREQUISITES } from "@diffdash/protocol/prerequisites"
 import { useAtomRefresh, useAtomValue } from "@effect/atom-react"
 import { HashSet, Match, Option } from "effect"
@@ -300,7 +301,11 @@ const effectiveAvailableNavigationLocation = (
   })
 }
 /** Application shell coordinating navigation and feature composition. */
-export function AppShell() {
+export function AppShell({
+  navigation,
+}: {
+  readonly navigation?: ApplicationNavigation | undefined
+}) {
   const captureAnalytics = useCaptureAnalytics()
   const desktop = useDesktopRuntime()
   const preferences = useRendererPreferences()
@@ -432,6 +437,8 @@ export function AppShell() {
   const setHistory = (history: NavigationHistory<AppNavigationLocation>) => {
     navigationHistoryRef.current = history
     setNavigationHistory(history)
+    const location = currentNavigationLocation(history)
+    navigation?.publish(location)
   }
   const pushAppNavigationLocation = (location: AppNavigationLocation): boolean => {
     if (!applyNavigationLocation(location)) return false
@@ -532,6 +539,29 @@ export function AppShell() {
   }
   const navigateBackFromEffect = useEffectEvent(navigateBack)
   const navigateForwardFromEffect = useEffectEvent(navigateForward)
+
+  const navigateFromHost = useEffectEvent((location: ApplicationLocation) => {
+    projectOpenRequestRef.current += 1
+    projectOpening?.cancelRestore()
+    setPendingRemoteSelection(null)
+    if (location.kind === "global") {
+      const contribution = globalNavigation.find(({ id }) => id === location.contributionId)
+      if (contribution === undefined) return false
+      return replaceAppNavigationLocation({
+        ...location,
+        registrationToken: contribution.ownerRegistrationToken,
+      })
+    }
+    const contribution = projectNavigation.find(({ id }) => id === location.contributionId)
+    const activity = projectActivities.find(({ id }) => id === location.activityId)
+    if (contribution === undefined || activity === undefined) return false
+    return replaceAppNavigationLocation({
+      ...location,
+      registrationToken: contribution.ownerRegistrationToken,
+      activityRegistrationToken: activity.ownerRegistrationToken,
+    })
+  })
+  useEffect(() => navigation?.subscribe((location) => navigateFromHost(location)), [navigation])
 
   useEffect(() => {
     refreshRepositories()

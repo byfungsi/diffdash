@@ -14,6 +14,7 @@ import { RepositoryRelativePath } from "@diffdash/domain/repository-path"
 import { ReviewProjectId } from "@diffdash/domain/review-identity"
 import { VERY_LARGE_SOURCE_FILE_CHARACTER_THRESHOLD } from "@diffdash/domain/large-diff-policy"
 import { Effect, Option } from "effect"
+import { StrictMode, useState } from "react"
 import { flushSync } from "react-dom"
 import { createRoot, type Root } from "react-dom/client"
 import { afterEach, assert, describe, expect, it, vi } from "vitest"
@@ -37,6 +38,10 @@ import { CodeFileViewer } from "./code-file-viewer"
 let root: Root | null = null
 const projectId = ReviewProjectId.make("code-viewer-project")
 const revision = ReviewRevision.make("0".repeat(40))
+const openCodeSearch = () =>
+  window.dispatchEvent(
+    new KeyboardEvent("keydown", { bubbles: true, cancelable: true, key: "f", metaKey: true }),
+  )
 const CODE_COMMENT_CONTRIBUTIONS = [
   {
     id: REVIEW_COMMENTS_CODE_SOURCE_ID,
@@ -61,6 +66,128 @@ afterEach(() => {
 })
 
 describe("CodeFileViewer", () => {
+  it.each(["Escape", "button"])("clears search on %s and reopens empty", async (closeMethod) => {
+    const container = document.createElement("div")
+    container.style.height = "480px"
+    container.style.width = "800px"
+    document.body.append(container)
+    root = createRoot(container)
+    root.render(
+      <CodeFileViewer
+        codeThemes={DEFAULT_CODE_THEME_PREFERENCES}
+        colorScheme="light"
+        contents={"const needle = 1\nconst other = needle"}
+        definitionNavigation={Option.some({
+          id: 1,
+          range: new LanguageRange({
+            start: new LanguagePosition({ line: 0, character: 0 }),
+            end: new LanguagePosition({ line: 0, character: 0 }),
+          }),
+        })}
+        path={RepositoryRelativePath.make("src/search.ts")}
+        projectId={projectId}
+        revision={revision}
+      />,
+    )
+    const viewport = await vi.waitFor(() => {
+      const element = container.querySelector<HTMLElement>("[data-code-file-scroll]")
+      assert(element !== null)
+      return element
+    })
+    viewport.focus()
+    openCodeSearch()
+    await page.getByRole("textbox", { name: "Search current file" }).fill("needle")
+    await page.getByRole("button", { name: "Next match", exact: true }).click()
+    await vi.waitFor(() => {
+      expect(container.querySelector("search")?.textContent).toContain("2 / 2")
+      expect(CSS.highlights.get("diffdash-code-search-active")?.size).toBe(1)
+      expect(CSS.highlights.get("diffdash-code-search-match")?.size).toBe(1)
+    })
+    if (closeMethod === "button") await page.getByRole("button", { name: "Close search" }).click()
+    else window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }))
+    await vi.waitFor(() => {
+      expect(container.querySelector("search")).toBeNull()
+      expect(CSS.highlights.get("diffdash-code-search-active")?.size ?? 0).toBe(0)
+      expect(CSS.highlights.get("diffdash-code-search-match")?.size ?? 0).toBe(0)
+      expect(
+        container
+          .querySelector("diffs-container")
+          ?.shadowRoot?.querySelector("[data-selected-line][data-line]")
+          ?.getAttribute("data-line-index"),
+      ).toBe("0")
+      expect(document.activeElement).toBe(viewport)
+    })
+    openCodeSearch()
+    await vi.waitFor(() => {
+      expect(container.querySelector<HTMLInputElement>("input")?.value).toBe("")
+      expect(container.querySelector("search")?.textContent).toContain("0 / 0")
+    })
+  })
+
+  it("retains the definition landing after acknowledgement and repeats navigation in a mounted file", async () => {
+    const container = document.createElement("div")
+    container.style.height = "480px"
+    container.style.width = "800px"
+    document.body.append(container)
+    root = createRoot(container)
+    const position = new LanguagePosition({ line: 240, character: 13 })
+    const range = new LanguageRange({ start: position, end: position })
+    const contents = Array.from(
+      { length: 481 },
+      (_, index) => `export const line${index} = ${index}`,
+    ).join("\n")
+    const Harness = () => {
+      const [navigation, setNavigation] = useState(Option.some({ id: 1, range }))
+      return (
+        <>
+          <button type="button" onClick={() => setNavigation(Option.some({ id: 2, range }))}>
+            Repeat definition
+          </button>
+          <CodeFileViewer
+            codeThemes={DEFAULT_CODE_THEME_PREFERENCES}
+            colorScheme="light"
+            contents={contents}
+            definitionNavigation={navigation}
+            onDefinitionNavigationHandled={() => setNavigation(Option.none())}
+            path={RepositoryRelativePath.make("src/definition.ts")}
+            projectId={projectId}
+            revision={revision}
+          />
+        </>
+      )
+    }
+    root.render(
+      <StrictMode>
+        <Harness />
+      </StrictMode>,
+    )
+    const expectLanding = () =>
+      vi.waitFor(() => {
+        const viewport = container.querySelector<HTMLElement>("[data-code-file-scroll]")
+        assert(viewport !== null, "Missing definition viewport")
+        const line = viewport
+          .querySelector("diffs-container")
+          ?.shadowRoot?.querySelector<HTMLElement>('[data-line-index="240"][data-line]')
+        assert(line !== null && line !== undefined, "Missing definition line")
+        expect(line.textContent).toBe("export const line240 = 240")
+        expect(line.hasAttribute("data-selected-line")).toBe(true)
+        expect(line.getBoundingClientRect().top).toBeGreaterThanOrEqual(
+          viewport.getBoundingClientRect().top,
+        )
+        expect(line.getBoundingClientRect().bottom).toBeLessThanOrEqual(
+          viewport.getBoundingClientRect().bottom,
+        )
+        expect(document.activeElement).toBe(viewport)
+        return viewport
+      })
+    const viewport = await expectLanding()
+    viewport.scrollTop = viewport.scrollHeight
+    viewport.dispatchEvent(new Event("scroll"))
+    await vi.waitFor(() => expect(viewport.scrollTop).toBeGreaterThan(8000))
+    await page.getByRole("button", { name: "Repeat definition" }).click()
+    await expectLanding()
+  })
+
   it("disables whole-file syntax highlighting for very large source files", async () => {
     const container = document.createElement("div")
     container.style.height = "480px"

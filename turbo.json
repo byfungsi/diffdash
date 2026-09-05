@@ -25,6 +25,10 @@
     "@diffdash/web#build": {
       "outputs": ["dist/**"]
     },
+    "@diffdash/cloud#build": {
+      "dependsOn": ["^build", "@diffdash/cloud-infrastructure#build"],
+      "outputs": ["dist/**"]
+    },
     "@diffdash/app#build": {
       "outputs": []
     },

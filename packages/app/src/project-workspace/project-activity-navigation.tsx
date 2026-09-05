@@ -45,7 +45,7 @@ export const ProjectActivityNavigation = ({
     >
       {activities.map((activity) => {
         const Icon = activity.icon
-        const selected = activeActivity === activity.id
+        const selected = activeActivity === activity.id && (placement === "rail" || sidebarExpanded)
         return (
           <Button
             key={`${activity.id}:${activity.ownerRegistrationToken.reactKey}`}
@@ -69,14 +69,14 @@ export const ProjectActivityNavigation = ({
                 const buttons = document.querySelectorAll<HTMLButtonElement>(
                   "[data-project-activity-id]",
                 )
-                Array.from(buttons)
-                  .find(
-                    (button) =>
-                      button.dataset.projectActivityId === activity.id &&
-                      button.dataset.projectActivityPlacement === placement &&
-                      button.ariaPressed === "true",
-                  )
-                  ?.focus()
+                // The destination surface can switch between rail and bottom placement
+                // during its first layout measurement; follow the visible activity.
+                const focusButton = Array.from(buttons).find(
+                  (button) =>
+                    button.dataset.projectActivityId === activity.id &&
+                    button.getBoundingClientRect().width > 0,
+                )
+                focusButton?.focus()
               })
             }}
           >

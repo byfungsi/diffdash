@@ -8,6 +8,7 @@ import type { SelectedReviewTarget } from "@/review/review-subject"
 import { formatError } from "@/shared/errors"
 import { Button } from "@/shared/ui/button"
 import { ProjectWorkspaceStatePanel } from "@/shared/ui/project-workspace-state-panel"
+import { useApplicationCapabilities } from "@/platform/application-capabilities"
 
 import {
   projectReviewsLifecycle,
@@ -33,6 +34,7 @@ export const ProjectReviewsOverview = ({
   readonly onLinkRepository: () => void
   readonly onSelect: (target: SelectedReviewTarget) => void
 }) => {
+  const capabilities = useApplicationCapabilities()
   const lifecycle = projectReviewsLifecycle(local, hosted)
   return (
     <section
@@ -44,7 +46,9 @@ export const ProjectReviewsOverview = ({
         <p className="text-muted-foreground text-xs font-medium">Project</p>
         <h1 className="mt-1 text-2xl font-semibold tracking-tight">{repo.displayIdentity}</h1>
         <p className="text-muted-foreground mt-2 text-sm">
-          Local changes and hosted pull requests stay together in this workspace.
+          {capabilities.localProjects
+            ? "Local changes and hosted pull requests stay together in this workspace."
+            : "Hosted pull requests and browser-local review progress stay together in this workspace."}
         </p>
       </header>
       {Match.valueTags(lifecycle, {
@@ -102,10 +106,12 @@ export const ProjectReviewsOverview = ({
           />
         ),
       })}
-      <div className="grid gap-3 sm:grid-cols-2">
-        <OverviewCard icon={<GitBranch className="size-4" />} title="Working tree">
-          {renderLocalOverview(repo, local, onRefreshLocal, onLinkRepository, onSelect)}
-        </OverviewCard>
+      <div className={`grid gap-3 ${capabilities.localProjects ? "sm:grid-cols-2" : ""}`}>
+        {capabilities.localProjects ? (
+          <OverviewCard icon={<GitBranch className="size-4" />} title="Working tree">
+            {renderLocalOverview(repo, local, onRefreshLocal, onLinkRepository, onSelect)}
+          </OverviewCard>
+        ) : null}
         <OverviewCard icon={<GitPullRequest className="size-4" />} title="Pull requests">
           {renderHostedOverview(hosted, onRefreshHosted)}
         </OverviewCard>

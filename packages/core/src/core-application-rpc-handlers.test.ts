@@ -2,6 +2,7 @@ import { CoreApplicationRpcs } from "@diffdash/core-rpc/application-rpc"
 import { CodeWorkspaceError } from "@diffdash/domain/code-workspace"
 import { GitProviderId } from "@diffdash/domain/git-provider"
 import { LanguageOperationError } from "@diffdash/domain/language"
+import { LocalReviewTargetError } from "@diffdash/local-git/local-git"
 import {
   ApplicationInstanceId,
   CoreProcessEpoch,
@@ -25,6 +26,7 @@ import { CoreRuntimeServices } from "./core-runtime-services"
 import { ReviewLifecycleDiagnostics } from "./review-lifecycle-diagnostics"
 import { ReviewContextError } from "./services/git-provider"
 import { OpenCodeConnectionError } from "./services/opencode-connection"
+import { RepositoryLinkError } from "./services/repository-linker"
 
 const identity = {
   applicationInstanceId: ApplicationInstanceId.make("app-application-rpc"),
@@ -131,6 +133,50 @@ describe("Core application RPC handlers admission", () => {
       retryClass: "userAction",
       safeMessage: "TypeScript language analysis failed.",
     })
+  })
+
+  it("preserves the actionable local review target reason", () => {
+    const failure = makeCoreApplicationOperationFailure(
+      CoreMethod.resolveLocalBranch,
+      request,
+      LocalReviewTargetError.make({
+        operation: "branch.mergeBase",
+        reason: "Branch main does not share a common ancestor with the current HEAD",
+        cause: new Error("Sensitive Git diagnostics"),
+      }),
+    )
+
+    expect(failure).toMatchObject({
+      _tag: "CoreApplicationFailure",
+      ...request,
+      method: "LocalReviews.resolveBranch",
+      code: "LOCAL_REVIEW_TARGET_INVALID",
+      retryClass: "userAction",
+      safeMessage: "Branch main does not share a common ancestor with the current HEAD",
+    })
+    expect(JSON.stringify(failure)).not.toContain("Sensitive Git diagnostics")
+  })
+
+  it("preserves the actionable repository linking reason", () => {
+    const failure = makeCoreApplicationOperationFailure(
+      CoreMethod.openProject,
+      request,
+      RepositoryLinkError.make({
+        operation: "resolveRemote",
+        reason: "None of the selected repository remotes belong to a configured provider.",
+        cause: new Error("Sensitive repository diagnostics"),
+      }),
+    )
+
+    expect(failure).toMatchObject({
+      _tag: "CoreApplicationFailure",
+      ...request,
+      method: "Repositories.openProject",
+      code: "REPOSITORY_LINK_FAILED",
+      retryClass: "userAction",
+      safeMessage: "None of the selected repository remotes belong to a configured provider.",
+    })
+    expect(JSON.stringify(failure)).not.toContain("Sensitive repository diagnostics")
   })
 
   it("projects bounded review acquisition failure details", () => {

@@ -195,6 +195,8 @@ export const reduceReviewSearch = (
         resetResults({
           ...model,
           open: false,
+          query: "",
+          anchor: null,
           queryEpoch: model.queryEpoch + 1,
           moveEpoch: model.moveEpoch + 1,
         }),
@@ -348,7 +350,7 @@ export class ReviewSearchController {
     this.#start(result.operation)
   }
 
-  /** Closes search and cancels only navigation owned by the search surface. */
+  /** Clears search state, rejects pending results, and cancels only search-owned navigation. */
   readonly close = () => {
     if (this.#disposed) return
     this.#dispatch({ _tag: "close" })

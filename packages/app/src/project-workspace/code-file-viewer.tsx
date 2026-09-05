@@ -122,6 +122,7 @@ export const CodeFileViewer = ({
   readonly onDefinitionNavigationHandled?: (id: number) => void
 }) => {
   const codeViewRef = useRef<CodeViewHandle<CodeSourceHostAnnotation>>(null)
+  const handledDefinitionNavigation = useRef<number | null>(null)
   const renderAsPlainText = isVeryLargeSourceFile(contents)
   const tokenizeMaxLength = renderAsPlainText ? 0 : 100_000
   const scrollRootRef = useRef<HTMLDivElement>(null)
@@ -201,7 +202,10 @@ export const CodeFileViewer = ({
   }
   const closeSearch = () => {
     setSearchOpen(false)
+    setSearchQuery("")
+    setActiveMatchIndex(0)
     surfaceSelection.release("diffdash.builtin.code-search")
+    scrollRootRef.current?.focus({ preventScroll: true })
   }
   const moveSearch = (direction: -1 | 1) => {
     if (searchMatches.length === 0) return
@@ -325,19 +329,23 @@ export const CodeFileViewer = ({
     })
   }, [activeMatch, path, surfaceSelection])
 
+  const acknowledgeDefinitionNavigation = useEffectEvent((id: number) =>
+    onDefinitionNavigationHandled?.(id),
+  )
   useEffect(() => {
-    return Option.match(definitionNavigation, {
-      onNone: () => {
-        surfaceSelection.release("diffdash.builtin.definition-navigation")
-        return undefined
-      },
+    Option.match(definitionNavigation, {
+      onNone: () => undefined,
       onSome: (navigation) => {
+        if (handledDefinitionNavigation.current === navigation.id) return
+        handledDefinitionNavigation.current = navigation.id
         const start = navigation.range.start.line + 1
         const end = navigation.range.end.line + 1
         surfaceSelection.publish(
           "diffdash.builtin.definition-navigation",
           { id: path, range: { start, end } },
-          "navigationTarget",
+          // Keep the landing selected after the one-shot request is acknowledged,
+          // but let subsequent keyboard navigation or search replace it.
+          "passiveSelection",
         )
         codeViewRef.current?.scrollTo({
           type: "line",
@@ -346,11 +354,18 @@ export const CodeFileViewer = ({
           align: "center",
           behavior: "instant",
         })
-        onDefinitionNavigationHandled?.(navigation.id)
-        return () => surfaceSelection.release("diffdash.builtin.definition-navigation")
+        scrollRootRef.current?.focus({ preventScroll: true })
+        acknowledgeDefinitionNavigation(navigation.id)
       },
     })
-  }, [definitionNavigation, onDefinitionNavigationHandled, path, surfaceSelection])
+  }, [definitionNavigation, path, surfaceSelection])
+  useEffect(
+    () => () => {
+      handledDefinitionNavigation.current = null
+      surfaceSelection.release("diffdash.builtin.definition-navigation")
+    },
+    [surfaceSelection],
+  )
   const onTokenEnter = useStableCallback((token: TokenEventBase, event: PointerEvent) =>
     languageNavigation.onTokenEnter({ ...token, side: Option.none() }, event),
   )

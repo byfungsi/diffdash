@@ -6,11 +6,12 @@ import {
   mkdtempSync,
   readdirSync,
   readFileSync,
+  realpathSync,
   rmSync,
   statSync,
   writeFileSync,
 } from "node:fs"
-import { builtinModules } from "node:module"
+import { builtinModules, createRequire } from "node:module"
 import { tmpdir } from "node:os"
 import { dirname, join, relative, resolve } from "node:path"
 import test from "node:test"
@@ -108,6 +109,8 @@ const documentedPackageDependencies = new Map([
   ],
   ["@diffdash/e2e", ["@diffdash/desktop"]],
   ["@diffdash/web", []],
+  ["@diffdash/cloud", ["@diffdash/app", "@diffdash/domain", "@diffdash/protocol"]],
+  ["@diffdash/cloud-infrastructure", []],
   ["@diffdash/download-worker", []],
   ["@diffdash/demo", ["@diffdash/domain", "@diffdash/protocol"]],
   ["@diffdash/demo-video", ["@diffdash/app", "@diffdash/demo", "@diffdash/protocol"]],
@@ -787,12 +790,45 @@ test("every browser-safe package export bundles without platform dependencies", 
   )
 })
 
-test("the workspace resolves one Effect runtime", () => {
+test("application packages share one Effect runtime and Alchemy tooling stays isolated", () => {
+  const applicationEffect = createRequire(join(root, "packages/core/package.json")).resolve(
+    "effect/package.json",
+  )
+  const infrastructureEffect = createRequire(
+    join(root, "tools/cloud-infrastructure/package.json"),
+  ).resolve("effect/package.json")
+  assert.notEqual(realpathSync(applicationEffect), realpathSync(infrastructureEffect))
+  for (const { directory, manifest } of manifests) {
+    const dependencies = { ...manifest.dependencies, ...manifest.devDependencies }
+    assert.equal(dependencies["@diffdash/cloud-infrastructure"], undefined)
+    if (manifest.name !== "@diffdash/cloud-infrastructure") {
+      assert.equal(dependencies.alchemy, undefined, `${manifest.name} must not load Alchemy`)
+      assert.equal(dependencies["@alchemy.run/cloudflare-runtime"], undefined)
+    }
+    if (dependencies.effect === undefined) continue
+    const actual = createRequire(join(directory, "package.json")).resolve("effect/package.json")
+    assert.equal(
+      realpathSync(actual),
+      realpathSync(
+        manifest.name === "@diffdash/cloud-infrastructure"
+          ? infrastructureEffect
+          : applicationEffect,
+      ),
+      `${manifest.name} resolves an unexpected Effect runtime`,
+    )
+  }
   const lockfile = readFileSync(join(root, "pnpm-lock.yaml"), "utf8")
   const effectVersions = new Set(
     [...lockfile.matchAll(/^  effect@([^:]+):/gm)].map((match) => match[1]),
   )
-  assert.equal(effectVersions.size, 1)
+  assert.deepEqual(
+    effectVersions,
+    new Set(
+      [applicationEffect, infrastructureEffect].map(
+        (file) => JSON.parse(readFileSync(file, "utf8")).version,
+      ),
+    ),
+  )
   assert.doesNotMatch(lockfile, /^  ['"]?@effect\/schema@/m)
 })
 

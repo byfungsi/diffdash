@@ -13,7 +13,6 @@ import { ReviewKey } from "@diffdash/domain/review-identity"
 import type {
   ProgressiveReviewApi,
   ResolvedReviewSessionTarget,
-  ReviewSessionFile,
   ReviewSessionIdentity,
   ReviewSessionRange,
   ReviewSessionRangeRequest,
@@ -118,6 +117,8 @@ export class ProgressiveReviewContentSession implements ProgressiveReviewContent
   #inventoryRequestActive = false
   #generation = 0
   #disposed = false
+  #pendingProjection: ProgressiveReviewContentProjection | null = null
+  #publicationTimer: ReturnType<typeof setTimeout> | null = null
 
   /** Read-only projection consumed by the React adapter. */
   readonly projectionAtom: Atom.Atom<ProgressiveReviewContentProjection>
@@ -189,7 +190,7 @@ export class ProgressiveReviewContentSession implements ProgressiveReviewContent
 
   /** Returns the current immutable projection. */
   readonly getProjection = (): ProgressiveReviewContentProjection =>
-    this.#registry.get(this.#projectionAtom)
+    this.#pendingProjection ?? this.#registry.get(this.#projectionAtom)
 
   /** Loads requested files through sequential bounded persisted ranges. */
   readonly loadFiles = async (
@@ -296,6 +297,9 @@ export class ProgressiveReviewContentSession implements ProgressiveReviewContent
   readonly dispose = (): void => {
     if (this.#disposed) return
     this.#disposed = true
+    if (this.#publicationTimer !== null) clearTimeout(this.#publicationTimer)
+    this.#publicationTimer = null
+    this.#pendingProjection = null
     this.#generation += 1
     this.#cancelOperations()
     void this.#closeConnection()
@@ -368,7 +372,7 @@ export class ProgressiveReviewContentSession implements ProgressiveReviewContent
     if (this.#inventoryLoaded || this.#inventoryRequestActive) return
     this.#inventoryRequestActive = true
     try {
-      const files: ReviewSessionFile[] = []
+      const inventory: ReviewSnapshotFileInventory[] = []
       let offset = 0
       while (this.#isIdentityCurrent(generation, identity)) {
         // oxlint-disable-next-line eslint/no-await-in-loop -- Inventory offsets are authoritative and sequential.
@@ -378,34 +382,35 @@ export class ProgressiveReviewContentSession implements ProgressiveReviewContent
           !sameIdentity(page.identity, identity)
         )
           return
-        files.push(...page.files)
+        inventory.push(
+          ...page.files.map((file) =>
+            ReviewSnapshotFileInventory.make({
+              fileId: file.fileId,
+              patchHash: file.patchHash,
+              reviewKey: ReviewKey.make(
+                file.oldPath === null ? file.path : `${file.oldPath}->${file.path}`,
+              ),
+              path: file.path,
+              oldPath: file.oldPath,
+              status: file.status,
+              visibility: file.visibility,
+              additions: file.additions,
+              deletions: file.deletions,
+              hunkCount: file.hunkCount,
+            }),
+          ),
+        )
+        this.#publish({
+          ...this.getProjection(),
+          inventory: [...inventory],
+          inventoryLoading: page.nextOffset !== null,
+          inventoryError: null,
+        })
         if (page.nextOffset === null) break
         offset = page.nextOffset
       }
       if (!this.#isIdentityCurrent(generation, identity)) return
-      const inventory = files.map((file) =>
-        ReviewSnapshotFileInventory.make({
-          fileId: file.fileId,
-          patchHash: file.patchHash,
-          reviewKey: ReviewKey.make(
-            file.oldPath === null ? file.path : `${file.oldPath}->${file.path}`,
-          ),
-          path: file.path,
-          oldPath: file.oldPath,
-          status: file.status,
-          visibility: file.visibility,
-          additions: file.additions,
-          deletions: file.deletions,
-          hunkCount: file.hunkCount,
-        }),
-      )
       this.#inventoryLoaded = true
-      this.#publish({
-        ...this.getProjection(),
-        inventory,
-        inventoryLoading: false,
-        inventoryError: null,
-      })
     } catch (cause) {
       if (!this.#isIdentityCurrent(generation, identity)) return
       this.#publish({
@@ -557,7 +562,25 @@ export class ProgressiveReviewContentSession implements ProgressiveReviewContent
     sameIdentity(this.#identity, identity)
 
   readonly #publish = (projection: ProgressiveReviewContentProjection): void => {
-    if (!this.#disposed) this.#registry.set(this.#projectionAtom, Object.freeze(projection))
+    if (this.#disposed) return
+    // Lifecycle transitions must reach subscribers before completed loads resolve.
+    // Only an active inventory/file burst needs frame-sized notification batching.
+    if (!projection.inventoryLoading && projection.loadingFileIds.size === 0) {
+      if (this.#publicationTimer !== null) clearTimeout(this.#publicationTimer)
+      this.#publicationTimer = null
+      this.#pendingProjection = null
+      this.#registry.set(this.#projectionAtom, Object.freeze(projection))
+      return
+    }
+    // Keep navigation reads immediate while coalescing bursty file publications for React.
+    this.#pendingProjection = Object.freeze(projection)
+    if (this.#publicationTimer !== null) return
+    this.#publicationTimer = setTimeout(() => {
+      this.#publicationTimer = null
+      const pending = this.#pendingProjection
+      this.#pendingProjection = null
+      if (!this.#disposed && pending !== null) this.#registry.set(this.#projectionAtom, pending)
+    }, 16)
   }
 }
 
