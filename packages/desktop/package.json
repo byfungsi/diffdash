@@ -2,7 +2,7 @@
   "name": "@diffdash/desktop",
   "private": true,
   "productName": "DiffDash",
-  "version": "0.16.2",
+  "version": "0.16.3",
   "description": "Desktop code review app with Effect-powered TypeScript services.",
   "homepage": "https://github.com/byfungsi/diffdash",
   "author": "Muhammad Hanif",
