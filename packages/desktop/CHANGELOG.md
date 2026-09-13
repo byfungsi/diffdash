@@ -1,5 +1,11 @@
 # DiffDash Changelog
 
+## 0.16.4
+
+### Patch Changes
+
+- [#124](https://github.com/byfungsi/diffdash/pull/124) [`919d202`](https://github.com/byfungsi/diffdash/commit/919d2023b6908f0e67236b61d30f0c74977be21a) Thanks [@hanipcode](https://github.com/hanipcode)! - Recover the Linux CLI when a newer versioned AppImage replaces its original download.
+
 ## 0.16.3
 
 ### Patch Changes
