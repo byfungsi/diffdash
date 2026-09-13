@@ -256,6 +256,53 @@ describe("diffdash CLI", () => {
     }
   })
 
+  it("recovers an AppImage CLI after a versioned download replaces its installed AppImage", async () => {
+    const harnessRoot = mkdtempSync(join(tmpdir(), "diffdash-replaced-appimage-cli-test-"))
+
+    try {
+      const oldAppImage = join(harnessRoot, "DiffDash-0.16.2-linux-x86_64.AppImage")
+      const replacementAppImage = join(harnessRoot, "DiffDash-0.16.3-linux-x86_64.AppImage")
+      const installedCli = join(harnessRoot, "bin", "diffdash")
+      const capturePath = join(harnessRoot, "launch-args")
+      const workingDirectory = join(harnessRoot, "working-directory")
+      const linuxCli = readFileSync(packagedClis[1], "utf8").replace(/^#![^\n]*\n/, "")
+      mkdirSync(dirname(installedCli), { recursive: true })
+      mkdirSync(workingDirectory)
+      writeFileSync(
+        installedCli,
+        `#!/bin/sh\nDIFFDASH_APPIMAGE_PATH='${oldAppImage}'\nexport DIFFDASH_APPIMAGE_PATH\n${linuxCli}`,
+        "utf8",
+      )
+      writeFileSync(
+        replacementAppImage,
+        '#!/bin/sh\nprintf \'%s\\n\' "$@" > "$DIFFDASH_TEST_CAPTURE"\nfor argument in "$@"; do\n  case "$argument" in\n    --diffdash-cli-ready-v1=*)\n      ready_path="${argument#--diffdash-cli-ready-v1=}"\n      printf \'ready\\n\' > "$ready_path"\n      ;;\n  esac\ndone\n',
+        "utf8",
+      )
+      chmodSync(installedCli, 0o755)
+      chmodSync(replacementAppImage, 0o755)
+
+      const result = spawnSync("/bin/sh", [installedCli, "diff", "main"], {
+        cwd: workingDirectory,
+        encoding: "utf8",
+        env: { ...process.env, DIFFDASH_TEST_CAPTURE: capturePath },
+      })
+
+      expect(result.stderr).toBe("")
+      expect(result.status).toBe(0)
+      await expect(
+        waitForCapture(capturePath, 5).then(normalizeReadinessArgument),
+      ).resolves.toEqual([
+        `--diffdash-cli-v1=${realpathSync(workingDirectory)}`,
+        "--diffdash-cli-ready-v1=<temporary>",
+        "--",
+        "diff",
+        "main",
+      ])
+    } finally {
+      rmSync(harnessRoot, { force: true, recursive: true })
+    }
+  })
+
   it("preserves source --install-cli", () => {
     const directory = mkdtempSync(join(tmpdir(), "diffdash-install-cli-test-"))
 

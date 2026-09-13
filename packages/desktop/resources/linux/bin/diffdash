@@ -33,6 +33,25 @@ if [ -z "$app_binary" ]; then
   app_binary="$app_root/diffdash-desktop"
 fi
 
+if [ -n "${DIFFDASH_APPIMAGE_PATH:-}" ] && [ ! -x "$app_binary" ]; then
+  appimage_name="$(basename "$app_binary")"
+  case "$appimage_name" in
+    DiffDash-*-linux-*.AppImage)
+      # Browser downloads replace versioned AppImages. Starting the newest sibling lets the app refresh this launcher.
+      appimage_suffix="${appimage_name#*-linux-}"
+      replacement_appimage=''
+      for candidate in "$(dirname "$app_binary")"/DiffDash-*-linux-"$appimage_suffix"; do
+        if [ -x "$candidate" ] && { [ -z "$replacement_appimage" ] || [ "$candidate" -nt "$replacement_appimage" ]; }; then
+          replacement_appimage="$candidate"
+        fi
+      done
+      if [ -n "$replacement_appimage" ]; then
+        app_binary="$replacement_appimage"
+      fi
+      ;;
+  esac
+fi
+
 if [ ! -x "$app_binary" ]; then
   for candidate in \
     '/opt/DiffDash/diffdash-desktop' \
