@@ -14,7 +14,7 @@ import {
 import { CORE_PROCESS_STARTUP_ENV } from "@diffdash/core-rpc/process-startup"
 import { TempResources } from "@diffdash/process/temp-resource"
 import { describe, expect, it } from "@effect/vitest"
-import { Effect, Layer, Redacted, Schema } from "effect"
+import { Context, Deferred, Effect, Exit, Layer, Redacted, Schema, Scope } from "effect"
 import { execFileSync, spawn } from "node:child_process"
 import { existsSync, readFileSync } from "node:fs"
 import { join, resolve } from "node:path"
@@ -23,10 +23,12 @@ import { CoreArtifactManifest, verifyCoreArtifact } from "./core-artifact"
 import { bootstrapCoreHost } from "./core-host-bootstrap"
 import {
   startCoreProcess,
+  startCoreProcessManaged,
   type CoreProcessHandle,
   type CoreProcessSpawner,
 } from "./core-process-launcher"
 import { makeCoreProcessFixtureConfiguration } from "./core-process-configuration.fixture"
+import { CoreRpcClient, coreRpcClientLayer } from "./core-rpc-client"
 
 const platformLayer = Layer.merge(NodeFileSystem.layer, NodePath.layer)
 const dependencies = Layer.merge(
@@ -55,7 +57,7 @@ const nodeProcessSpawner: CoreProcessSpawner = {
 
 describe("Core process launcher", () => {
   it.live(
-    "launches the generated Core artifact to authenticated health",
+    "launches the generated Core artifact and releases database ownership when its host disconnects",
     () =>
       Effect.gen(function* () {
         const tempResources = yield* TempResources
@@ -80,6 +82,8 @@ describe("Core process launcher", () => {
         })
         const statePath = join(temporaryDirectory, "state.json")
         const databasePath = join(temporaryDirectory, "diffdash.sqlite")
+        const clientScope = yield* Scope.fork(yield* Effect.scope)
+        const processStarted = yield* Deferred.make<CoreProcessHandle>()
 
         const session = yield* bootstrapCoreHost({
           artifact,
@@ -88,14 +92,24 @@ describe("Core process launcher", () => {
           generateProcessEpoch: () => CoreProcessEpoch.make("epoch-real-process"),
           generateRequestId: () => HostRequestId.make("h:real-process-health"),
           generateToken: () => Redacted.make("real-process-token-with-at-least-32-bytes"),
+          makeClientLayer: (options) =>
+            Layer.effect(
+              CoreRpcClient,
+              Layer.buildWithScope(coreRpcClientLayer(options), clientScope).pipe(
+                Effect.map((context) => Context.get(context, CoreRpcClient)),
+              ),
+            ),
           startTransport: (configuration) =>
-            startCoreProcess({
+            startCoreProcessManaged({
               configuration,
               databasePath,
               statePath,
               coreConfiguration: makeCoreProcessFixtureConfiguration(databasePath, statePath),
               spawner: nodeProcessSpawner,
-            }),
+            }).pipe(
+              Effect.flatMap((handle) => Deferred.succeed(processStarted, handle)),
+              Effect.asVoid,
+            ),
         })
 
         expect(session.health).toEqual({
@@ -139,6 +153,11 @@ describe("Core process launcher", () => {
           }),
         )
         expect(state).toMatchObject({ onboardingCompleted: false })
+        // Close only the RPC client: the launcher scope must not terminate Core for this assertion.
+        yield* Scope.close(clientScope, Exit.void)
+        const handle = yield* Deferred.await(processStarted)
+        expect(yield* handle.awaitExit.pipe(Effect.timeout("5 seconds"))).toBe(0)
+        expect(existsSync(`${databasePath}.owner`)).toBe(false)
       }).pipe(Effect.provide(dependencies)),
     20_000,
   )

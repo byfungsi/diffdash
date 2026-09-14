@@ -67,7 +67,7 @@ import type { CoreProcessHandle } from "./core-process-launcher"
 import type { CoreRpcClient } from "./core-rpc-client"
 import { startCoreUtilityProcessManaged } from "./core-utility-process-launcher"
 import type { DesktopHostConfiguration } from "./desktop-host-configuration"
-import { CoreStartupReadinessError } from "./desktop-startup-error"
+import { waitForCoreReadiness } from "./core-startup-readiness"
 import { createProgressiveReviewApiGateway } from "./progressive-review-api-gateway"
 
 const platformLayer = Layer.mergeAll(
@@ -507,7 +507,17 @@ export const createExternalApplicationRuntime = (
     if (startPromise !== null) return startPromise
     const launch = runtime.runPromise(
       Effect.gen(function* () {
-        const scope = yield* Scope.make()
+        const scope = yield* Effect.acquireRelease(Scope.make(), (startupScope, exit) =>
+          Exit.isFailure(exit)
+            ? Scope.close(startupScope, exit).pipe(
+                Effect.tap(() =>
+                  Effect.sync(() => {
+                    if (applicationScope === startupScope) applicationScope = null
+                  }),
+                ),
+              )
+            : Effect.void,
+        )
         applicationScope = scope
         let processHandle: CoreProcessHandle | null = null
         const moduleDirectory = dirname(fileURLToPath(import.meta.url))
@@ -619,49 +629,39 @@ export const createExternalApplicationRuntime = (
             authorizationId: DatabaseOwnershipAuthorizationId.make(randomUUID()),
           }),
         )
-        for (let attempt = 0; attempt < 500; attempt += 1) {
-          const health = yield* client.health(
-            HostRequestContext.make({
-              applicationInstanceId: established.applicationInstanceId,
-              processEpoch: established.processEpoch,
-              requestId: HostRequestId.make(`h:${randomUUID()}`),
+        yield* waitForCoreReadiness(client, () =>
+          HostRequestContext.make({
+            applicationInstanceId: established.applicationInstanceId,
+            processEpoch: established.processEpoch,
+            requestId: HostRequestId.make(`h:${randomUUID()}`),
+          }),
+        )
+        session = established
+        if (processHandle === null) return yield* Effect.die("DiffDash Core handle is missing.")
+        applicationProcess = processHandle
+        const crashCircuit = yield* Effect.promise(() => crashCircuitPromise)
+        const supervisedProcess = processHandle
+        void runtime
+          .runPromise(
+            superviseReadyCoreHost({
+              host: selected.host,
+              process: supervisedProcess,
+              isDraining: Effect.sync(() => disposing),
+              cleanupAfterHostDeath: Effect.sync(() => {
+                if (session === established) session = null
+                if (applicationScope === scope) applicationScope = null
+                if (applicationProcess === supervisedProcess) applicationProcess = null
+              }).pipe(Effect.andThen(Scope.close(scope, Exit.void))),
+              crashCircuit,
             }),
           )
-          if (health.lifecycle === "ready") {
-            session = established
-            if (processHandle === null) return yield* Effect.die("DiffDash Core handle is missing.")
-            applicationProcess = processHandle
-            const crashCircuit = yield* Effect.promise(() => crashCircuitPromise)
-            const supervisedProcess = processHandle
-            void runtime
-              .runPromise(
-                superviseReadyCoreHost({
-                  host: selected.host,
-                  process: supervisedProcess,
-                  isDraining: Effect.sync(() => disposing),
-                  cleanupAfterHostDeath: Effect.sync(() => {
-                    if (session === established) session = null
-                    if (applicationScope === scope) applicationScope = null
-                    if (applicationProcess === supervisedProcess) applicationProcess = null
-                  }).pipe(Effect.andThen(Scope.close(scope, Exit.void))),
-                  crashCircuit,
-                }),
-              )
-              .then((result) => {
-                if (result.outcome !== "restart-eligible" || disposing) return
-                startPromise = null
-                void start().catch(() => undefined)
-              })
-              .catch(() => undefined)
-            return
-          }
-          if (health.lifecycle === "failed" || health.lifecycle === "draining") {
-            return yield* CoreStartupReadinessError.make({ reason: health.lifecycle })
-          }
-          yield* Effect.sleep("10 millis")
-        }
-        return yield* CoreStartupReadinessError.make({ reason: "timeout" })
-      }).pipe(Effect.provide(platformLayer)),
+          .then((result) => {
+            if (result.outcome !== "restart-eligible" || disposing) return
+            startPromise = null
+            void start().catch(() => undefined)
+          })
+          .catch(() => undefined)
+      }).pipe(Effect.scoped, Effect.provide(platformLayer)),
     )
     startPromise = launch.catch((error) => {
       startPromise = null

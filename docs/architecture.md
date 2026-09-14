@@ -239,6 +239,11 @@ The host must call `start` before any business operation. Concurrent and repeate
 share one acquisition, startup failures are normalized at the native boundary, and disposal closes
 the RPC client, supervised process, socket, and private runtime directory. Electron installs graceful
 shutdown ownership before Core startup so partial startup is still disposed.
+Authenticated recovery has a 60-second deadline covering both health RPCs and polling delays;
+populated resource catalogs are not constrained by the old five-second polling counter. A failed
+startup closes its private scope before showing the native error dialog. Standalone Core runs the
+same host-death-aware lifecycle during initialization and normal operation, releasing its SQLite
+and ownership scopes when the authenticated Electron connection disappears.
 
 Core runtime selection is pinned for one Electron application lifetime immediately before sending
 database ownership authorization. Supervised Core restarts reuse that runtime without probing the

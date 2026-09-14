@@ -36,6 +36,38 @@ const makeHostSession = (death: Deferred.Deferred<void>): CoreAuthenticatedHostS
   })
 
 describe("Core authenticated host lifecycle", () => {
+  it.effect("interrupts in-progress initialization and releases its resources on host death", () =>
+    Effect.gen(function* () {
+      const lifecycle = yield* makeCoreLifecycle(identity)
+      const death = yield* Deferred.make<void>()
+      const initializing = yield* Deferred.make<void>()
+      const released = yield* Deferred.make<void>()
+      const runner = yield* runCoreHostLifecycle(
+        identity,
+        Deferred.succeed(initializing, undefined).pipe(Effect.andThen(Effect.never)),
+      ).pipe(
+        Effect.provideService(CoreAuthenticatedHostSession, makeHostSession(death)),
+        Effect.provideService(
+          CoreOwnershipRecovery,
+          CoreOwnershipRecovery.of({
+            acquireAndRecover: () =>
+              Effect.succeed({ release: Deferred.succeed(released, undefined) }),
+          }),
+        ),
+        Effect.provideService(CoreLifecycle, lifecycle),
+        Effect.forkScoped,
+      )
+      yield* lifecycle.awaitOwnershipAuthorization
+      yield* lifecycle.authorizeDatabaseOwnership(authorization)
+      yield* Deferred.await(initializing)
+      expect(yield* lifecycle.health(authorization)).toMatchObject({ lifecycle: "recovering" })
+      yield* Deferred.succeed(death, undefined)
+      yield* Fiber.join(runner)
+      expect(yield* Deferred.isDone(released)).toBe(true)
+      expect(yield* lifecycle.health(authorization)).toMatchObject({ lifecycle: "stopped" })
+    }),
+  )
+
   it.effect(
     "exits without acquiring resources when the host dies before ownership authorization",
     () =>
@@ -43,7 +75,7 @@ describe("Core authenticated host lifecycle", () => {
         const lifecycle = yield* makeCoreLifecycle(identity)
         const death = yield* Deferred.make<void>()
         const acquired = yield* Ref.make(false)
-        const runner = yield* runCoreHostLifecycle(identity).pipe(
+        const runner = yield* runCoreHostLifecycle(identity, Effect.void).pipe(
           Effect.provideService(CoreAuthenticatedHostSession, makeHostSession(death)),
           Effect.provideService(
             CoreOwnershipRecovery,
@@ -73,7 +105,7 @@ describe("Core authenticated host lifecycle", () => {
       const death = yield* Deferred.make<void>()
       const acquired = yield* Deferred.make<void>()
       const released = yield* Deferred.make<void>()
-      const runner = yield* runCoreHostLifecycle(identity).pipe(
+      const runner = yield* runCoreHostLifecycle(identity, Effect.void).pipe(
         Effect.provideService(CoreAuthenticatedHostSession, makeHostSession(death)),
         Effect.provideService(
           CoreOwnershipRecovery,
@@ -105,7 +137,7 @@ describe("Core authenticated host lifecycle", () => {
       const death = yield* Deferred.make<void>()
       const acquired = yield* Deferred.make<void>()
       const released = yield* Deferred.make<void>()
-      const runner = yield* runCoreHostLifecycle(identity).pipe(
+      const runner = yield* runCoreHostLifecycle(identity, Effect.void).pipe(
         Effect.provideService(CoreAuthenticatedHostSession, makeHostSession(death)),
         Effect.provideService(
           CoreOwnershipRecovery,
@@ -138,7 +170,7 @@ describe("Core authenticated host lifecycle", () => {
     Effect.gen(function* () {
       const lifecycle = yield* makeCoreLifecycle(identity)
       const death = yield* Deferred.make<void>()
-      const runner = yield* runCoreHostLifecycle(identity).pipe(
+      const runner = yield* runCoreHostLifecycle(identity, Effect.void).pipe(
         Effect.provideService(CoreAuthenticatedHostSession, makeHostSession(death)),
         Effect.provideService(
           CoreOwnershipRecovery,
