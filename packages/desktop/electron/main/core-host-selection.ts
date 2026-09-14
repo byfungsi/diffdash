@@ -1,4 +1,4 @@
-import { Effect, Schema } from "effect"
+import { Effect, Option, Schema } from "effect"
 import type {
   CoreAuthorizeDatabaseOwnershipFailure,
   CoreTransportAuthenticationFailure,
@@ -11,6 +11,7 @@ import type { RpcClientError } from "effect/unstable/rpc/RpcClientError"
 
 import { BunQualificationCapability, type BunRuntimeQualificationError } from "./core-bun-runtime"
 import type { CoreHostBootstrapSession } from "./core-host-bootstrap"
+import type { CoreHostRuntimePin } from "./core-host-runtime-pin"
 
 /** Desktop policy selecting the Core process runtime. */
 export const CoreHostMode = Schema.Literals(["auto", "bun", "utility"])
@@ -36,11 +37,11 @@ export class CoreHostSelectionError extends Schema.TaggedError<CoreHostSelection
   },
 ) {}
 
-/** Sanitized failure from a concrete Core host candidate or fallback latch adapter. */
+/** Sanitized failure from a concrete Core host candidate. */
 export class CoreHostCandidateError extends Schema.TaggedError<CoreHostCandidateError>()(
   "CoreHostCandidateError",
   {
-    reason: Schema.Literals(["qualification-failed", "startup-failed", "latch-failed"]),
+    reason: Schema.Literals(["qualification-failed", "startup-failed"]),
     qualificationCapability: Schema.NullOr(BunQualificationCapability),
     safeMessage: Schema.Literal("DiffDash could not prepare a Core host candidate."),
   },
@@ -63,12 +64,6 @@ export const coreHostStartupCandidateError = (): CoreHostCandidateError =>
     qualificationCapability: null,
     safeMessage: "DiffDash could not prepare a Core host candidate.",
   })
-
-/** Persistent boundary that must close before database ownership authorization begins. */
-export interface CoreHostFallbackLatch {
-  readonly fallbackAllowed: Effect.Effect<boolean>
-  readonly disableBeforeOwnershipAuthorization: Effect.Effect<void, CoreHostCandidateError>
-}
 
 /** One host implementation offered to the runtime selector. */
 export interface CoreHostCandidate {
@@ -96,26 +91,34 @@ export interface SelectedCoreHost {
 export const selectCoreHost = Effect.fn("selectCoreHost")(function* (
   mode: CoreHostMode,
   candidates: ReadonlyArray<CoreHostCandidate>,
-  fallbackLatch: CoreHostFallbackLatch,
+  runtimePin: CoreHostRuntimePin,
 ) {
-  const eligible =
+  const pinnedHost = yield* runtimePin.selectedHost
+  if (Option.isSome(pinnedHost) && mode !== "auto" && mode !== pinnedHost.value) {
+    return yield* CoreHostSelectionError.make({
+      mode,
+      host: pinnedHost.value,
+      reason: "fallback-disabled",
+      qualificationCapability: null,
+      safeMessage: "DiffDash Core is unavailable.",
+    })
+  }
+  const requested =
     mode === "auto"
       ? [
           ...candidates.filter(({ host }) => host === "bun"),
           ...candidates.filter(({ host }) => host === "utility"),
         ]
       : candidates.filter(({ host }) => host === mode)
-  let lastHost: CoreHostKind | null = null
+  const eligible = Option.match(pinnedHost, {
+    onNone: () => requested,
+    onSome: (selected) => requested.filter(({ host }) => host === selected),
+  })
+  let lastHost: CoreHostKind | null = Option.getOrNull(pinnedHost)
   let lastReason: CoreHostSelectionError["reason"] = "startup-failed"
   let lastQualificationCapability: BunQualificationCapability | null = null
 
   for (const candidate of eligible) {
-    if (mode === "auto" && lastHost !== null && candidate.host !== lastHost) {
-      if (!(yield* fallbackLatch.fallbackAllowed)) {
-        lastReason = "fallback-disabled"
-        break
-      }
-    }
     lastHost = candidate.host
     const qualified = yield* candidate.qualify.pipe(
       Effect.as({ ok: true } as const),
@@ -137,7 +140,7 @@ export const selectCoreHost = Effect.fn("selectCoreHost")(function* (
         host: candidate.host,
         session: session.value,
         authorizeDatabaseOwnership: (request) =>
-          fallbackLatch.disableBeforeOwnershipAuthorization.pipe(
+          runtimePin.pinBeforeOwnershipAuthorization(candidate.host).pipe(
             Effect.mapError(() =>
               CoreHostSelectionError.make({
                 mode,

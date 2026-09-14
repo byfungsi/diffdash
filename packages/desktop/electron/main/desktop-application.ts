@@ -23,6 +23,7 @@ import { createNavigation } from "./navigation"
 import { createShutdown } from "./shutdown"
 import { installSingleInstanceHandling } from "./single-instance"
 import { logStartupStage } from "./startup-logging"
+import { formatDesktopStartupError } from "./desktop-startup-error"
 import { createMainWindow } from "./window"
 import { revealAppWindow } from "./window-activation"
 
@@ -163,7 +164,7 @@ export const startDesktopApplication = (composition: DesktopApplicationCompositi
   try {
     configuration = Effect.runSync(composition.resolveHostConfiguration(identity))
   } catch (error) {
-    const message = Predicate.isError(error) ? error.message : String(error)
+    const message = formatDesktopStartupError(error)
     console.error(`[startup:failed] ${message}`)
     app.quit()
     return
@@ -182,7 +183,7 @@ export const startDesktopApplication = (composition: DesktopApplicationCompositi
   }
 
   void start(configuration, composition).catch((error) => {
-    const message = Predicate.isError(error) ? error.message : String(error)
+    const message = formatDesktopStartupError(error)
     console.error(`[startup:failed] ${message}`)
     if (app.isReady() && !activeHostConfiguration?.policies.hiddenWindow) {
       dialog.showErrorBox("DiffDash could not start", message)
