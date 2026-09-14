@@ -1,5 +1,11 @@
 # DiffDash Changelog
 
+## 0.16.5
+
+### Patch Changes
+
+- [#126](https://github.com/byfungsi/diffdash/pull/126) [`0824b0e`](https://github.com/byfungsi/diffdash/commit/0824b0e503f6a4efe864662509eba2aefc34bf6d) Thanks [@hanipcode](https://github.com/hanipcode)! - Fix first launch and reopening without Bun installed, and show useful startup failure messages instead of an empty error dialog.
+
 ## 0.16.4
 
 ### Patch Changes
