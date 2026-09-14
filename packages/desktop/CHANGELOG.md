@@ -1,5 +1,11 @@
 # DiffDash Changelog
 
+## 0.16.6
+
+### Patch Changes
+
+- [#128](https://github.com/byfungsi/diffdash/pull/128) [`a81946b`](https://github.com/byfungsi/diffdash/commit/a81946b7ba079036fa943a718d6915adc31291ce) Thanks [@hanipcode](https://github.com/hanipcode)! - Fix startup timeouts on populated profiles by reducing catalog scan overhead and allowing bounded Core resource recovery beyond the old five-second limit. Stop Core and release its database ownership when Electron disconnects, including during startup, and clean up partial startup before reporting failure.
+
 ## 0.16.5
 
 ### Patch Changes
