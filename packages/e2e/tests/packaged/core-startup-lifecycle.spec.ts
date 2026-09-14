@@ -1,3 +1,4 @@
+import { spawnSync } from "node:child_process"
 import { mkdir, access } from "node:fs/promises"
 import { delimiter, join } from "node:path"
 import { DatabaseSync } from "node:sqlite"
@@ -105,8 +106,23 @@ test("recovers a large profile and releases Core ownership after Electron dies",
       expect(corePids).toHaveLength(1)
       expect(app.process().kill("SIGKILL")).toBe(true)
       await expect
-        .poll(() => corePids.every((pid) => !processIsAlive(pid)), { timeout: 10_000 })
-        .toBe(true)
+        .poll(
+          () => {
+            const alive = corePids.filter(processIsAlive)
+            if (alive.length === 0) return ""
+            const sample = spawnSync(
+              "ps",
+              ["-p", alive.join(","), "-o", "pid=,ppid=,stat=,etime=,time="],
+              { encoding: "utf8" },
+            )
+            if (sample.error !== undefined) throw sample.error
+            if (sample.status !== 0 && sample.status !== 1)
+              throw new Error("Startup lifecycle could not sample Core process state")
+            return sample.stdout.trim()
+          },
+          { timeout: 10_000 },
+        )
+        .toBe("")
       // Electron can forcibly terminate utility children before their finalizers run. The next
       // launch must recover their stale lease; external Bun must finalize after socket disconnect.
       if (host === "bun") {
