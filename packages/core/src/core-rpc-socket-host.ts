@@ -1,4 +1,5 @@
 import * as NodeSocketServer from "@effect/platform-node/NodeSocketServer"
+import * as NodeSocket from "@effect/platform-node/NodeSocket"
 import {
   AuthenticatedCoreWalkthroughServerRpcs,
   CORE_RPC_INCOMPLETE_BUFFER_BYTES,
@@ -30,6 +31,7 @@ import {
 } from "./core-rpc-server"
 import {
   CoreAuthenticatedHostSession,
+  type CoreAuthenticatedHostSessionOperations,
   coreAuthenticatedHostSessionLayer,
   type CoreTransportAuthenticationOptions,
 } from "./core-transport-authentication"
@@ -128,7 +130,26 @@ const coreRpcSocketProtocolLayer = (options: CoreRpcSocketHostOptions) => {
       )
       const server = yield* NodeSocketServer.make({ path: options.socketPath })
       yield* fileSystem.chmod(options.socketPath, 0o600)
-      return server
+      return SocketServer.SocketServer.of({
+        ...server,
+        run: (handler) =>
+          server.run((socket) =>
+            Effect.gen(function* () {
+              // NodeSocketServer supplies NetSocket per connection, but its generic run type
+              // does not expose that Node-specific service. Missing it is an adapter defect.
+              const nativeSocket = yield* Effect.serviceOption(NodeSocket.NetSocket)
+              if (Option.isNone(nativeSocket)) {
+                return yield* Effect.die(new Error("Core socket server lost its native connection"))
+              }
+              const connection = nativeSocket.value
+              // The handler has ended: do not leave a half-closed native connection waiting to
+              // flush to a dead host. Bun can otherwise keep server.close() pending indefinitely.
+              return yield* handler(socket).pipe(
+                Effect.ensuring(Effect.sync(() => connection.destroy())),
+              )
+            }),
+          ),
+      })
     }),
   )
   const protocolLayer = RpcServer.layerProtocolSocketServer.pipe(
@@ -139,6 +160,30 @@ const coreRpcSocketProtocolLayer = (options: CoreRpcSocketHostOptions) => {
   return protocolLayer
 }
 
+/** Forwards authenticated host disconnects and keeps native RPC response cleanup cancellable. */
+export const makeHostDeathAwareProtocol = Effect.fn("CoreRpc.makeHostDeathAwareProtocol")(
+  function* (
+    protocol: RpcServer.Protocol["Service"],
+    hostSession: CoreAuthenticatedHostSessionOperations,
+  ) {
+    const disconnects = yield* Queue.unbounded<number>()
+    yield* Effect.forever(
+      Queue.take(protocol.disconnects).pipe(
+        Effect.tap((clientId) => hostSession.disconnected(clientId)),
+        Effect.flatMap((clientId) => Queue.offer(disconnects, clientId)),
+      ),
+    ).pipe(Effect.forkScoped)
+    return RpcServer.Protocol.of({
+      ...protocol,
+      disconnects,
+      // RpcServer writes responses inside request finalizers. Keep just the native write
+      // interruptible so RPC disconnect/teardown can cancel a writer whose peer has gone.
+      send: (clientId, response, transferables) =>
+        protocol.send(clientId, response, transferables).pipe(Effect.interruptible),
+    })
+  },
+)
+
 const hostDeathAwareProtocolLayer = (
   options: CoreRpcSocketHostOptions,
   hostSessionLayer: Layer.Layer<CoreAuthenticatedHostSession>,
@@ -146,16 +191,10 @@ const hostDeathAwareProtocolLayer = (
   Layer.effect(
     RpcServer.Protocol,
     Effect.gen(function* () {
-      const protocol = yield* RpcServer.Protocol
-      const hostSession = yield* CoreAuthenticatedHostSession
-      const disconnects = yield* Queue.unbounded<number>()
-      yield* Effect.forever(
-        Queue.take(protocol.disconnects).pipe(
-          Effect.tap((clientId) => hostSession.disconnected(clientId)),
-          Effect.flatMap((clientId) => Queue.offer(disconnects, clientId)),
-        ),
-      ).pipe(Effect.forkScoped)
-      return RpcServer.Protocol.of({ ...protocol, disconnects })
+      return yield* makeHostDeathAwareProtocol(
+        yield* RpcServer.Protocol,
+        yield* CoreAuthenticatedHostSession,
+      )
     }),
   ).pipe(
     Layer.provide(coreRpcSocketProtocolLayer(options)),

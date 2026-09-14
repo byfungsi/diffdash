@@ -16,6 +16,7 @@ import { type ManagedResource, planResourceCollection, ResourceId } from "./reso
 
 const MAX_POLICY_COLLECTIONS_PER_PASS = 50
 const MAX_RECOVERY_ATTEMPTS_PER_PASS = 20
+const RESOURCE_PRESENCE_BATCH_SIZE = 8
 
 /** External mutation stage performed after durable collection intent commits. */
 export const ResourceAdapterOperation = Schema.Literals(["quarantine", "delete"])
@@ -249,6 +250,18 @@ export const makeResourceCollection = (
   catalog: Context.Service.Shape<typeof ResourceCatalog>,
   adapters: ResourceMutationAdapters,
 ) => {
+  const inspectPresence = Effect.fn("ResourceCollection.inspectPresence")(function* (
+    resource: CatalogResource,
+  ) {
+    const exists =
+      resource.state === "ready" && resource.policyClass !== "durableUserData"
+        ? yield* adapters[resource.location.kind]
+            .exists(resource)
+            .pipe(Effect.catch(() => Effect.succeed(true)))
+        : true
+    return { resource, exists }
+  })
+
   const resume = Effect.fn("ResourceCollection.resume")(function* (
     resource: CatalogResource,
     nowMs: number,
@@ -298,12 +311,15 @@ export const makeResourceCollection = (
     reconcile: Effect.fn("ResourceCollection.reconcile")(function* (nowMs, retryAtMs) {
       const resources = yield* catalog.list()
       let recoveryAttempts = 0
-      for (const resource of resources) {
-        if (resource.state === "ready" && resource.policyClass !== "durableUserData") {
-          const adapter = adapters[resource.location.kind]
-          const exists = yield* adapter
-            .exists(resource)
-            .pipe(Effect.catch(() => Effect.succeed(true)))
+      // Only read-only presence checks overlap. Keep a small window and serialize every mutation
+      // in catalog order, retaining containment validation, live-lease checks, and the recovery cap.
+      for (let offset = 0; offset < resources.length; offset += RESOURCE_PRESENCE_BATCH_SIZE) {
+        const inspected = yield* Effect.forEach(
+          resources.slice(offset, offset + RESOURCE_PRESENCE_BATCH_SIZE),
+          inspectPresence,
+          { concurrency: RESOURCE_PRESENCE_BATCH_SIZE },
+        )
+        for (const { resource, exists } of inspected) {
           if (!exists) {
             if (recoveryAttempts >= MAX_RECOVERY_ATTEMPTS_PER_PASS) continue
             recoveryAttempts += 1
@@ -319,16 +335,16 @@ export const makeResourceCollection = (
               )
             continue
           }
-        }
-        if (
-          (resource.state === "collecting" ||
-            resource.state === "quarantined" ||
-            resource.state === "deletionFailed") &&
-          (resource.retryAtMs === null || resource.retryAtMs <= nowMs) &&
-          recoveryAttempts < MAX_RECOVERY_ATTEMPTS_PER_PASS
-        ) {
-          recoveryAttempts += 1
-          yield* resume(resource, nowMs, retryAtMs)
+          if (
+            (resource.state === "collecting" ||
+              resource.state === "quarantined" ||
+              resource.state === "deletionFailed") &&
+            (resource.retryAtMs === null || resource.retryAtMs <= nowMs) &&
+            recoveryAttempts < MAX_RECOVERY_ATTEMPTS_PER_PASS
+          ) {
+            recoveryAttempts += 1
+            yield* resume(resource, nowMs, retryAtMs)
+          }
         }
       }
     }),

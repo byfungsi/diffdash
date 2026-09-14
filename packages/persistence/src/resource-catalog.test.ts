@@ -2,7 +2,7 @@ import { mkdtempSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { describe, expect, it } from "@effect/vitest"
-import { Context, Effect, Layer, Result } from "effect"
+import { Context, Effect, Layer, Result, Tracer } from "effect"
 
 import * as DatabaseNode from "./database-node"
 import {
@@ -61,6 +61,55 @@ const lease = (
 })
 
 describe("ResourceCatalog", () => {
+  it.effect(
+    "loads ordered resources and their own ordered leases with a constant query budget",
+    () =>
+      Effect.gen(function* () {
+        const databasePath = yield* makeTempDatabasePath
+        yield* Effect.gen(function* () {
+          const catalog = yield* ResourceCatalog
+          const tracer = yield* Tracer.Tracer
+          let queries = 0
+          const recordingTracer = Tracer.make({
+            ...tracer,
+            span(options) {
+              if (options.name === "sql.execute") queries += 1
+              return tracer.span(options)
+            },
+          })
+          expect(yield* catalog.list()).toEqual([])
+          const parent = yield* register(catalog, "parent", 10)
+          const child = yield* register(catalog, "child", 20, parent.id)
+          yield* register(catalog, "unleased", 30)
+          const parentLease = lease("parent-lease", parent.id)
+          const childLeaseA = lease("a-child-lease", child.id)
+          const childLeaseZ = lease("z-child-lease", child.id)
+          yield* catalog.acquireLeases([childLeaseZ, parentLease, childLeaseA])
+          for (let index = 0; index < 30; index += 1) {
+            yield* register(catalog, `unleased-${index}`, index)
+          }
+
+          const resources = yield* catalog
+            .list()
+            .pipe(Effect.provideService(Tracer.Tracer, recordingTracer))
+          expect(queries).toBeLessThanOrEqual(2)
+          expect(resources).toHaveLength(33)
+          expect(resources).toEqual(yield* Effect.forEach(resources, ({ id }) => catalog.get(id)))
+          expect(resources.map(({ id }) => id)).toEqual(resources.map(({ id }) => id).sort())
+          expect(resources.find(({ id }) => id === child.id)).toMatchObject({
+            parentId: parent.id,
+            leases: [childLeaseA, childLeaseZ],
+          })
+          expect(resources.find(({ id }) => id === parent.id)?.leases).toEqual([parentLease])
+          expect(
+            resources
+              .filter(({ id }) => id.startsWith("unleased"))
+              .every(({ leases }) => leases.length === 0),
+          ).toBe(true)
+        }).pipe(Effect.provide(makeLayer(databasePath)))
+      }),
+  )
+
   it.effect("keeps registered filesystem root identities immutable", () =>
     Effect.gen(function* () {
       const databasePath = yield* makeTempDatabasePath

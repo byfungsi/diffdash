@@ -4,9 +4,10 @@ import { CoreAuthenticatedHostSession } from "./core-transport-authentication"
 import { CoreLifecycle, type CoreLifecycleIdentity } from "./core-lifecycle"
 import { CoreOwnershipRecovery } from "./core-ownership-recovery"
 
-/** Runs ownership/recovery only after authorization and exits after authenticated host death. */
-export const runCoreHostLifecycle = Effect.fn("CoreHostLifecycle.run")(function* (
+/** Owns initialization resources only after authorization and releases them on host death or drain. */
+export const runCoreHostLifecycle = Effect.fn("CoreHostLifecycle.run")(function* <E, R>(
   identity: CoreLifecycleIdentity,
+  initialize: Effect.Effect<void, E, R>,
 ) {
   const lifecycle = yield* CoreLifecycle
   const hostSession = yield* CoreAuthenticatedHostSession
@@ -19,6 +20,7 @@ export const runCoreHostLifecycle = Effect.fn("CoreHostLifecycle.run")(function*
         (lease) => lease.release,
       ),
     ),
+    Effect.andThen(initialize),
     Effect.andThen(lifecycle.completeRecovery),
     Effect.andThen(Effect.never),
     Effect.tapError(() => lifecycle.fail),
