@@ -142,7 +142,7 @@ test("recovers a large profile and releases Core ownership after Electron dies",
         body: startupOutput
           .join("")
           .split("\n")
-          .filter((line) => line.startsWith("[startup"))
+          .filter((line) => line.startsWith("[startup") || line.includes("[core:recovery]"))
           .join("\n"),
         contentType: "text/plain",
       })

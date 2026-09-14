@@ -114,6 +114,16 @@ const launchStandaloneCoreProcess = Effect.fn("launchStandaloneCoreProcess")(fun
       const context = yield* Layer.build(hostLayer)
       const runtimeServices = Context.get(context, CoreRuntimeServices)
       const initialize = Effect.gen(function* () {
+        const recoveryStartedAt = yield* Clock.currentTimeMillis
+        const reportRecoveryStage = Effect.fn("CoreStartup.reportRecoveryStage")(function* (
+          stage: "runtime" | "operations" | "ownership" | "reconcile" | "policy" | "installed",
+        ) {
+          const now = yield* Clock.currentTimeMillis
+          yield* Effect.logInfo(
+            `[core:recovery] stage=${stage} elapsedMs=${now - recoveryStartedAt}`,
+          )
+        })
+        yield* reportRecoveryStage("runtime")
         const databaseLayer = databaseLayerForPath(coreConfiguration.paths.database)
         const eventLayer = makeCoreEventHubLayer(
           eventDeliveryTransform === undefined
@@ -134,11 +144,15 @@ const launchStandaloneCoreProcess = Effect.fn("launchStandaloneCoreProcess")(fun
           Layer.mergeAll(operationLayer, commandLayer, eventLayer),
         )
         const operations = Context.get(runtimeContext, CoreOperationService)
+        yield* reportRecoveryStage("operations")
         yield* operations.start
         const nowMs = yield* Clock.currentTimeMillis
         const resourceCollection = Context.get(runtimeContext, ResourceCollection)
+        yield* reportRecoveryStage("ownership")
         yield* resourceCollection.expireStaleOwnership(identity)
+        yield* reportRecoveryStage("reconcile")
         yield* resourceCollection.reconcile(nowMs, nowMs + 60_000)
+        yield* reportRecoveryStage("policy")
         yield* resourceCollection.collectPolicy(nowMs, nowMs + 60_000)
         yield* runtimeServices.install({
           operations,
@@ -151,6 +165,7 @@ const launchStandaloneCoreProcess = Effect.fn("launchStandaloneCoreProcess")(fun
             search: Context.get(runtimeContext, SnapshotSearch),
           },
         })
+        yield* reportRecoveryStage("installed")
       })
       return yield* runCoreHostLifecycle(identity, initialize).pipe(
         Effect.provide(context),
