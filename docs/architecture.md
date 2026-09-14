@@ -244,6 +244,9 @@ populated resource catalogs are not constrained by the old five-second polling c
 startup closes its private scope before showing the native error dialog. Standalone Core runs the
 same host-death-aware lifecycle during initialization and normal operation, releasing its SQLite
 and ownership scopes when the authenticated Electron connection disappears.
+Catalog scans load resources and leases in two queries rather than one query per resource. Recovery
+checks filesystem presence in batches of eight, while mutations remain ordered and bounded to the
+existing recovery cap. All root, containment, symlink, and live-lease protections still apply.
 Native socket handlers destroy their connection when they finish, including on EOF or interruption.
 This prevents a half-closed Bun connection from indefinitely delaying the socket server finalizer
 after its authenticated Electron host has died.

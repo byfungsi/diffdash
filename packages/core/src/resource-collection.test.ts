@@ -12,7 +12,7 @@ import {
 } from "@diffdash/persistence/resource-catalog"
 import * as DatabaseNode from "@diffdash/persistence/database-node"
 import { describe, expect, it } from "@effect/vitest"
-import { Effect, Fiber, Layer, Result } from "effect"
+import { Deferred, Effect, Fiber, Layer, Result } from "effect"
 import { TestClock } from "effect/testing"
 
 import {
@@ -35,6 +35,102 @@ const makeLayer = (databasePath: string) =>
 const logicalAdapter = makeBoundedLogicalResourceAdapter(() => Effect.void, 1_000)
 
 describe("resource collection", () => {
+  it.effect(
+    "bounds concurrent presence checks while retaining ordered recovery and its mutation cap",
+    () =>
+      Effect.gen(function* () {
+        const directory = yield* makeTempDirectory
+        yield* Effect.gen(function* () {
+          const catalog = yield* ResourceCatalog
+          for (let index = 0; index < 24; index += 1) {
+            yield* catalog.register({
+              id: CatalogResourceId.make(`missing-${String(index).padStart(2, "0")}`),
+              parentId: null,
+              kind: "snapshot-block",
+              policyClass: "cache",
+              state: "ready",
+              generation: 1,
+              location: { kind: "gitRef", identity: `refs/test/${index}` },
+              bytes: 1,
+              nowMs: 1,
+              checksum: null,
+              validation: null,
+            })
+          }
+          const releaseChecks = yield* Deferred.make<void>()
+          let activeChecks = 0
+          let maximumChecks = 0
+          const checked: CatalogResourceId[] = []
+          const deleted: CatalogResourceId[] = []
+          const adapter: ResourceMutationAdapter = {
+            exists: (resource) =>
+              Effect.scoped(
+                Effect.acquireRelease(
+                  Effect.sync(() => {
+                    checked.push(resource.id)
+                    activeChecks += 1
+                    maximumChecks = Math.max(maximumChecks, activeChecks)
+                  }),
+                  () =>
+                    Effect.sync(() => {
+                      activeChecks -= 1
+                    }),
+                ).pipe(Effect.andThen(Deferred.await(releaseChecks)), Effect.as(false)),
+              ),
+            quarantine: () => Effect.void,
+            delete: (resource) =>
+              Effect.sync(() => {
+                deleted.push(resource.id)
+              }),
+          }
+          const collection = makeResourceCollection(catalog, {
+            filesystem: adapter,
+            gitRef: adapter,
+            updaterPartial: adapter,
+          })
+          yield* Effect.gen(function* () {
+            const recovery = yield* collection.reconcile(2, 100).pipe(Effect.forkChild)
+            yield* TestClock.adjust(1)
+            expect(activeChecks).toBe(8)
+            yield* Deferred.succeed(releaseChecks, undefined)
+            yield* Fiber.join(recovery)
+            expect(maximumChecks).toBe(8)
+            expect(activeChecks).toBe(0)
+            expect(checked).toHaveLength(24)
+            expect(deleted).toEqual([...checked].sort().slice(0, 20))
+            expect((yield* catalog.list()).filter(({ state }) => state === "ready")).toHaveLength(4)
+
+            const blockedAdapter: ResourceMutationAdapter = {
+              ...adapter,
+              exists: () =>
+                Effect.scoped(
+                  Effect.acquireRelease(
+                    Effect.sync(() => {
+                      activeChecks += 1
+                    }),
+                    () =>
+                      Effect.sync(() => {
+                        activeChecks -= 1
+                      }),
+                  ).pipe(Effect.andThen(Effect.never)),
+                ),
+            }
+            const blockedCollection = makeResourceCollection(catalog, {
+              filesystem: blockedAdapter,
+              gitRef: blockedAdapter,
+              updaterPartial: blockedAdapter,
+            })
+            const interrupted = yield* blockedCollection.reconcile(3, 100).pipe(Effect.forkChild)
+            yield* TestClock.adjust(1)
+            expect(activeChecks).toBe(4)
+            yield* Fiber.interrupt(interrupted)
+            expect(activeChecks).toBe(0)
+            expect((yield* catalog.list()).filter(({ state }) => state === "ready")).toHaveLength(4)
+          }).pipe(Effect.ensuring(Deferred.succeed(releaseChecks, undefined)))
+        }).pipe(Effect.provide(makeLayer(join(directory, "catalog.sqlite"))))
+      }),
+  )
+
   it.effect("quarantines and deletes only inside a registered non-symlink root", () =>
     Effect.gen(function* () {
       const directory = yield* makeTempDirectory

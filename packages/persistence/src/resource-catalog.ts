@@ -867,7 +867,18 @@ const makeGet = (database: Database) =>
 const loadResources = Effect.fn("ResourceCatalog.loadResources")(function* (database: Database) {
   const rows = yield* database.all("SELECT * FROM resources ORDER BY id")
   const decoded = yield* Schema.decodeUnknownEffect(ResourceRows)(rows)
-  return yield* Effect.forEach(decoded, (row) => makeResource(database, row))
+  // Startup scans the complete catalog several times. Fetch leases once, not once per resource.
+  const leaseRows = yield* database.all("SELECT * FROM resource_leases ORDER BY id")
+  const leases = yield* Schema.decodeUnknownEffect(LeaseRows)(leaseRows)
+  const leasesByResource = new Map<CatalogResourceId, Array<typeof LeaseRow.Type>>()
+  for (const lease of leases) {
+    const resourceLeases = leasesByResource.get(lease.resource_id)
+    if (resourceLeases === undefined) leasesByResource.set(lease.resource_id, [lease])
+    else resourceLeases.push(lease)
+  }
+  return yield* Effect.forEach(decoded, (row) =>
+    parseCatalogResource(row, leasesByResource.get(row.id) ?? []),
+  )
 })
 
 const makeResource = Effect.fn("ResourceCatalog.makeResource")(function* (
@@ -879,6 +890,13 @@ const makeResource = Effect.fn("ResourceCatalog.makeResource")(function* (
     [row.id],
   )
   const leases = yield* Schema.decodeUnknownEffect(LeaseRows)(leaseRows)
+  return yield* parseCatalogResource(row, leases)
+})
+
+const parseCatalogResource = Effect.fn("ResourceCatalog.parseCatalogResource")(function* (
+  row: typeof ResourceRow.Type,
+  leases: typeof LeaseRows.Type,
+) {
   const location = yield* Schema.decodeUnknownEffect(CatalogResourceLocation)(
     row.location_kind === "filesystem"
       ? { kind: "filesystem", rootId: row.root_id, relativePath: row.location_value }
