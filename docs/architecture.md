@@ -240,6 +240,16 @@ share one acquisition, startup failures are normalized at the native boundary, a
 the RPC client, supervised process, socket, and private runtime directory. Electron installs graceful
 shutdown ownership before Core startup so partial startup is still disposed.
 
+Core runtime selection is pinned for one Electron application lifetime immediately before sending
+database ownership authorization. Supervised Core restarts reuse that runtime without probing the
+other host, including utility restarts on machines without Bun. A fresh Electron application can
+qualify its available runtimes again; Core's persisted PID/start-identity ownership lease still rejects
+live or uncertain competing database owners before SQLite opens. The old `core-no-fallback.json`
+boolean contained neither an owner identity nor a selected runtime and is no longer consulted or
+written. Existing files are left untouched. Startup therefore does not require a pre-existing settings
+directory. Native startup reports allowlisted error reasons and a nonempty opaque fallback rather than
+printing raw defects or assuming every schema error has an Error `message`.
+
 Native-host configuration is schema-decoded once. Optional paths, environment values, fixtures,
 repository lookups, and cached artifacts use `Option` inside Core and persistence. Existing Electron,
 IPC, SQLite, and encoded configuration contracts remain nullable only at their boundaries. Analytics

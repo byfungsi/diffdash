@@ -28,7 +28,10 @@ Evidence: `packages/desktop/electron/main/core-bun-runtime.test.ts`,
   crashes inside 60 seconds; crashes outside the window expire.
 - A ready-host exit first cleans host-owned resources. Draining exits stop; other exits are either
   restart-eligible or unavailable after the circuit opens.
-- No runtime fallback is allowed after ownership authorization.
+- No runtime fallback is allowed after ownership authorization within an Electron application
+  lifetime. The selected host is retained for supervised Core restarts; a new Electron application
+  selects afresh and must still acquire the unchanged persisted database ownership lease. The old
+  unscoped `core-no-fallback.json` flag is obsolete and left untouched.
 
 Evidence: `packages/desktop/electron/main/core-process-launcher.ts`,
 `packages/desktop/electron/main/core-host-supervisor.ts`, and their focused tests. Packaged heartbeat,

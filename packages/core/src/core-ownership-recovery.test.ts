@@ -24,6 +24,43 @@ const authorization = {
 } as const
 
 describe("Core ownership recovery", () => {
+  it.effect(
+    "rejects a new application while the previous exact database owner is still alive",
+    () =>
+      Effect.gen(function* () {
+        const directory = yield* makeDirectory
+        const databasePath = join(directory, "diffdash.sqlite")
+        const processStartIdentity = yield* readProcessStartIdentity(process.pid)
+        const owner = makeCoreOwnershipRecovery({
+          databasePath,
+          pid: process.pid,
+          processStartIdentity,
+          inspector: nodeDatabaseOwnerInspector,
+          recover: Effect.void,
+        })
+        const lease = yield* owner.acquireAndRecover(authorization)
+        const contender = makeCoreOwnershipRecovery({
+          databasePath,
+          pid: process.pid,
+          processStartIdentity,
+          inspector: nodeDatabaseOwnerInspector,
+          recover: Effect.die("must not open or recover a database owned by a live process"),
+        })
+        const failure = yield* contender
+          .acquireAndRecover({
+            applicationInstanceId: ApplicationInstanceId.make("app:new-application"),
+            processEpoch: CoreProcessEpoch.make("epoch:new-application"),
+            authorizationId: DatabaseOwnershipAuthorizationId.make("authorization:new-application"),
+          })
+          .pipe(Effect.flip)
+
+        expect(failure).toMatchObject({ _tag: "CoreOwnershipRecoveryError", stage: "ownership" })
+        expect(existsSync(`${databasePath}.owner`)).toBe(true)
+        yield* lease.release
+        expect(existsSync(`${databasePath}.owner`)).toBe(false)
+      }),
+  )
+
   it.effect("retains exact sidecar ownership through recovery and releases it explicitly", () =>
     Effect.gen(function* () {
       const directory = yield* makeDirectory

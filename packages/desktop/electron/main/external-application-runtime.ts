@@ -55,7 +55,7 @@ import {
   startCoreBunProcess,
 } from "./core-bun-runtime"
 import { bootstrapCoreHost, type CoreHostBootstrapSession } from "./core-host-bootstrap"
-import { makeCoreHostFallbackLatch } from "./core-host-fallback-latch"
+import { makeCoreHostRuntimePin } from "./core-host-runtime-pin"
 import {
   bunQualificationCandidateError,
   coreHostStartupCandidateError,
@@ -67,6 +67,7 @@ import type { CoreProcessHandle } from "./core-process-launcher"
 import type { CoreRpcClient } from "./core-rpc-client"
 import { startCoreUtilityProcessManaged } from "./core-utility-process-launcher"
 import type { DesktopHostConfiguration } from "./desktop-host-configuration"
+import { CoreStartupReadinessError } from "./desktop-startup-error"
 import { createProgressiveReviewApiGateway } from "./progressive-review-api-gateway"
 
 const platformLayer = Layer.mergeAll(
@@ -108,6 +109,8 @@ export const createExternalApplicationRuntime = (
   let applicationProcess: CoreProcessHandle | null = null
   let startPromise: Promise<void> | null = null
   let disposing = false
+  const runtimePin = Effect.runSync(makeCoreHostRuntimePin())
+  const applicationInstanceId = ApplicationInstanceId.make(randomUUID())
   const crashCircuitPromise = runtime.runPromise(
     makeCoreHostCrashCircuit({ maximumCrashes: 3, windowMilliseconds: 60_000 }),
   )
@@ -512,7 +515,6 @@ export const createExternalApplicationRuntime = (
           ? join(process.resourcesPath, "core")
           : resolve(moduleDirectory, "../../.generated/core")
         const artifact = yield* verifyPackagedCoreArtifact(artifactDirectory)
-        const applicationInstanceId = ApplicationInstanceId.make(randomUUID())
         const privateRuntimeDirectory = tmpdir()
         const bootstrap = (
           startTransport: Parameters<typeof bootstrapCoreHost>[0]["startTransport"],
@@ -533,6 +535,9 @@ export const createExternalApplicationRuntime = (
           ).pipe(
             Effect.provideService(Scope.Scope, scope),
             Effect.provide(platformLayer),
+            Effect.tapError((error) =>
+              Effect.logError(`[core:bootstrap:failed] stage=${error.stage}`),
+            ),
             Effect.mapError(() => coreHostStartupCandidateError()),
           )
         }
@@ -598,13 +603,10 @@ export const createExternalApplicationRuntime = (
             ),
           }),
         )
-        const latch = makeCoreHostFallbackLatch(
-          join(dirname(configuration.core.paths.state), "core-no-fallback.json"),
-        )
         const selected = yield* selectCoreHost(
           configuration.policies.coreHostMode,
           [...bunCandidates, utilityCandidate],
-          latch,
+          runtimePin,
         )
         const established = selected.session
         const client = established.client
@@ -654,11 +656,11 @@ export const createExternalApplicationRuntime = (
             return
           }
           if (health.lifecycle === "failed" || health.lifecycle === "draining") {
-            return yield* Effect.die("DiffDash Core failed before becoming ready.")
+            return yield* CoreStartupReadinessError.make({ reason: health.lifecycle })
           }
           yield* Effect.sleep("10 millis")
         }
-        return yield* Effect.die("DiffDash Core did not become ready before startup timed out.")
+        return yield* CoreStartupReadinessError.make({ reason: "timeout" })
       }).pipe(Effect.provide(platformLayer)),
     )
     startPromise = launch.catch((error) => {
