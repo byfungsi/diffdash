@@ -31,6 +31,7 @@ import {
 } from "./core-rpc-server"
 import {
   CoreAuthenticatedHostSession,
+  type CoreAuthenticatedHostSessionOperations,
   coreAuthenticatedHostSessionLayer,
   type CoreTransportAuthenticationOptions,
 } from "./core-transport-authentication"
@@ -159,6 +160,30 @@ const coreRpcSocketProtocolLayer = (options: CoreRpcSocketHostOptions) => {
   return protocolLayer
 }
 
+/** Forwards authenticated host disconnects and keeps native RPC response cleanup cancellable. */
+export const makeHostDeathAwareProtocol = Effect.fn("CoreRpc.makeHostDeathAwareProtocol")(
+  function* (
+    protocol: RpcServer.Protocol["Service"],
+    hostSession: CoreAuthenticatedHostSessionOperations,
+  ) {
+    const disconnects = yield* Queue.unbounded<number>()
+    yield* Effect.forever(
+      Queue.take(protocol.disconnects).pipe(
+        Effect.tap((clientId) => hostSession.disconnected(clientId)),
+        Effect.flatMap((clientId) => Queue.offer(disconnects, clientId)),
+      ),
+    ).pipe(Effect.forkScoped)
+    return RpcServer.Protocol.of({
+      ...protocol,
+      disconnects,
+      // RpcServer writes responses inside request finalizers. Keep just the native write
+      // interruptible so RPC disconnect/teardown can cancel a writer whose peer has gone.
+      send: (clientId, response, transferables) =>
+        protocol.send(clientId, response, transferables).pipe(Effect.interruptible),
+    })
+  },
+)
+
 const hostDeathAwareProtocolLayer = (
   options: CoreRpcSocketHostOptions,
   hostSessionLayer: Layer.Layer<CoreAuthenticatedHostSession>,
@@ -166,16 +191,10 @@ const hostDeathAwareProtocolLayer = (
   Layer.effect(
     RpcServer.Protocol,
     Effect.gen(function* () {
-      const protocol = yield* RpcServer.Protocol
-      const hostSession = yield* CoreAuthenticatedHostSession
-      const disconnects = yield* Queue.unbounded<number>()
-      yield* Effect.forever(
-        Queue.take(protocol.disconnects).pipe(
-          Effect.tap((clientId) => hostSession.disconnected(clientId)),
-          Effect.flatMap((clientId) => Queue.offer(disconnects, clientId)),
-        ),
-      ).pipe(Effect.forkScoped)
-      return RpcServer.Protocol.of({ ...protocol, disconnects })
+      return yield* makeHostDeathAwareProtocol(
+        yield* RpcServer.Protocol,
+        yield* CoreAuthenticatedHostSession,
+      )
     }),
   ).pipe(
     Layer.provide(coreRpcSocketProtocolLayer(options)),

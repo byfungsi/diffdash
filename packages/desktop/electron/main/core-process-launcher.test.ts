@@ -162,53 +162,57 @@ describe("Core process launcher", () => {
     20_000,
   )
 
-  it.effect("sanitizes a process that exits before creating its socket", () =>
-    Effect.gen(function* () {
-      const tempResources = yield* TempResources
-      const temporaryDirectory = yield* tempResources.makeTempDirectoryScoped({
-        prefix: "dd-core-process-parent-",
-      })
-      const artifactDirectory = join(temporaryDirectory, "artifact")
-      execFileSync(
-        process.execPath,
-        ["scripts/build-core-artifact.mjs", `--output-directory=${artifactDirectory}`],
-        {
-          cwd: resolve("."),
-          stdio: "ignore",
-        },
-      )
-      const manifest = Schema.decodeUnknownSync(Schema.fromJsonString(CoreArtifactManifest))(
-        readFileSync(join(artifactDirectory, "manifest.json"), "utf8"),
-      )
-      const artifact = yield* verifyCoreArtifact({
-        artifactDirectory,
-        expectedBuildId: manifest.buildId,
-      })
-      const immediateExitSpawner: CoreProcessSpawner = {
-        spawn: () => ({ awaitExit: Effect.succeed(1), kill: () => false }),
-      }
-      const privateStatePath = join(temporaryDirectory, "private-state.json")
-      const privateDatabasePath = join(temporaryDirectory, "private.sqlite")
-      const failure = yield* bootstrapCoreHost({
-        artifact,
-        applicationInstanceId: ApplicationInstanceId.make("app-failed-process"),
-        temporaryDirectory,
-        startTransport: (configuration) =>
-          startCoreProcess({
-            configuration,
-            databasePath: privateDatabasePath,
-            statePath: privateStatePath,
-            coreConfiguration: makeCoreProcessFixtureConfiguration(
-              privateDatabasePath,
-              privateStatePath,
-            ),
-            spawner: immediateExitSpawner,
-          }),
-      }).pipe(Effect.flip)
+  // Includes a real Core artifact build, so use the same total budget as the launcher case above.
+  it.effect(
+    "sanitizes a process that exits before creating its socket",
+    () =>
+      Effect.gen(function* () {
+        const tempResources = yield* TempResources
+        const temporaryDirectory = yield* tempResources.makeTempDirectoryScoped({
+          prefix: "dd-core-process-parent-",
+        })
+        const artifactDirectory = join(temporaryDirectory, "artifact")
+        execFileSync(
+          process.execPath,
+          ["scripts/build-core-artifact.mjs", `--output-directory=${artifactDirectory}`],
+          {
+            cwd: resolve("."),
+            stdio: "ignore",
+          },
+        )
+        const manifest = Schema.decodeUnknownSync(Schema.fromJsonString(CoreArtifactManifest))(
+          readFileSync(join(artifactDirectory, "manifest.json"), "utf8"),
+        )
+        const artifact = yield* verifyCoreArtifact({
+          artifactDirectory,
+          expectedBuildId: manifest.buildId,
+        })
+        const immediateExitSpawner: CoreProcessSpawner = {
+          spawn: () => ({ awaitExit: Effect.succeed(1), kill: () => false }),
+        }
+        const privateStatePath = join(temporaryDirectory, "private-state.json")
+        const privateDatabasePath = join(temporaryDirectory, "private.sqlite")
+        const failure = yield* bootstrapCoreHost({
+          artifact,
+          applicationInstanceId: ApplicationInstanceId.make("app-failed-process"),
+          temporaryDirectory,
+          startTransport: (configuration) =>
+            startCoreProcess({
+              configuration,
+              databasePath: privateDatabasePath,
+              statePath: privateStatePath,
+              coreConfiguration: makeCoreProcessFixtureConfiguration(
+                privateDatabasePath,
+                privateStatePath,
+              ),
+              spawner: immediateExitSpawner,
+            }),
+        }).pipe(Effect.flip)
 
-      expect(failure.stage).toBe("preparingRuntime")
-      expect(JSON.stringify(failure)).not.toContain(privateStatePath)
-      expect(JSON.stringify(failure)).not.toContain(artifact.entrypointPath)
-    }).pipe(Effect.provide(dependencies)),
+        expect(failure.stage).toBe("preparingRuntime")
+        expect(JSON.stringify(failure)).not.toContain(privateStatePath)
+        expect(JSON.stringify(failure)).not.toContain(artifact.entrypointPath)
+      }).pipe(Effect.provide(dependencies)),
+    20_000,
   )
 })

@@ -247,6 +247,8 @@ and ownership scopes when the authenticated Electron connection disappears.
 Native socket handlers destroy their connection when they finish, including on EOF or interruption.
 This prevents a half-closed Bun connection from indefinitely delaying the socket server finalizer
 after its authenticated Electron host has died.
+Native response writes remain interruptible inside RPC request finalizers, so disconnect or server
+teardown can cancel a writer whose peer has disappeared without abandoning other resource cleanup.
 
 Core runtime selection is pinned for one Electron application lifetime immediately before sending
 database ownership authorization. Supervised Core restarts reuse that runtime without probing the
