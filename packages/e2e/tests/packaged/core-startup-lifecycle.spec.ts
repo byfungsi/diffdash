@@ -77,6 +77,10 @@ test("recovers a large profile and releases Core ownership after Electron dies",
 
   const crashDuringPhase = async (phase: "recovering" | "ready") => {
     const app = await electron.launch(launchOptions)
+    const startupOutput: string[] = []
+    const captureStartupOutput = (chunk: Buffer) => startupOutput.push(chunk.toString("utf8"))
+    app.process().stdout?.on("data", captureStartupOutput)
+    app.process().stderr?.on("data", captureStartupOutput)
     try {
       if (phase === "ready") {
         const window = await app.firstWindow({ timeout: 90_000 })
@@ -117,6 +121,14 @@ test("recovers a large profile and releases Core ownership after Electron dies",
       }
     } finally {
       await app.close().catch(() => undefined)
+      await testInfo.attach(`${host}-${phase}-startup`, {
+        body: startupOutput
+          .join("")
+          .split("\n")
+          .filter((line) => line.startsWith("[startup"))
+          .join("\n"),
+        contentType: "text/plain",
+      })
     }
   }
   await crashDuringPhase("recovering")
