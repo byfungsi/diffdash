@@ -90,6 +90,45 @@ const awaitRawSocketClose = (socket: NodeNetSocket) =>
       })
 
 describe("Core RPC Unix socket host", () => {
+  it.live("closes the server after a client half-closes its native connection", () =>
+    Effect.gen(function* () {
+      const tempResources = yield* TempResources
+      const runtimeDirectory = yield* tempResources.makeTempDirectoryScoped({ prefix: "dd-core-" })
+      const socketPath = `${runtimeDirectory}/core.sock`
+      const serverScope = yield* Scope.make()
+      const hostLayer = coreRpcSocketHostLayer({ socketPath, token: Redacted.make(token) }).pipe(
+        Layer.provide(coreLifecycleLayer(identity)),
+        Layer.provide(
+          Layer.succeed(
+            AppState,
+            AppState.of({
+              get: Effect.never,
+              save: (state) => Effect.succeed(state),
+            }),
+          ),
+        ),
+        Layer.provide(platformLayer),
+      )
+      yield* Layer.buildWithScope(hostLayer, serverScope)
+      const socket = yield* openRawSocket(socketPath)
+      const serialization = yield* RpcSerialization.RpcSerialization.pipe(
+        Effect.provide(RpcSerialization.layerMsgPackWith({ useRecords: true })),
+      )
+      const ping = serialization.makeUnsafe().encode({ _tag: "Ping" })
+      if (ping === undefined)
+        return yield* Effect.die(new Error("Socket lifecycle fixture did not encode Ping"))
+      yield* Effect.callback<void>((resume) => {
+        socket.once("data", () => resume(Effect.void))
+        socket.write(ping)
+      })
+      const closed = yield* awaitRawSocketClose(socket).pipe(Effect.forkScoped)
+      socket.end()
+      yield* Fiber.join(closed)
+      yield* Scope.close(serverScope, Exit.void)
+      expect(socket.destroyed).toBe(true)
+    }).pipe(Effect.provide(tempResourcesLayer)),
+  )
+
   it.effect("rejects a socket outside a private runtime directory before binding", () =>
     Effect.gen(function* () {
       const tempResources = yield* TempResources

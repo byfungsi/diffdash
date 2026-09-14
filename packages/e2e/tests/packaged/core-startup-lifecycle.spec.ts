@@ -15,7 +15,8 @@ import {
 test("recovers a large profile and releases Core ownership after Electron dies", async ({
   browserName: _browserName,
 }, testInfo) => {
-  test.setTimeout(120_000)
+  // Four real launches must each fit their production recovery budget, including slower runners.
+  test.setTimeout(300_000)
   const host = process.env.DIFFDASH_E2E_CORE_HOST
   if (host !== "bun" && host !== "utility")
     throw new Error("Startup lifecycle requires an explicit Core host")

@@ -1,4 +1,5 @@
 import * as NodeSocketServer from "@effect/platform-node/NodeSocketServer"
+import * as NodeSocket from "@effect/platform-node/NodeSocket"
 import {
   AuthenticatedCoreWalkthroughServerRpcs,
   CORE_RPC_INCOMPLETE_BUFFER_BYTES,
@@ -128,7 +129,26 @@ const coreRpcSocketProtocolLayer = (options: CoreRpcSocketHostOptions) => {
       )
       const server = yield* NodeSocketServer.make({ path: options.socketPath })
       yield* fileSystem.chmod(options.socketPath, 0o600)
-      return server
+      return SocketServer.SocketServer.of({
+        ...server,
+        run: (handler) =>
+          server.run((socket) =>
+            Effect.gen(function* () {
+              // NodeSocketServer supplies NetSocket per connection, but its generic run type
+              // does not expose that Node-specific service. Missing it is an adapter defect.
+              const nativeSocket = yield* Effect.serviceOption(NodeSocket.NetSocket)
+              if (Option.isNone(nativeSocket)) {
+                return yield* Effect.die(new Error("Core socket server lost its native connection"))
+              }
+              const connection = nativeSocket.value
+              // The handler has ended: do not leave a half-closed native connection waiting to
+              // flush to a dead host. Bun can otherwise keep server.close() pending indefinitely.
+              return yield* handler(socket).pipe(
+                Effect.ensuring(Effect.sync(() => connection.destroy())),
+              )
+            }),
+          ),
+      })
     }),
   )
   const protocolLayer = RpcServer.layerProtocolSocketServer.pipe(

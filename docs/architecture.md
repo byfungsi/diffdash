@@ -244,6 +244,9 @@ populated resource catalogs are not constrained by the old five-second polling c
 startup closes its private scope before showing the native error dialog. Standalone Core runs the
 same host-death-aware lifecycle during initialization and normal operation, releasing its SQLite
 and ownership scopes when the authenticated Electron connection disappears.
+Native socket handlers destroy their connection when they finish, including on EOF or interruption.
+This prevents a half-closed Bun connection from indefinitely delaying the socket server finalizer
+after its authenticated Electron host has died.
 
 Core runtime selection is pinned for one Electron application lifetime immediately before sending
 database ownership authorization. Supervised Core restarts reuse that runtime without probing the
